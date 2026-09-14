@@ -25,6 +25,7 @@ COLUMN_MIGRATIONS: tuple[AddColumn, ...] = (
     AddColumn("association_reviews", "sequence", "INTEGER"),
     AddColumn("association_overrides", "sequence", "INTEGER"),
     AddColumn("match_subjects", "supersedes_subject_id", "VARCHAR"),
+    AddColumn("source_artifacts", "raw_size", "INTEGER"),
 )
 
 INDEX_MIGRATIONS: tuple[tuple[str, str, str], ...] = (

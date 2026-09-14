@@ -76,6 +76,7 @@ def record_artifact(
         content_type=content_type,
         raw_path=raw_path,
         source_tier=source_tier,
+        raw_size=len(raw),
         is_discovery_only=discovery_only,
     )
     db.add(artifact)

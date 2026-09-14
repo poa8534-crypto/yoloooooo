@@ -204,6 +204,23 @@ class MatchingStatus(StrictModel):
     outcome_counts: dict[str, int] = Field(default_factory=dict)
 
 
+class AuditGate(StrictModel):
+    label: str
+    passed: bool
+    detail: str
+
+
+class AuditReadiness(StrictModel):
+    """Computed pre-audit state for one candidate."""
+
+    candidate_id: str
+    ready: bool
+    # Evaluated per candidate against the ledger.
+    gates: list[AuditGate] = Field(default_factory=list)
+    # Always-on properties of the pipeline, not per-candidate measurements.
+    invariants: list[AuditGate] = Field(default_factory=list)
+
+
 class AuditView(StrictModel):
     candidate_id: str
     evidence_state: str

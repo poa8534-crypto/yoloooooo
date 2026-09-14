@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 from collections import Counter
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -21,7 +22,8 @@ from .association.service import human_confirmation
 from .calibration import calibration_status
 from .config import ROOT, get_settings
 from .db import SessionLocal, get_db, init_db
-from .evidence import candidate_facts, fact_freshness, render_fact
+from .evidence import candidate_facts, evidence_conflicts, fact_freshness, render_fact
+from .matching import DEFAULT_EMBEDDING_MODEL
 from .models import (
     AssociationRecord,
     Candidate,
@@ -41,6 +43,8 @@ from .models import (
 )
 from .scheduler import catch_up_if_needed, start_scheduler
 from .schemas import (
+    AuditGate,
+    AuditReadiness,
     AuditView,
     CalibrationStatus,
     CandidateView,
@@ -77,6 +81,8 @@ def assert_local_only(host: str) -> None:
             "must stay on loopback. Put it behind an authenticating proxy if "
             "you need remote access."
         )
+
+
 SERVICE_STARTED_AT = datetime.now(UTC)
 
 
@@ -221,6 +227,98 @@ async def audit_candidate(candidate_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "candidate not found")
 
 
+@app.get("/api/candidates/{candidate_id}/audit-readiness", response_model=AuditReadiness)
+def candidate_audit_readiness(candidate_id: str, db: Session = Depends(get_db)):
+    """What is actually true about this candidate before an audit runs.
+
+    Every gate here is computed. The dashboard used to render all of these as
+    green the moment a candidate was selected, which claimed freshness,
+    conflict and association checks that nobody had performed.
+    """
+    candidate = db.get(Candidate, candidate_id)
+    if candidate is None:
+        raise HTTPException(404, "candidate not found")
+
+    facts = candidate_facts(db, candidate_id)
+    stale = [fact.id for fact in facts if fact_freshness(db, fact) != "fresh"]
+    conflicts = evidence_conflicts(db, candidate_id)
+    decision = db.scalar(
+        select(DecisionRecord)
+        .where(DecisionRecord.candidate_id == candidate_id)
+        .order_by(DecisionRecord.created_at.desc())
+        .limit(1)
+    )
+    external = list(db.scalars(
+        select(Observation).where(
+            Observation.candidate_id == candidate_id,
+            Observation.metric.like("youtube%") | Observation.metric.like("web%"),
+        )
+    ))
+    unresolved = [
+        row.id for row in external
+        if not row.association_id
+        or (record := db.get(AssociationRecord, row.association_id)) is None
+        or not is_association_usable(db, record)
+    ]
+
+    gates = [
+        {
+            "label": "Candidate exists",
+            "passed": True,
+            "detail": f"Internal ID {candidate.id}",
+        },
+        {
+            "label": "Source-backed facts present",
+            "passed": bool(facts),
+            "detail": f"{len(facts)} compiled fact(s)",
+        },
+        {
+            "label": "Evidence freshness checked",
+            "passed": bool(facts) and not stale,
+            "detail": "All facts fresh" if facts and not stale
+            else (f"{len(stale)} stale fact(s)" if facts else "No facts to check"),
+        },
+        {
+            "label": "Conflicts rechecked",
+            "passed": not conflicts,
+            "detail": "No conflicting metrics" if not conflicts
+            else "Conflicts: " + ", ".join(conflicts),
+        },
+        {
+            "label": "External metrics resolve through an approved association",
+            "passed": not unresolved,
+            "detail": f"{len(external)} external observation(s), {len(unresolved)} unresolved",
+        },
+        {
+            "label": "Deterministic verdict recorded",
+            "passed": decision is not None,
+            "detail": decision.kind if decision else "No decision record",
+        },
+    ]
+    return AuditReadiness(
+        candidate_id=candidate_id,
+        ready=all(gate["passed"] for gate in gates),
+        gates=[AuditGate(**gate) for gate in gates],
+        invariants=[
+            AuditGate(
+                label="Model cannot author URLs or metrics",
+                passed=True,
+                detail="Enforced by the proposal schema on every response",
+            ),
+            AuditGate(
+                label="Model cannot invent evidence IDs",
+                passed=True,
+                detail="Returned fact IDs must be a subset of those supplied",
+            ),
+            AuditGate(
+                label="Invalid model output fails closed",
+                passed=True,
+                detail="A schema violation raises rather than degrading",
+            ),
+        ],
+    )
+
+
 @app.get("/api/evidence/{fact_id}")
 def get_evidence(fact_id: str, db: Session = Depends(get_db)):
     fact = db.get(Fact, fact_id)
@@ -290,6 +388,12 @@ def dashboard_summary(db: Session = Depends(get_db)):
     first_capture = _as_utc(db.scalar(select(func.min(SourceArtifact.captured_at))))
     latest_capture = _as_utc(db.scalar(select(func.max(SourceArtifact.captured_at))))
     artifact_count = db.scalar(select(func.count(SourceArtifact.id))) or 0
+    measured_bytes = db.scalar(
+        select(func.coalesce(func.sum(SourceArtifact.raw_size), 0))
+    ) or 0
+    unmeasured_artifacts = db.scalar(
+        select(func.count(SourceArtifact.id)).where(SourceArtifact.raw_size.is_(None))
+    ) or 0
     publisher_count = db.scalar(
         select(func.count(func.distinct(SourceArtifact.publisher_owner)))
     ) or 0
@@ -343,9 +447,11 @@ def dashboard_summary(db: Session = Depends(get_db)):
         "counts": {
             "unique_publishers": publisher_count,
             "source_artifacts": artifact_count,
-            # Only the sampled artifacts are measured on disk; walking every
-            # raw file on each request is not worth the exactness.
-            "artifact_bytes": sum(_artifact_size(item) for item in recent_artifacts),
+            "artifact_bytes": int(measured_bytes),
+            # Artifacts captured before raw_size existed. The ledger is
+            # append-only so these are never back-filled; the dashboard says
+            # so rather than quietly understating the total.
+            "unmeasured_artifacts": int(unmeasured_artifacts),
             "observations": db.scalar(select(func.count(Observation.id))) or 0,
             "verified_facts": db.scalar(select(func.count(Fact.id))) or 0,
             "candidate_clusters": db.scalar(select(func.count(Candidate.id))) or 0,
@@ -361,6 +467,27 @@ def dashboard_summary(db: Session = Depends(get_db)):
         "source_tiers": dict(source_tiers),
         "activity": activity[:12],
     }
+
+
+MAX_TIMELINE_DAYS = 400
+
+
+def _calendar_span(days: list[str]) -> list[str]:
+    """Every calendar day from the first to the last, gaps included.
+
+    Plotting only the days that happen to have captures compresses the x
+    axis and draws a straight line across a silent fortnight. Emitting the
+    empty days makes a flat stretch mean what it looks like.
+    """
+    if not days:
+        return []
+    start = date.fromisoformat(days[0])
+    end = date.fromisoformat(days[-1])
+    total = (end - start).days + 1
+    if total > MAX_TIMELINE_DAYS:
+        start = end - timedelta(days=MAX_TIMELINE_DAYS - 1)
+        total = MAX_TIMELINE_DAYS
+    return [(start + timedelta(days=offset)).isoformat() for offset in range(total)]
 
 
 @app.get("/api/dashboard/timeline")
@@ -379,7 +506,8 @@ def dashboard_timeline(db: Session = Depends(get_db)):
             value.date().isoformat() for value in db.scalars(select(AssociationRecord.created_at))
         ),
     }
-    days = sorted({day for values in series.values() for day in values})
+    observed = sorted({day for values in series.values() for day in values})
+    days = _calendar_span(observed)
     cumulative = {name: 0 for name in series}
     points = []
     for day in days:
@@ -722,10 +850,23 @@ async def health(db: Session = Depends(get_db)):
     except httpx.HTTPError:
         pass
     state = db.get(SystemState, "last_snapshot")
+    # 2 — whether dense retrieval can actually run, rather than a hardcoded
+    # "ready". The package check is cheap; the observed flag comes from what
+    # the engine last managed to do, which is the part that matters.
+    latest_association = db.scalar(
+        select(AssociationRecord).order_by(AssociationRecord.created_at.desc()).limit(1)
+    )
     return {
         "status": "ok",
         "database": "connected",
-        "ollama": ollama,
+        "ollama": {**ollama, "base_url": settings.ollama_base_url},
+        "embeddings": {
+            "package_installed": importlib.util.find_spec("fastembed") is not None,
+            "model_name": DEFAULT_EMBEDDING_MODEL,
+            "last_association_used_embeddings": (
+                bool(latest_association.embedding_available) if latest_association else None
+            ),
+        },
         "connectors": {
             "tavily_configured": bool(settings.tavily_api_key),
             "youtube_configured": bool(settings.youtube_api_key),

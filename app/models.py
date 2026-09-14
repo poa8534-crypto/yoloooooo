@@ -84,6 +84,10 @@ class SourceArtifact(Base):
     content_type: Mapped[str] = mapped_column(String(120))
     raw_path: Mapped[str] = mapped_column(Text)
     source_tier: Mapped[str] = mapped_column(String(32))
+    # Byte length of the captured payload, recorded at capture time. Null on
+    # rows written before this column existed; the ledger is append-only, so
+    # those are never back-filled and the dashboard reports them as unmeasured.
+    raw_size: Mapped[int | None] = mapped_column(Integer, default=None)
     is_discovery_only: Mapped[bool] = mapped_column(Boolean, default=False)
     observations: Mapped[list[Observation]] = relationship(back_populates="artifact")
 

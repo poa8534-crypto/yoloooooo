@@ -62,7 +62,11 @@ def legacy_db(tmp_path: Path) -> Path:
 
 def test_pending_reports_the_missing_column_before_migrating(legacy_db: Path):
     engine = create_engine(f"sqlite:///{legacy_db.as_posix()}")
-    assert pending(engine) == ["observations.association_id"]
+    outstanding = pending(engine)
+    assert "observations.association_id" in outstanding
+    assert "source_artifacts.raw_size" in outstanding
+    # Only columns on tables the legacy schema actually has.
+    assert all(item.split(".")[0] in {"observations", "source_artifacts"} for item in outstanding)
     engine.dispose()
 
 
