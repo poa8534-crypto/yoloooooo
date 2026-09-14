@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, event
@@ -33,7 +32,7 @@ def _memory_engine():
 
 
 @pytest.fixture
-def db(tmp_path: Path):
+def db():
     factory = sessionmaker(bind=_memory_engine(), expire_on_commit=False)
     with factory() as session:
         yield session

@@ -67,12 +67,19 @@ def test_outcome_period_is_not_leaked_into_training_features(db):
 
 
 def test_a_research_run_never_spans_two_calibration_splits():
-    """Candidates from one run share derived features, so they share a split."""
+    """Candidates from one run share derived features, so they share a split.
+
+    Run sizes are deliberately uneven and coprime with the split boundaries.
+    An earlier version of this test used ten runs of five, where 60% and 80%
+    of fifty land exactly on run boundaries — so an ungrouped split could not
+    cut a run and the test could not fail.
+    """
     from datetime import timedelta
 
     from app.calibration import Example, grouped_time_split
 
     base = datetime(2026, 1, 1, tzinfo=UTC)
+    sizes = [3, 7, 4, 9, 2, 6, 8, 5, 11, 3]
     examples = [
         Example(
             candidate_id=f"c{run}-{seat}",
@@ -82,13 +89,23 @@ def test_a_research_run_never_spans_two_calibration_splits():
             label=seat % 2,
             input_ccu=float(seat),
         )
-        for run in range(10)
-        for seat in range(5)
+        for run, size in enumerate(sizes)
+        for seat in range(size)
     ]
+    total = len(examples)
+    # The boundaries must fall inside a run, or the grouping is untested.
+    boundaries = []
+    running = 0
+    for size in sizes:
+        running += size
+        boundaries.append(running)
+    assert total * 0.60 not in boundaries
+    assert total * 0.80 not in boundaries
+
     train, dev, test = grouped_time_split(examples)
 
     assert train and dev and test
-    assert sorted(train + dev + test) == list(range(len(examples)))
+    assert sorted(train + dev + test) == list(range(total))
     homes: dict[str, set[str]] = {}
     for name, indexes in (("train", train), ("dev", dev), ("test", test)):
         for index in indexes:

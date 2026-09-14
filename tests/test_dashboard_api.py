@@ -75,5 +75,10 @@ def test_research_run_listing_is_newest_first_and_bounded(db):
     db.commit()
 
     rows = list_research_runs(limit=500, db=db)
-
     assert [row.id for row in rows] == [newer.id, older.id]
+
+    # The "bounded" half of the name: an oversized limit is clamped, and a
+    # small one is honoured.
+    assert len(list_research_runs(limit=1, db=db)) == 1
+    assert len(list_research_runs(limit=0, db=db)) == 1
+    assert len(list_research_runs(limit=-5, db=db)) == 1

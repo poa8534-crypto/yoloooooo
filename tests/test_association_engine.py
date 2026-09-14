@@ -20,7 +20,11 @@ from app.association.decisions import (
     score_features,
 )
 from app.association.features import FEATURE_NAMES, compute_features
-from app.association.retrieval import NOTE_DENSE_UNAVAILABLE, EmbeddingProvider
+from app.association.retrieval import (
+    NOTE_DENSE_UNAVAILABLE,
+    EmbeddingProvider,
+    retrieve,
+)
 
 GARDEN = MatchCandidateView(
     candidate_id="c-garden", universe_id="1001", place_ids=("1101",),
@@ -343,3 +347,55 @@ def test_scoring_is_a_pure_function_of_features_and_thresholds():
 def test_an_empty_or_irrelevant_pool_abstains(pool):
     verdict = evaluate(subject("Grow a Garden"), pool, thresholds=OPEN, shadow_mode=False)
     assert verdict.outcome is AssociationOutcome.NO_MATCH
+
+
+def test_a_non_latin_title_retrieves_and_matches_its_experience():
+    """Under the ASCII-only tokenizer this retrieved nothing at all.
+
+    Every feature scored zero, the title was flagged generic, and the verdict
+    was no_match for any non-Latin experience.
+    """
+    garden = MatchCandidateView(
+        candidate_id="c-jp", universe_id="5001", place_ids=("5101",),
+        raw_name="种植花园", creator_name="Lantern Studio",
+    )
+    found = retrieve(subject("种植花园"), [garden])
+    assert [item.candidate_id for item in found.candidates] == ["c-jp"]
+    assert "exact_name" in found.methods_for("c-jp")
+
+    verdict = evaluate(
+        subject("种植花园"), [garden], thresholds=OPEN, shadow_mode=False
+    )
+    assert verdict.winner is not None and verdict.winner.candidate_id == "c-jp"
+    assert "generic_title" not in verdict.rationale
+    assert verdict.winner.features.values["exact_normalized_name_match"] == 1.0
+    assert verdict.winner.features.values["char_ngram_similarity"] > 0.0
+
+
+def test_a_near_miss_cjk_competitor_is_not_retrieved_and_the_engine_abstains():
+    """A known limitation, pinned so it cannot change silently.
+
+    Character n-grams use n=3 over a space-free script, so two four-character
+    names sharing only two characters have no n-gram in common and BM25 sees
+    each name as a single token. The near-miss competitor is therefore never
+    retrieved. The engine abstains rather than auto-associating on an
+    unopposed candidate, which is the safe outcome, but the ranking that
+    Latin-script names get is not available here.
+    """
+    garden = MatchCandidateView(
+        candidate_id="c-jp", universe_id="5001", place_ids=("5101",),
+        raw_name="种植花园",
+    )
+    farm = MatchCandidateView(
+        candidate_id="c-jp-farm", universe_id="5002", place_ids=("5102",),
+        raw_name="种植农场",
+    )
+    found = retrieve(subject("种植花园"), [garden, farm])
+    assert [item.candidate_id for item in found.candidates] == ["c-jp"]
+
+    verdict = evaluate(
+        subject("种植花园"), [garden, farm],
+        thresholds=OPEN, shadow_mode=False,
+    )
+    assert verdict.outcome is AssociationOutcome.REVIEW_REQUIRED
+    assert "no_runner_up_to_measure_a_margin_against" in verdict.rationale

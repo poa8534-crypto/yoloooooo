@@ -116,3 +116,39 @@ def test_normalization_is_versioned_and_reproducible():
     second = normalize_record("Grow a Garden", "https://www.roblox.com/games/1101/x")
     assert first.as_json() == second.as_json()
     assert first.version == NORMALIZATION_VERSION
+
+
+# --- Non-Latin scripts -------------------------------------------------------
+# These were entirely absent. Normalization v1 tokenized with an ASCII-only
+# class, so every non-Latin title produced no tokens, scored zero against every
+# candidate, and was flagged as a generic title. Nothing caught it.
+
+@pytest.mark.parametrize(("label", "title"), [
+    ("japanese", "\u30ac\u30fc\u30c7\u30f3\u3092\u80b2\u3066\u3088\u3046"),
+    ("chinese", "\u79cd\u690d\u82b1\u56ed"),
+    ("korean", "\uc815\uc6d0 \uac00\uafb8\uae30"),
+    ("russian", "\u0412\u044b\u0440\u0430\u0449\u0438\u0432\u0430\u0439 \u0441\u0430\u0434"),
+    ("greek", "\u039a\u03ae\u03c0\u03bf\u03c2"),
+    ("accented latin", "Cr\u00e9e ton Jardin"),
+])
+def test_non_latin_titles_produce_tokens(label, title):
+    assert word_tokens(title), f"{label} tokenized to nothing"
+    assert content_key(title), f"{label} has no content key"
+
+
+@pytest.mark.parametrize("title", [
+    "\u30ac\u30fc\u30c7\u30f3\u3092\u80b2\u3066\u3088\u3046",
+    "\u79cd\u690d\u82b1\u56ed",
+    "\u0412\u044b\u0440\u0430\u0449\u0438\u0432\u0430\u0439 \u0441\u0430\u0434",
+])
+def test_non_latin_titles_are_not_mistaken_for_generic(title):
+    assert is_generic_title(title) is False
+
+
+def test_two_different_non_latin_titles_do_not_collide():
+    """Empty token sets would make every non-Latin title identical."""
+    first = normalize_record("\u79cd\u690d\u82b1\u56ed")
+    second = normalize_record("\u5854\u9632\u5fa1\u6218\u4e89")
+    assert first.name_key and second.name_key
+    assert first.name_key != second.name_key
+    assert content_fingerprint("\u79cd\u690d\u82b1\u56ed") != content_fingerprint("\u5854\u9632\u5fa1\u6218\u4e89")

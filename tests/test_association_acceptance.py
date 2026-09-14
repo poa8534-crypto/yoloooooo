@@ -180,7 +180,10 @@ async def test_shadow_mode_accepts_only_exact_id_matches(research):
         assert records["vid-exact"].outcome == "auto_associate"
         assert "exact_verified_id_evidence" in records["vid-exact"].rationale_codes
         assert records["vid-fuzzy"].outcome == "review_required"
-        assert records["vid-generic"].outcome in {"no_match", "review_required"}
+        # Pinned, not a set of acceptable answers: a generic listicle
+        # retrieves nothing and must resolve to no_match.
+        assert records["vid-generic"].outcome == "no_match"
+        assert "generic_title" in records["vid-generic"].rationale_codes
         # Hostile text is stored as untrusted and gains the named game nothing.
         hostile = records["vid-hostile"]
         assert hostile.outcome != "auto_associate"

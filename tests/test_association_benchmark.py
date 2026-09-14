@@ -88,12 +88,21 @@ def test_splitting_is_deterministic():
 
 
 def test_the_engine_makes_no_false_positives_on_the_seed_dataset(dataset):
-    """The measurement that matters: precision, not coverage."""
+    """Precision, not coverage — and on a sample size worth naming.
+
+    "No false positives" is only meaningful next to the number of positives it
+    is drawn from, so that count is asserted too. It is small.
+    """
     probe = replace(Thresholds(), fuzzy_auto_enabled=True)
+    decisions = 0
     for split in (SPLIT_TRAIN, SPLIT_DEV, SPLIT_TEST):
         result = run_split(dataset, split, probe)
         assert result.false_positives == [], f"{split} produced false positives"
         assert result.exact_id_precision in (None, 1.0)
+        decisions += result.auto_total
+    # Guards the claim against silently shrinking to zero decisions, which
+    # would make "no false positives" vacuously true.
+    assert decisions >= 15, f"only {decisions} automatic decisions across all splits"
 
 
 def test_the_gate_keeps_fuzzy_matching_in_review_only_mode_by_default(dataset):
@@ -212,10 +221,40 @@ def test_learned_weights_are_fitted_only_on_the_training_split(dataset):
     assert set(learned.weights) == set(Thresholds().weights)
 
 
-def test_a_learned_penalty_can_never_become_a_bonus(dataset):
+def test_fitted_penalty_weights_are_already_negative_on_this_data(dataset):
+    """Documents the happy case. It does NOT exercise the clamp — see below."""
     learned = fit_weights(dataset, replace(Thresholds(), fuzzy_auto_enabled=True))
     for name in PENALTY_FEATURES:
-        assert learned.weights[name] <= 0.0, f"{name} was fitted as a reward"
+        assert learned.weights[name] <= 0.0
+
+
+def test_the_clamp_forces_a_positive_fitted_penalty_back_to_zero(dataset, monkeypatch):
+    """Drive the fit to a hostile result so the clamp is what is under test.
+
+    The real dataset happens to fit every penalty negative, so asserting the
+    sign proves nothing about the guard. This substitutes a model that returns
+    a positive coefficient for every feature.
+    """
+    class AllPositive:
+        def __init__(self, *_args, **_kwargs):
+            self.coef_ = None
+            self.intercept_ = None
+
+        def fit(self, x, _y):
+            import numpy as _np
+
+            self.coef_ = _np.ones((1, x.shape[1]))
+            self.intercept_ = _np.zeros(1)
+            return self
+
+    monkeypatch.setattr("app.association.benchmark.LogisticRegression", AllPositive)
+    learned = fit_weights(dataset, replace(Thresholds(), fuzzy_auto_enabled=True))
+    assert learned is not None
+    for name in PENALTY_FEATURES:
+        assert learned.weights[name] == 0.0, f"{name} was left as a reward"
+    # Everything that is not a penalty keeps the fitted value, so the clamp is
+    # narrow rather than flattening the whole vector.
+    assert learned.weights["direct_universe_id_agreement"] == 1.0
 
 
 def test_learned_weights_are_refused_if_they_cost_exact_id_resolution(dataset):
@@ -225,8 +264,10 @@ def test_learned_weights_are_refused_if_they_cost_exact_id_resolution(dataset):
         dataset, SPLIT_TEST, replace(Thresholds(), fuzzy_auto_enabled=True)
     ).auto_exact_id
     assert report["splits"][SPLIT_TEST]["auto_exact_id"] == default_exact
-    if report["learned_weights_rejected"]:
-        assert report["measured_weights_source"] == "default"
+    # On this dataset the fit really does cost exact-ID decisions, so the
+    # rejection must have fired and the defaults must have been measured.
+    assert report["learned_weights_rejected"], "expected the fit to be rejected here"
+    assert report["measured_weights_source"] == "default"
 
 
 def test_a_failed_gate_never_adopts_the_unvalidated_policy(dataset):
