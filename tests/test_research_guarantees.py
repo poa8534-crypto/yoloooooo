@@ -205,3 +205,51 @@ def test_progress_reports_abstentions_separately(session_factory, settings):
     with session_factory() as db:
         reported = progress(db, db.get(ResearchRun, run_id))
     assert reported["abstentions"] and reported["errors"] == []
+
+
+# --- 7. A concept must not restate a game the run just discovered ----------
+
+def test_a_concept_restating_a_discovered_game_is_refused():
+    """Observed live: the model returned an existing game as its "concept".
+
+    A run that discovered "Cheese Escape [Horror]" reported "Cheese Escape" as
+    a research concept. The duplicate check only compared against other
+    proposals, so an existing game's identity passed straight through.
+    """
+    from app.deep_research import restates_discovered_game
+
+    discovered = [
+        "Cheese Escape [Horror]",
+        "Cheese Escape: Scary Maze",
+        "(\U0001f50e) Escape Room 2!",
+        "Brainrot Horror \U0001f480",
+    ]
+
+    assert restates_discovered_game("Cheese Escape", discovered) == "Cheese Escape [Horror]"
+    assert restates_discovered_game("cheese  escape", discovered) is not None
+    assert restates_discovered_game("Escape Room 2", discovered) is not None
+
+
+def test_a_genuinely_new_concept_is_allowed():
+    from app.deep_research import restates_discovered_game
+
+    discovered = ["Cheese Escape [Horror]", "Brainrot Horror \U0001f480"]
+    assert restates_discovered_game("Shadowed Asylum: Escape from the Forgotten", discovered) is None
+    assert restates_discovered_game("Lantern Hollow", discovered) is None
+
+
+def test_a_single_shared_word_does_not_block_a_concept():
+    """Otherwise every horror concept collides with every horror game."""
+    from app.deep_research import restates_discovered_game
+
+    discovered = ["Brainrot Horror \U0001f480", "(\U0001f50e) Escape Room 2!"]
+    assert restates_discovered_game("Escape", discovered) is None
+    assert restates_discovered_game("Horror", discovered) is None
+
+
+def test_the_check_survives_titles_with_no_usable_tokens():
+    from app.deep_research import restates_discovered_game
+
+    assert restates_discovered_game("", ["Cheese Escape"]) is None
+    assert restates_discovered_game("\U0001f480", ["Cheese Escape"]) is None
+    assert restates_discovered_game("Cheese Escape", []) is None

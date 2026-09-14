@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy import select
 
+from .association.normalize import word_tokens
 from .connectors import extract_roblox_place_ids
 from .evidence import (
     accept_web_claim,
@@ -45,6 +46,32 @@ def discovery_queries(niche):
     chunks = [" ".join(words[:4]), " ".join(words[-3:]), " ".join(words[::2][:4])]
     return list(dict.fromkeys(f"site:roblox.com/games {phrase} {suffix}".strip()
                              for suffix in ("", "cooperative", "simulator", "social") for phrase in chunks if phrase))[:12]
+
+
+def _contiguous(haystack, needle):
+    if not needle or len(needle) > len(haystack):
+        return False
+    return any(haystack[i:i + len(needle)] == needle for i in range(len(haystack) - len(needle) + 1))
+
+
+def restates_discovered_game(concept_title, discovered_names, minimum_tokens=2):
+    """Return the game a concept title merely restates, if any.
+
+    A run that discovers "Cheese Escape [Horror]" and then reports "Cheese
+    Escape" as a research concept has handed back an existing game's identity
+    dressed as a hypothesis. Matching is on contiguous normalized tokens in
+    either direction, so a shared single word like "escape" is not enough.
+    """
+    concept = word_tokens(concept_title)
+    if len(concept) < minimum_tokens:
+        return None
+    for name in discovered_names:
+        tokens = word_tokens(name)
+        if len(tokens) < minimum_tokens:
+            continue
+        if _contiguous(tokens, concept) or _contiguous(concept, tokens):
+            return name
+    return None
 
 
 class DeepResearch:
@@ -233,6 +260,14 @@ class DeepResearch:
                         titles = [p.payload.get("concept_title", "").casefold() for p in db.scalars(select(Proposal).join(Candidate).where(Candidate.run_id == self.run_id))]
                         if generated.payload.concept_title.casefold() in titles:
                             self.b.abstain("hunter", "duplicate concept title; no second concept emitted")
+                            continue
+                        # A concept that restates a discovered game is not a
+                        # hypothesis, it is that game's name handed back.
+                        existing = restates_discovered_game(
+                            generated.payload.concept_title, [c.display_name for c in self.contexts]
+                        )
+                        if existing:
+                            self.b.abstain("hunter", f"concept restates a discovered game ({existing}); not an original hypothesis")
                             continue
                         hunter = Proposal(candidate_id=cid, agent="meta_hunter", payload=generated.payload.model_dump(), model_name=generated.model)
                         db.add(hunter)
