@@ -14,7 +14,15 @@ LOG_BACKUPS = 3
 
 
 class _StreamToLog:
-    """Adapts print()-style writes onto a rotating log handler."""
+    """Adapts print()-style writes onto a rotating log handler.
+
+    This replaces `sys.stdout`/`sys.stderr`, so it has to satisfy the parts of
+    the stream protocol that other libraries probe. uvicorn's colourized
+    formatter calls `sys.stdout.isatty()` while configuring logging, and a
+    missing method there kills the service before it can bind a port.
+    """
+
+    encoding = "utf-8"
 
     def __init__(self, logger: logging.Logger, level: int):
         self._logger = logger
@@ -29,10 +37,34 @@ class _StreamToLog:
                 self._logger.log(self._level, line)
         return len(text)
 
+    def writelines(self, lines) -> None:
+        for line in lines:
+            self.write(line)
+
     def flush(self) -> None:
         if self._buffer.strip():
             self._logger.log(self._level, self._buffer)
         self._buffer = ""
+
+    def isatty(self) -> bool:
+        """A log file is never a terminal, so colour codes stay out of it."""
+        return False
+
+    def readable(self) -> bool:
+        return False
+
+    def writable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
+
+    def fileno(self) -> int:
+        # There is no underlying descriptor. OSError is what callers expect.
+        raise OSError("this stream is a logging adapter with no file descriptor")
+
+    def close(self) -> None:
+        self.flush()
 
 
 def main() -> None:

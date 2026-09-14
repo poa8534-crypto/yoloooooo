@@ -243,8 +243,19 @@ started before the upgrade is still serving the old code and will reject
 `mode: deep` with `extra_forbidden`.
 
 ```powershell
-Get-ScheduledTask -TaskName "RobloxVentureAgents" | Restart-ScheduledTask
+Stop-ScheduledTask -TaskName 'Roblox Venture Agents'
+Start-ScheduledTask -TaskName 'Roblox Venture Agents'
 ```
+
+Confirm it came back and is serving the new routes:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8742 -State Listen
+curl.exe -s http://127.0.0.1:8742/api/health
+```
+
+If the port never opens, the service exited during startup. `data/service.log`
+holds the traceback; it rotates at 5 MB with three backups.
 
 By API:
 
