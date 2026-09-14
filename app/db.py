@@ -36,10 +36,15 @@ engine = _make_engine(get_settings().database_url)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
 
 
-def init_db() -> None:
+def init_db(bind=None) -> None:
     from . import models  # noqa: F401
+    from .migrations import run_migrations
 
-    Base.metadata.create_all(bind=engine)
+    target = bind or engine
+    # Additive migrations run first so that create_all never sees a table it
+    # would otherwise consider up to date while a column is still missing.
+    run_migrations(target)
+    Base.metadata.create_all(bind=target)
 
 
 def get_db() -> Generator[Session, None, None]:

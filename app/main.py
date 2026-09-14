@@ -10,19 +10,25 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .association import active_thresholds, is_association_usable
+from .association.materialize import apply_association
+from .association.service import human_confirmation
 from .calibration import calibration_status
 from .config import ROOT, get_settings
 from .db import SessionLocal, get_db, init_db
 from .evidence import candidate_facts, fact_freshness, render_fact
 from .models import (
+    AssociationRecord,
     Candidate,
     ConfidenceRecord,
     DecisionOverride,
     DecisionRecord,
     Fact,
+    MatchCandidate,
+    MatchSubject,
     Observation,
     Proposal,
     ResearchRun,
@@ -37,6 +43,12 @@ from .schemas import (
     CalibrationStatus,
     CandidateView,
     FactView,
+    MatchingArtifactView,
+    MatchingCandidateView,
+    MatchingReviewCreate,
+    MatchingReviewResult,
+    MatchingReviewView,
+    MatchingStatus,
     OverrideCreate,
     ProposalPayload,
     ResearchRunCreate,
@@ -60,6 +72,8 @@ async def lifespan(app: FastAPI):
             run.completed_at = datetime.now(UTC)
         db.commit()
     app.state.orchestrator = ResearchOrchestrator(SessionLocal)
+    # Shadow mode stays on until a benchmark validates fuzzy matching.
+    app.state.association_service = app.state.orchestrator.associations
     app.state.scheduler = start_scheduler()
     await catch_up_if_needed()
     yield
@@ -244,6 +258,196 @@ def override_decision(decision_id: str, body: OverrideCreate, db: Session = Depe
         "reason": override.reason,
         "created_at": override.created_at,
     }
+
+
+CONFLICT_CODES = {
+    "multiple_conflicting_explicit_ids",
+    "explicit_id_contradiction",
+    "every_candidate_contradicted_by_explicit_id",
+    "competing_game_names_in_title",
+    "title_names_a_different_experience",
+    "generic_title_dense_evidence_only",
+    "untrusted_injection_text",
+    "duplicate_content_counted_once",
+    "insufficient_top_two_margin",
+    "insufficient_required_feature_coverage",
+    "dense_retrieval_unavailable",
+}
+
+
+def _matching_candidate(record: AssociationRecord, candidate_id: str | None, db: Session):
+    if not candidate_id:
+        return None
+    row = db.get(MatchCandidate, candidate_id)
+    if row is None:
+        return None
+    entry = next(
+        (item for item in (record.candidate_scoreboard or [])
+         if item.get("candidate_id") == candidate_id),
+        {},
+    )
+    return MatchingCandidateView(
+        candidate_id=candidate_id,
+        universe_id=row.universe_id or "",
+        display_name=row.raw_name or "",
+        score=float(entry.get("score", 0.0)),
+        exact_id_evidence=bool(entry.get("exact_id_evidence", False)),
+        hard_negative=bool(entry.get("hard_negative", False)),
+        retrieval_methods=list(entry.get("retrieval_methods", [])),
+    )
+
+
+def _matching_review_view(db: Session, record: AssociationRecord) -> MatchingReviewView:
+    subject = db.get(MatchSubject, record.subject_id)
+    review = human_confirmation(db, record.id)
+    artifacts = [
+        MatchingArtifactView(
+            id=artifact.id,
+            url=artifact.url,
+            publisher_owner=artifact.publisher_owner,
+            sha256=artifact.sha256,
+            source_tier=artifact.source_tier,
+            retrieval_method=artifact.retrieval_method,
+            captured_at=artifact.captured_at,
+        )
+        for artifact_id in (record.source_artifact_ids or [])
+        if (artifact := db.get(SourceArtifact, artifact_id)) is not None
+    ]
+    alternatives = [
+        view for item in (record.candidate_scoreboard or [])
+        if (view := _matching_candidate(record, item.get("candidate_id"), db)) is not None
+    ]
+    return MatchingReviewView(
+        association_id=record.id,
+        created_at=record.created_at,
+        outcome=record.outcome,
+        rationale_codes=list(record.rationale_codes or []),
+        subject_id=record.subject_id,
+        subject_type=subject.subject_type if subject else "",
+        subject_external_id=subject.external_id if subject else "",
+        subject_title=subject.raw_title if subject else "",
+        subject_description=subject.raw_description if subject else "",
+        subject_url=subject.raw_url if subject else "",
+        subject_creator=subject.creator_name if subject else "",
+        niche=subject.niche if subject else "",
+        untrusted_codes=list(subject.untrusted_codes or []) if subject else [],
+        duplicate_of_subject_id=subject.duplicate_of_subject_id if subject else None,
+        candidate=_matching_candidate(record, record.candidate_id, db),
+        runner_up=_matching_candidate(record, record.runner_up_candidate_id, db),
+        alternatives=alternatives,
+        features=dict(record.features or {}),
+        feature_availability=dict(record.feature_availability or {}),
+        feature_order=list(record.feature_order or []),
+        top_score=record.top_score,
+        runner_up_score=record.runner_up_score,
+        margin=record.margin,
+        required_coverage=record.required_coverage,
+        conflict_warnings=[
+            code for code in (record.rationale_codes or [])
+            if code in CONFLICT_CODES or code.startswith("missing_required_field")
+        ],
+        matcher_version=record.matcher_version,
+        feature_schema_version=record.feature_schema_version,
+        normalization_version=record.normalization_version,
+        threshold_version=record.threshold_version,
+        embedding_model=record.embedding_model or "",
+        embedding_model_hash=record.embedding_model_hash or "",
+        embedding_available=record.embedding_available,
+        shadow_mode=record.shadow_mode,
+        validated_matcher=record.validated_matcher,
+        usable_downstream=is_association_usable(db, record),
+        artifacts=artifacts,
+        review_verdict=review.verdict if review else None,
+        review_reason=review.reason if review else None,
+        review_selected_candidate_id=review.selected_candidate_id if review else None,
+        reviewed_at=review.created_at if review else None,
+    )
+
+
+@app.get("/api/matching/status", response_model=MatchingStatus)
+def matching_status(db: Session = Depends(get_db)):
+    thresholds = active_thresholds()
+    counts = dict(db.execute(
+        select(AssociationRecord.outcome, func.count()).group_by(AssociationRecord.outcome)
+    ).all())
+    return MatchingStatus(
+        matcher_version=thresholds.matcher_version,
+        feature_schema_version=thresholds.feature_schema_version,
+        normalization_version=thresholds.normalization_version,
+        threshold_version=thresholds.threshold_version,
+        weights_version=thresholds.weights_version,
+        shadow_mode=app.state.association_service.shadow_mode,
+        fuzzy_auto_enabled=thresholds.fuzzy_auto_enabled,
+        validated=thresholds.validated,
+        high_threshold=thresholds.high,
+        low_threshold=thresholds.low,
+        margin_threshold=thresholds.margin_min,
+        min_required_coverage=thresholds.min_required_coverage,
+        heldout_precision=thresholds.heldout_precision,
+        heldout_decisions=thresholds.heldout_decisions,
+        dataset_hash=thresholds.dataset_hash,
+        embedding_model=thresholds.embedding_model,
+        benchmark_reason=thresholds.benchmark_reason,
+        pending_reviews=len(app.state.association_service.pending_reviews(db, limit=1000)),
+        total_associations=sum(counts.values()),
+        outcome_counts={str(key): int(value) for key, value in counts.items()},
+    )
+
+
+@app.get("/api/matching/reviews", response_model=list[MatchingReviewView])
+def list_matching_reviews(
+    limit: int = 50, include_resolved: bool = False, db: Session = Depends(get_db)
+):
+    if include_resolved:
+        records = list(db.scalars(
+            select(AssociationRecord).order_by(AssociationRecord.created_at.desc()).limit(limit)
+        ))
+    else:
+        records = app.state.association_service.pending_reviews(db, limit=limit)
+    return [_matching_review_view(db, record) for record in records]
+
+
+@app.get("/api/matching/reviews/{association_id}", response_model=MatchingReviewView)
+def get_matching_review(association_id: str, db: Session = Depends(get_db)):
+    record = db.get(AssociationRecord, association_id)
+    if record is None:
+        raise HTTPException(404, "association record not found")
+    return _matching_review_view(db, record)
+
+
+@app.post("/api/matching/reviews/{association_id}", response_model=MatchingReviewResult)
+def submit_matching_review(
+    association_id: str, body: MatchingReviewCreate, db: Session = Depends(get_db)
+):
+    """Record a human decision. The engine's original verdict is never edited."""
+    try:
+        review, override = app.state.association_service.record_review(
+            db,
+            association_id,
+            verdict=body.verdict,
+            reason=body.reason,
+            selected_candidate_id=body.selected_candidate_id,
+            reviewer=body.reviewer,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, f"not found: {exc.args[0]}") from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    record = db.get(AssociationRecord, association_id)
+    facts = apply_association(db, record)
+    db.commit()
+    return MatchingReviewResult(
+        review_id=review.id,
+        association_id=association_id,
+        verdict=review.verdict,
+        engine_outcome=review.engine_outcome,
+        engine_candidate_id=review.engine_candidate_id,
+        selected_candidate_id=review.selected_candidate_id,
+        reason=review.reason,
+        override_id=override.id if override else None,
+        facts_created=facts,
+        created_at=review.created_at,
+    )
 
 
 @app.get("/api/calibration/status", response_model=CalibrationStatus)

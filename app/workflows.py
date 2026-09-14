@@ -1,12 +1,19 @@
 from __future__ import annotations
 
-import asyncio
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from .association import (
+    AssociationService,
+    MatchCandidateView,
+    MatchSubjectView,
+)
+from .association.materialize import apply_association
 from .calibration import current_features, load_artifact, score_features
 from .connectors import ConnectorError, Connectors, extract_roblox_place_ids
 from .evidence import (
@@ -18,7 +25,7 @@ from .evidence import (
     record_artifact,
 )
 from .llm import LLMUnavailable, OllamaProposalClient
-from .matching import AssociationMatcher, LocalEmbeddingSearch
+from .matching import local_embedding_provider
 from .models import (
     Candidate,
     ConfidenceRecord,
@@ -29,7 +36,6 @@ from .models import (
     ResearchRun,
     RunStatus,
     ScoreRecord,
-    TrackedVideo,
 )
 
 
@@ -61,25 +67,29 @@ def _roblox_facts(db: Session, candidate: Candidate, artifact, index: int) -> li
     return fact_ids
 
 
-def _youtube_facts(db: Session, candidate: Candidate, artifact, index: int) -> list[str]:
-    fact_ids: list[str] = []
-    for pointer, metric, template, unit in (
-        (f"/items/{index}/snippet/title", "youtube_title", "youtube_title", None),
-        (f"/items/{index}/statistics/viewCount", "youtube_views", "youtube_views", "views"),
-    ):
-        try:
-            observation = add_json_observation(
-                db,
-                artifact=artifact,
-                candidate_id=candidate.id,
-                metric=metric,
-                pointer=pointer,
-                unit=unit,
-            )
-        except (KeyError, IndexError, ValueError):
-            continue
-        fact_ids.append(create_fact(db, template_id=template, slots={"value": observation}).id)
-    return fact_ids
+@dataclass
+class CandidateContext:
+    """What the association engine needs to know about one candidate."""
+
+    candidate_id: str
+    display_name: str
+    universe_id: str
+    fact_ids: list[str] = dc_field(default_factory=list)
+    place_ids: tuple[str, ...] = ()
+    creator_name: str = ""
+    creator_external_id: str = ""
+    description: str = ""
+
+    def as_match_candidate(self) -> MatchCandidateView:
+        return MatchCandidateView(
+            candidate_id=self.candidate_id,
+            universe_id=self.universe_id,
+            place_ids=self.place_ids,
+            raw_name=self.display_name,
+            raw_description=self.description,
+            creator_name=self.creator_name,
+            creator_external_id=self.creator_external_id,
+        )
 
 
 def evidence_confidence(db: Session, candidate_id: str) -> tuple[float, dict[str, float], list[str]]:
@@ -119,12 +129,18 @@ class ResearchOrchestrator:
         session_factory: sessionmaker,
         connectors: Connectors | None = None,
         llm: OllamaProposalClient | None = None,
+        associations: AssociationService | None = None,
+        shadow_mode: bool = True,
     ):
         self.session_factory = session_factory
         self.connectors = connectors or Connectors()
         self.llm = llm or OllamaProposalClient()
-        self.matcher = AssociationMatcher()
-        self.embedder = LocalEmbeddingSearch()
+        # Every association goes through the service: it retrieves, scores,
+        # applies the hard rules and writes the append-only record. Nothing in
+        # this orchestrator decides a match on its own.
+        self.associations = associations or AssociationService(
+            embedder=local_embedding_provider(), shadow_mode=shadow_mode,
+        )
 
     async def close(self) -> None:
         await self.connectors.close()
@@ -179,12 +195,16 @@ class ResearchOrchestrator:
             db.commit()
         place_ids = extract_roblox_place_ids(search.payload)[:5]
         universe_ids: list[str] = []
+        # Which place IDs resolved to which universe. The association engine
+        # uses these to recognise a direct Roblox link in a video description.
+        place_by_universe: dict[str, tuple[str, ...]] = {}
         for place_id in place_ids:
             try:
                 result = await self.connectors.universe_for_place(place_id)
                 universe_id = str(result.payload.get("universeId") or result.payload.get("universe_id") or "")
                 if universe_id:
                     universe_ids.append(universe_id)
+                    place_by_universe[universe_id] = place_by_universe.get(universe_id, ()) + (place_id,)
             except ConnectorError:
                 continue
         if not universe_ids:
@@ -197,7 +217,7 @@ class ResearchOrchestrator:
                 db.commit()
             return
         games = await self.connectors.roblox_games(universe_ids)
-        candidate_info: list[tuple[str, str, list[str]]] = []
+        candidate_info: list[CandidateContext] = []
         with self.session_factory() as db:
             artifact = record_artifact(
                 db,
@@ -216,20 +236,32 @@ class ResearchOrchestrator:
                 db.add(candidate)
                 db.flush()
                 facts = _roblox_facts(db, candidate, artifact, index)
-                candidate_info.append((candidate.id, str(item.get("name", "Sourced Roblox experience")), facts))
+                creator = item.get("creator") or {}
+                candidate_info.append(CandidateContext(
+                    candidate_id=candidate.id,
+                    display_name=str(item.get("name", "Sourced Roblox experience")),
+                    universe_id=universe_id,
+                    fact_ids=facts,
+                    place_ids=place_by_universe.get(universe_id, ())
+                    + ((str(item["rootPlaceId"]),) if item.get("rootPlaceId") else ()),
+                    creator_name=str(creator.get("name", "")),
+                    creator_external_id=str(creator.get("id", "")),
+                    description=str(item.get("description") or ""),
+                ))
             run = db.get(ResearchRun, run_id)
             assert run is not None
             run.message = f"Captured primary evidence for {len(candidate_info)} candidates"
             db.commit()
         await self._attach_youtube(niche, candidate_info)
-        for candidate_id, sourced_name, fact_ids in candidate_info:
+        for context in candidate_info:
+            candidate_id = context.candidate_id
             with self.session_factory() as db:
                 fact_ids = [fact.id for fact in candidate_facts(db, candidate_id)]
             try:
                 generated = await self.llm.generate(
                     agent="Meta Hunter",
                     niche=niche,
-                    sourced_name=sourced_name,
+                    sourced_name=context.display_name,
                     fact_ids=fact_ids,
                 )
                 with self.session_factory() as db:
@@ -257,7 +289,13 @@ class ResearchOrchestrator:
             run.completed_at = datetime.now(UTC)
             db.commit()
 
-    async def _attach_youtube(self, niche: str, candidates: list[tuple[str, str, list[str]]]) -> None:
+    async def _attach_youtube(self, niche: str, candidates: list[CandidateContext]) -> None:
+        """Propose an association for every captured video and record it.
+
+        Every proposal is written to the ledger. Only associations the service
+        judges usable create observations; the rest wait for a human in the
+        Matching Review queue and contribute nothing to scoring.
+        """
         if not candidates:
             return
         try:
@@ -271,7 +309,8 @@ class ResearchOrchestrator:
             videos = await self.connectors.youtube_videos(video_ids)
         except ConnectorError:
             return
-        names = [name for _, name, _ in candidates]
+        pool = [context.as_match_candidate() for context in candidates]
+        candidate_row_ids = {context.candidate_id: context.candidate_id for context in candidates}
         with self.session_factory() as db:
             artifact = record_artifact(
                 db,
@@ -283,18 +322,30 @@ class ResearchOrchestrator:
                 owner="googleapis.com",
             )
             for index, item in enumerate(videos.payload.get("items", [])):
-                title = str(item.get("snippet", {}).get("title", ""))
-                dense_scores = await asyncio.to_thread(self.embedder.scores, title, names)
-                match = self.matcher.match(title, names, dense_scores=dense_scores)
-                if match.outcome != "auto_associate" or match.winner_index is None:
-                    continue
-                candidate_id = candidates[match.winner_index][0]
+                snippet = item.get("snippet", {}) or {}
                 video_id = str(item.get("id", ""))
                 if not video_id:
                     continue
-                if db.scalar(select(TrackedVideo).where(TrackedVideo.video_id == video_id)) is None:
-                    db.add(TrackedVideo(candidate_id=candidate_id, video_id=video_id))
-                _youtube_facts(db, db.get(Candidate, candidate_id), artifact, index)
+                subject = MatchSubjectView(
+                    subject_id=f"yt:{video_id}",
+                    subject_type="youtube_video",
+                    external_id=video_id,
+                    raw_title=str(snippet.get("title", "")),
+                    raw_description=str(snippet.get("description", "")),
+                    raw_url=f"https://www.youtube.com/watch?v={video_id}",
+                    creator_name=str(snippet.get("channelTitle", "")),
+                    creator_external_id=str(snippet.get("channelId", "")),
+                    niche=niche,
+                    source_artifact_id=artifact.id,
+                    source_artifact_sha256=artifact.sha256,
+                    extraction_method="youtube_videos_api",
+                    source_tier="primary",
+                    pointer_prefix=f"/items/{index}",
+                )
+                decision = self.associations.associate(
+                    db, subject, pool, niche=niche, candidate_row_ids=candidate_row_ids,
+                )
+                apply_association(db, decision.record)
             db.commit()
 
     def _record_decision(self, db: Session, candidate_id: str) -> DecisionRecord:

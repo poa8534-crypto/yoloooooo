@@ -116,6 +116,7 @@ def add_json_observation(
     pointer: str,
     unit: str | None = None,
     observed_at: datetime | None = None,
+    association_id: str | None = None,
 ) -> Observation:
     if artifact.is_discovery_only:
         raise EvidenceError("discovery-only artifacts cannot create observations")
@@ -130,6 +131,7 @@ def add_json_observation(
         extraction_method="json_pointer",
         pointer=pointer,
         observed_at=observed_at or artifact.captured_at,
+        association_id=association_id,
     )
     db.add(observation)
     db.flush()
@@ -145,6 +147,7 @@ def add_passage_observation(
     exact_passage: str,
     value: Any,
     unit: str | None = None,
+    association_id: str | None = None,
 ) -> Observation:
     if artifact.is_discovery_only:
         raise EvidenceError("discovery-only artifacts cannot create observations")
@@ -159,6 +162,7 @@ def add_passage_observation(
         extraction_method="exact_passage",
         pointer=f"passage:{exact_passage}",
         observed_at=artifact.captured_at,
+        association_id=association_id,
     )
     db.add(observation)
     db.flush()

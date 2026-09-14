@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
+from .association.service import usable_association_for_subject
+from .association.subjects import SUBJECT_YOUTUBE_VIDEO
 from .config import get_settings
 from .connectors import ConnectorError, Connectors
 from .db import SessionLocal
@@ -53,7 +55,20 @@ async def snapshot_all(connectors: Connectors | None = None) -> dict[str, int]:
                     db.commit()
             except ConnectorError:
                 counts["errors"] += 1
-        by_video = {video.video_id: video.candidate_id for video in videos}
+        # A repeat measurement is only admissible through the same approved
+        # association that let the video in. A video whose association was
+        # never approved, or was later rejected, stops being measured; it is
+        # not silently attributed to the candidate it was once tracked under.
+        by_video: dict[str, tuple[str, str]] = {}
+        with SessionLocal() as db:
+            for video in videos:
+                resolved = usable_association_for_subject(
+                    db, SUBJECT_YOUTUBE_VIDEO, video.video_id
+                )
+                if resolved is None:
+                    continue
+                record, candidate_row_id = resolved
+                by_video[video.video_id] = (candidate_row_id, record.id)
         video_ids = list(by_video)
         for start in range(0, len(video_ids), 50):
             try:
@@ -65,13 +80,15 @@ async def snapshot_all(connectors: Connectors | None = None) -> dict[str, int]:
                         source_tier="primary", owner="googleapis.com",
                     )
                     for index, item in enumerate(result.payload.get("items", [])):
-                        candidate_id = by_video.get(str(item.get("id")))
-                        if not candidate_id:
+                        resolved = by_video.get(str(item.get("id")))
+                        if resolved is None:
                             continue
+                        candidate_id, association_id = resolved
                         try:
                             obs = add_json_observation(
                                 db, artifact=artifact, candidate_id=candidate_id,
                                 metric="youtube_views", pointer=f"/items/{index}/statistics/viewCount", unit="views",
+                                association_id=association_id,
                             )
                             create_fact(db, template_id="youtube_views", slots={"value": obs})
                             counts["youtube"] += 1

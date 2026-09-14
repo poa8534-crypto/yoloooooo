@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Integer,
     String,
     Text,
     event,
@@ -98,6 +99,10 @@ class Observation(Base):
     extraction_method: Mapped[str] = mapped_column(String(80))
     pointer: Mapped[str] = mapped_column(Text)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    # Set for every observation whose candidate link came from the association
+    # engine. A YouTube or web metric without one cannot reach downstream
+    # scoring: see app.association.service.approved_association_ids.
+    association_id: Mapped[str | None] = mapped_column(String, index=True, default=None)
     artifact: Mapped[SourceArtifact] = relationship(back_populates="observations")
 
 
@@ -186,9 +191,193 @@ class SystemState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class AssociationOutcomeKind(str, enum.Enum):
+    AUTO_ASSOCIATE = "auto_associate"
+    REVIEW_REQUIRED = "review_required"
+    NO_MATCH = "no_match"
+    BLOCKED_CONFLICT = "blocked_conflict"
+
+
+class ReviewVerdict(str, enum.Enum):
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    REASSIGNED = "reassigned"
+
+
+class MatcherVersion(Base):
+    """One frozen matcher configuration.
+
+    A row is written the first time a given fingerprint decides anything, so a
+    stored verdict can always be traced back to the exact policy that produced
+    it, including whether that policy had cleared its benchmark.
+    """
+
+    __tablename__ = "matcher_versions"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    matcher_version: Mapped[str] = mapped_column(String(80), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    feature_schema_version: Mapped[str] = mapped_column(String(80))
+    normalization_version: Mapped[str] = mapped_column(String(80))
+    threshold_version: Mapped[str] = mapped_column(String(80))
+    weights_version: Mapped[str] = mapped_column(String(80), default="weights-v1")
+    embedding_model: Mapped[str] = mapped_column(String(160), default="")
+    embedding_model_hash: Mapped[str] = mapped_column(String(64), default="")
+    dataset_hash: Mapped[str] = mapped_column(String(64), default="")
+    feature_order: Mapped[list[str]] = mapped_column(JSON, default=list)
+    policy_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    validated: Mapped[bool] = mapped_column(Boolean, default=False)
+    fuzzy_auto_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    heldout_precision: Mapped[float | None] = mapped_column(Float)
+    heldout_decisions: Mapped[int | None] = mapped_column(Integer)
+    benchmark_reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MatchSubject(Base):
+    """A source record that may belong to a Roblox experience.
+
+    Identity is this row's internal ID. `external_id` is the platform's own ID
+    when one was captured; a display name alone never identifies a subject.
+    """
+
+    __tablename__ = "match_subjects"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    subject_type: Mapped[str] = mapped_column(String(40), index=True)
+    external_kind: Mapped[str] = mapped_column(String(40), default="")
+    external_id: Mapped[str] = mapped_column(String(120), default="", index=True)
+    raw_title: Mapped[str] = mapped_column(Text, default="")
+    raw_description: Mapped[str] = mapped_column(Text, default="")
+    raw_url: Mapped[str] = mapped_column(Text, default="")
+    creator_name: Mapped[str] = mapped_column(String(255), default="")
+    creator_external_id: Mapped[str] = mapped_column(String(120), default="")
+    niche: Mapped[str] = mapped_column(String(240), default="")
+    source_artifact_id: Mapped[str | None] = mapped_column(
+        ForeignKey("source_artifacts.id"), index=True
+    )
+    source_artifact_sha256: Mapped[str] = mapped_column(String(64), default="", index=True)
+    extraction_method: Mapped[str] = mapped_column(String(80), default="")
+    source_tier: Mapped[str] = mapped_column(String(32), default="")
+    pointer_prefix: Mapped[str] = mapped_column(Text, default="")
+    content_fingerprint: Mapped[str] = mapped_column(String(64), default="", index=True)
+    normalization_version: Mapped[str] = mapped_column(String(40), default="")
+    normalized_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Captured text that looked like an instruction. Stored for auditing only;
+    # nothing in the engine reads it as a command.
+    untrusted_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    duplicate_of_subject_id: Mapped[str | None] = mapped_column(String, index=True)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MatchCandidate(Base):
+    """A Roblox experience (or niche cluster) a subject may belong to."""
+
+    __tablename__ = "match_candidates"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    candidate_type: Mapped[str] = mapped_column(String(40), default="roblox_experience", index=True)
+    candidate_row_id: Mapped[str | None] = mapped_column(ForeignKey("candidates.id"), index=True)
+    universe_id: Mapped[str] = mapped_column(String(80), default="", index=True)
+    place_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    raw_name: Mapped[str] = mapped_column(Text, default="")
+    raw_description: Mapped[str] = mapped_column(Text, default="")
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list)
+    creator_name: Mapped[str] = mapped_column(String(255), default="")
+    creator_external_id: Mapped[str] = mapped_column(String(120), default="")
+    niche_keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Duplicate experiences collapse onto one canonical candidate.
+    canonical_candidate_id: Mapped[str] = mapped_column(String, default="", index=True)
+    normalization_version: Mapped[str] = mapped_column(String(40), default="")
+    normalized_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AssociationRecord(Base):
+    """The engine's verdict for one subject. Append-only, never edited.
+
+    A human review is a separate row that annotates this one. The original
+    verdict, its inputs and the policy that produced it stay exactly as written.
+    """
+
+    __tablename__ = "association_records"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    subject_id: Mapped[str] = mapped_column(ForeignKey("match_subjects.id"), index=True)
+    candidate_id: Mapped[str | None] = mapped_column(ForeignKey("match_candidates.id"), index=True)
+    runner_up_candidate_id: Mapped[str | None] = mapped_column(
+        ForeignKey("match_candidates.id"), index=True
+    )
+    outcome: Mapped[str] = mapped_column(String(32), index=True)
+    rationale_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    features: Mapped[dict[str, float]] = mapped_column(JSON, default=dict)
+    feature_availability: Mapped[dict[str, bool]] = mapped_column(JSON, default=dict)
+    feature_order: Mapped[list[str]] = mapped_column(JSON, default=list)
+    candidate_scoreboard: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    top_score: Mapped[float] = mapped_column(Float, default=0.0)
+    runner_up_score: Mapped[float] = mapped_column(Float, default=0.0)
+    margin: Mapped[float] = mapped_column(Float, default=0.0)
+    required_coverage: Mapped[float] = mapped_column(Float, default=0.0)
+    matcher_version: Mapped[str] = mapped_column(String(80), index=True)
+    matcher_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("matcher_versions.id"), index=True
+    )
+    feature_schema_version: Mapped[str] = mapped_column(String(80))
+    normalization_version: Mapped[str] = mapped_column(String(80))
+    threshold_version: Mapped[str] = mapped_column(String(80))
+    embedding_model: Mapped[str] = mapped_column(String(160), default="")
+    embedding_model_hash: Mapped[str] = mapped_column(String(64), default="")
+    embedding_available: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_artifact_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    source_artifact_hashes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    shadow_mode: Mapped[bool] = mapped_column(Boolean, default=True)
+    validated_matcher: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class AssociationReview(Base):
+    """A human annotation of one association record. Append-only.
+
+    A review never rewrites the engine verdict; it records what a person
+    decided alongside it, and becomes labeled data for the benchmark.
+    """
+
+    __tablename__ = "association_reviews"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    association_id: Mapped[str] = mapped_column(ForeignKey("association_records.id"), index=True)
+    verdict: Mapped[str] = mapped_column(String(32), index=True)
+    selected_candidate_id: Mapped[str | None] = mapped_column(
+        ForeignKey("match_candidates.id"), index=True
+    )
+    engine_outcome: Mapped[str] = mapped_column(String(32))
+    engine_candidate_id: Mapped[str | None] = mapped_column(String)
+    reason: Mapped[str] = mapped_column(Text)
+    reviewer: Mapped[str] = mapped_column(String(120), default="local-operator")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class AssociationOverride(Base):
+    """A human override of an engine verdict. Append-only.
+
+    Separate from a review so that "I disagree with the engine" is
+    distinguishable in the ledger from "I confirmed what the engine said".
+    """
+
+    __tablename__ = "association_overrides"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    association_id: Mapped[str] = mapped_column(ForeignKey("association_records.id"), index=True)
+    requested_outcome: Mapped[str] = mapped_column(String(32))
+    requested_candidate_id: Mapped[str | None] = mapped_column(
+        ForeignKey("match_candidates.id"), index=True
+    )
+    engine_outcome: Mapped[str] = mapped_column(String(32))
+    engine_candidate_id: Mapped[str | None] = mapped_column(String)
+    reason: Mapped[str] = mapped_column(Text)
+    reviewer: Mapped[str] = mapped_column(String(120), default="local-operator")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 APPEND_ONLY = (
     SourceArtifact, Observation, Fact, Proposal, Inference,
     ScoreRecord, ConfidenceRecord, DecisionRecord, DecisionOverride,
+    AssociationRecord, AssociationReview, AssociationOverride, MatcherVersion,
 )
 
 

@@ -26,6 +26,7 @@ embeddings = ["fastembed>=0.7,<1"]
 [project.scripts]
 venture-agents = "app.main:run"
 venture-calibrate = "app.calibration:main"
+venture-assoc-benchmark = "app.association.benchmark:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -33,6 +34,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"app/association/data/seed_dataset.json" = "app/association/data/seed_dataset.json"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
