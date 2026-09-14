@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 FORBIDDEN_PROPOSAL_TEXT = re.compile(
-    r"(?:https?://|www\.|\b\d+(?:[.,]\d+)?\s*(?:%|[kmb]\b|players?\b|visits?\b|views?\b|hours?\b|days?\b))",
+    r"(?:https?://|www\.|\d|\b[\w-]+\.(?:com|org|net|io)\b)",
     re.IGNORECASE,
 )
 
@@ -18,6 +18,14 @@ class StrictModel(BaseModel):
 
 class ResearchRunCreate(StrictModel):
     niche: str = Field(min_length=3, max_length=240)
+    mode: Literal["quick", "deep"] = "quick"
+
+
+class DesignAssumption(StrictModel):
+    kind: Literal["session_length", "implementation_effort", "feature_count"]
+    value: float = Field(gt=0, le=10000, allow_inf_nan=False)
+    unit: Literal["minutes", "hours", "features"]
+    basis: Literal["unverified_design_assumption"] = "unverified_design_assumption"
 
 
 class ProposalPayload(StrictModel):
@@ -28,6 +36,12 @@ class ProposalPayload(StrictModel):
     risks: list[str] = Field(min_length=1, max_length=8)
     questions: list[str] = Field(default_factory=list, max_length=8)
     supporting_fact_ids: list[str] = Field(default_factory=list)
+    design_assumptions: list[DesignAssumption] = Field(default_factory=list, max_length=8)
+    essential_features: list[str] = Field(default_factory=list, max_length=8)
+    excluded_features: list[str] = Field(default_factory=list, max_length=8)
+    dependencies: list[str] = Field(default_factory=list, max_length=8)
+    validation_tasks: list[str] = Field(default_factory=list, max_length=8)
+    counterevidence: list[str] = Field(default_factory=list, max_length=8)
 
     @field_validator("concept_title", "core_loop", "differentiator")
     @classmethod
@@ -36,12 +50,20 @@ class ProposalPayload(StrictModel):
             raise ValueError("proposal text may not contain URLs or metric-like claims")
         return value.strip()
 
-    @field_validator("build_steps", "risks", "questions")
+    @field_validator("build_steps", "risks", "questions", "essential_features", "excluded_features", "dependencies", "validation_tasks", "counterevidence")
     @classmethod
     def no_untrusted_metrics_in_lists(cls, values: list[str]) -> list[str]:
         if any(FORBIDDEN_PROPOSAL_TEXT.search(v) for v in values):
             raise ValueError("proposal list may not contain URLs or metric-like claims")
         return [v.strip() for v in values]
+
+    @field_validator("supporting_fact_ids")
+    @classmethod
+    def valid_ids(cls, values):
+        from uuid import UUID
+        for value in values:
+            UUID(value)
+        return values
 
 
 class OverrideCreate(StrictModel):
@@ -78,6 +100,7 @@ class RunView(StrictModel):
     completed_at: datetime | None
     candidates: list[CandidateView]
     passing_results: list[CandidateView]
+    progress: dict = Field(default_factory=dict)
 
 
 class CalibrationStatus(StrictModel):
@@ -208,6 +231,7 @@ class AuditGate(StrictModel):
     label: str
     passed: bool
     detail: str
+    state: Literal["pass", "fail", "missing", "not_applicable"] = "missing"
 
 
 class AuditReadiness(StrictModel):
@@ -222,6 +246,9 @@ class AuditReadiness(StrictModel):
 
 
 class AuditView(StrictModel):
+    audit_id: str | None = None
+    proposal_id: str | None = None
+    gates: list[AuditGate] = Field(default_factory=list)
     candidate_id: str
     evidence_state: str
     proposal: ProposalPayload | None

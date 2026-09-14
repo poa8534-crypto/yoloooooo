@@ -47,12 +47,16 @@ def init_db(bind=None) -> None:
     target = bind or engine
     # Triggers guard the append-only tables against every writer, including
     # this one, so they come off for the migration and go straight back on.
-    drop_append_only_triggers(target)
     # Additive migrations run first so that create_all never sees a table it
     # would otherwise consider up to date while a column is still missing.
-    run_migrations(target)
-    Base.metadata.create_all(bind=target)
-    install_append_only_triggers(target)
+    drop_append_only_triggers(target)
+    try:
+        run_migrations(target)
+        Base.metadata.create_all(bind=target)
+        from .migrations import redact_credential_urls
+        redact_credential_urls(target)
+    finally:
+        install_append_only_triggers(target)
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -61,4 +65,3 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
-

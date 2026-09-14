@@ -17,13 +17,17 @@ from .models import Candidate, SystemState, TrackedVideo
 
 async def snapshot_all(connectors: Connectors | None = None) -> dict[str, int]:
     own = connectors is None
-    connectors = connectors or Connectors()
+    from .quotas import QuotaMeter
+    connectors = connectors or Connectors(quota_meter=QuotaMeter(SessionLocal))
     counts = {"roblox": 0, "youtube": 0, "errors": 0}
     try:
         with SessionLocal() as db:
             candidates = list(db.scalars(select(Candidate)))
             videos = list(db.scalars(select(TrackedVideo)))
-        by_universe = {candidate.external_id: candidate.id for candidate in candidates}
+        # Stable representative; readers join all same-universe candidate IDs.
+        by_universe = {}
+        for candidate in sorted(candidates, key=lambda c: (c.created_at, c.id)):
+            by_universe.setdefault(candidate.external_id, candidate.id)
         ids = list(by_universe)
         for start in range(0, len(ids), 50):
             try:

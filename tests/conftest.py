@@ -42,3 +42,27 @@ def db():
 def session_factory():
     """A session factory over a fresh in-memory ledger."""
     return sessionmaker(bind=_memory_engine(), expire_on_commit=False)
+
+
+@pytest.fixture
+def settings(tmp_path, monkeypatch):
+    """Isolated settings carrying synthetic credentials.
+
+    The keys are deliberately distinctive so a leak is unmistakable in any
+    stored URL, response body, prompt, log line or exception message.
+    """
+    from app.config import Settings
+
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    configured = Settings(
+        _env_file=None,
+        artifact_dir=artifacts,
+        model_dir=tmp_path / "models",
+        youtube_api_key="SYNTHETIC_SECRET_12345",
+        tavily_api_key="SYNTHETIC_TAVILY_12345",
+    )
+    for module in ("app.config", "app.evidence", "app.calibration"):
+        monkeypatch.setattr(f"{module}.get_settings", lambda: configured)
+    monkeypatch.setattr("app.workflows.load_artifact", lambda: None)
+    return configured

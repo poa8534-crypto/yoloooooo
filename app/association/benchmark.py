@@ -6,8 +6,8 @@ either way. Fuzzy automatic association is switched on only when held-out
 precision clears the floor on enough decisions; otherwise the artifact records
 the failure and the engine stays in review-only mode.
 
-Precision, not coverage, is the objective. A run that automates nothing and
-sends everything to review is a passing run in every sense that matters here.
+Abstention protects precision, but recall must also be reported: a matcher
+that automates nothing has not demonstrated useful research coverage.
 """
 
 from __future__ import annotations
@@ -50,6 +50,8 @@ class SplitResult:
     false_positives: list[str] = field(default_factory=list)
     hard_negatives: list[str] = field(default_factory=list)
     ambiguous: list[str] = field(default_factory=list)
+    labeled_positives: int = 0
+    correct_automatic: int = 0
 
     @property
     def fuzzy_precision(self) -> float | None:
@@ -63,10 +65,29 @@ class SplitResult:
             return None
         return self.auto_exact_id_correct / self.auto_exact_id
 
+    @property
+    def automatic_precision(self) -> float | None:
+        """Of the associations made automatically, how many were right."""
+        return self.correct_automatic / self.auto_total if self.auto_total else None
+
+    @property
+    def automatic_recall(self) -> float | None:
+        """Of the associations that existed, how many were found.
+
+        Precision alone is satisfied by associating nothing, so recall is
+        reported beside it rather than left implicit.
+        """
+        return (
+            self.correct_automatic / self.labeled_positives
+            if self.labeled_positives else None
+        )
+
     def as_json(self) -> dict:
         data = asdict(self)
         data["fuzzy_precision"] = self.fuzzy_precision
         data["exact_id_precision"] = self.exact_id_precision
+        data["automatic_precision"] = self.automatic_precision
+        data["automatic_recall"] = self.automatic_recall
         return data
 
 
@@ -89,11 +110,13 @@ def run_split(
             shadow_mode=False,
         )
         result.examples += 1
+        result.labeled_positives += int(example.label_candidate_id is not None)
         chosen = verdict.winner.candidate_id if verdict.winner else None
         correct = chosen == example.label_candidate_id
 
         if verdict.outcome is AssociationOutcome.AUTO_ASSOCIATE:
             result.auto_total += 1
+            result.correct_automatic += int(correct and example.label_candidate_id is not None)
             exact = CODE_EXACT_ID in verdict.rationale
             if exact:
                 result.auto_exact_id += 1

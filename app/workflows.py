@@ -19,7 +19,6 @@ from .calibration import current_features, load_artifact, score_features
 from .connectors import ConnectorError, Connectors, extract_roblox_place_ids
 from .evidence import (
     add_json_observation,
-    candidate_facts,
     create_fact,
     evidence_conflicts,
     latest_metric,
@@ -28,16 +27,18 @@ from .evidence import (
 from .llm import LLMUnavailable, OllamaProposalClient
 from .matching import local_embedding_provider
 from .models import (
+    AuditRecord,
     Candidate,
     ConfidenceRecord,
     DecisionKind,
     DecisionRecord,
-    Observation,
     Proposal,
+    ResearchCheckpoint,
     ResearchRun,
     RunStatus,
     ScoreRecord,
 )
+from .research_evidence import audit_readiness, evidence_packet
 
 
 def _roblox_facts(db: Session, candidate: Candidate, artifact, index: int) -> list[str]:
@@ -134,7 +135,8 @@ class ResearchOrchestrator:
         shadow_mode: bool = True,
     ):
         self.session_factory = session_factory
-        self.connectors = connectors or Connectors()
+        from .quotas import QuotaMeter
+        self.connectors = connectors or Connectors(quota_meter=QuotaMeter(session_factory))
         self.llm = llm or OllamaProposalClient()
         # Every association goes through the service: it retrieves, scores,
         # applies the hard rules and writes the append-only record. Nothing in
@@ -156,13 +158,20 @@ class ResearchOrchestrator:
             run.message = "Discovering source records"
             db.commit()
         try:
-            await self._research(run_id)
+            with self.session_factory() as db:
+                checkpoint = db.get(ResearchCheckpoint, run_id)
+                deep = checkpoint is not None and checkpoint.state.get("mode") == "deep"
+            if deep:
+                from .deep_research import DeepResearch
+                await DeepResearch(self, run_id).run()
+            else:
+                await self._research(run_id)
         except Exception as exc:
             with self.session_factory() as db:
                 run = db.get(ResearchRun, run_id)
                 if run:
                     run.status = RunStatus.FAILED.value
-                    run.message = f"Research stopped safely: {type(exc).__name__}: {exc}"
+                    run.message = f"Research stopped safely: {type(exc).__name__}"
                     run.completed_at = datetime.now(UTC)
                     db.commit()
 
@@ -257,13 +266,15 @@ class ResearchOrchestrator:
         for context in candidate_info:
             candidate_id = context.candidate_id
             with self.session_factory() as db:
-                fact_ids = [fact.id for fact in candidate_facts(db, candidate_id)]
+                packet = evidence_packet(db, candidate_id)
+                fact_ids = [fact["id"] for fact in packet]
             try:
                 generated = await self.llm.generate(
                     agent="Meta Hunter",
                     niche=niche,
                     sourced_name=context.display_name,
                     fact_ids=fact_ids,
+                    evidence=packet,
                 )
                 with self.session_factory() as db:
                     db.add(Proposal(
@@ -290,7 +301,7 @@ class ResearchOrchestrator:
             run.completed_at = datetime.now(UTC)
             db.commit()
 
-    async def _attach_youtube(self, niche: str, candidates: list[CandidateContext]) -> None:
+    async def _attach_youtube(self, niche: str, candidates: list[CandidateContext], *, budget=None, query=None) -> None:
         """Propose an association for every captured video and record it.
 
         Every proposal is written to the ledger. Only associations the service
@@ -300,14 +311,24 @@ class ResearchOrchestrator:
         if not candidates:
             return
         try:
-            search = await self.connectors.youtube_search(f"Roblox {niche}")
+            query = query or f"Roblox {niche}"
+            search = await budget.call(self.connectors, "youtube_search", query) if budget else await self.connectors.youtube_search(query)
             video_ids = [
                 item.get("id", {}).get("videoId") for item in search.payload.get("items", [])
                 if item.get("id", {}).get("videoId")
             ]
             if not video_ids:
                 return
-            videos = await self.connectors.youtube_videos(video_ids)
+            if budget:
+                seen = set(budget.state.get("video_ids", []))
+                video_ids = [vid for vid in dict.fromkeys(video_ids) if vid not in seen][:min(10, budget.state["limits"]["videos"] - len(seen))]
+                if not video_ids:
+                    return
+                budget.reserve("videos", len(video_ids))
+                videos = await budget.call(self.connectors, "youtube_videos", video_ids)
+                budget.save(video_ids=sorted(seen | set(video_ids)))
+            else:
+                videos = await self.connectors.youtube_videos(video_ids)
         except ConnectorError:
             return
         pool = [context.as_match_candidate() for context in candidates]
@@ -347,12 +368,11 @@ class ResearchOrchestrator:
                 # bound and may download weights on first use. Running it
                 # inline would stall the event loop — and with it the whole
                 # local service — for the duration of every video.
-                decision = await asyncio.to_thread(
-                    self.associations.associate,
+                decision = await self.associations.associate_async(
                     db, subject, pool,
                     niche=niche, candidate_row_ids=candidate_row_ids,
                 )
-                await asyncio.to_thread(apply_association, db, decision.record)
+                apply_association(db, decision.record)
             db.commit()
 
     def _record_decision(self, db: Session, candidate_id: str) -> DecisionRecord:
@@ -416,44 +436,49 @@ class ResearchOrchestrator:
         db.add(decision)
         return decision
 
-    async def audit(self, candidate_id: str) -> dict[str, Any]:
+    async def audit(self, candidate_id: str, proposal_id: str | None = None, *, budget=None, gaps=None) -> dict[str, Any]:
         with self.session_factory() as db:
+            readiness = audit_readiness(db, candidate_id, proposal_id)
             candidate = db.get(Candidate, candidate_id)
-            if candidate is None:
-                raise KeyError(candidate_id)
             run = db.get(ResearchRun, candidate.run_id)
-            facts = candidate_facts(db, candidate_id)
-            name_observation = db.get(Observation, candidate.display_name_observation_id) if candidate.display_name_observation_id else None
-            sourced_name = str(name_observation.value_json) if name_observation else "Sourced Roblox experience"
-            latest_decision = db.scalar(
-                select(DecisionRecord).where(DecisionRecord.candidate_id == candidate_id).order_by(DecisionRecord.created_at.desc())
-            )
-            fact_ids = [fact.id for fact in facts]
-        proposal_payload = None
-        try:
-            generated = await self.llm.generate(
-                agent="Venture Scout",
-                niche=run.niche if run else "Roblox",
-                sourced_name=sourced_name,
-                fact_ids=fact_ids,
-            )
-            proposal_payload = generated.payload
-            with self.session_factory() as db:
-                db.add(Proposal(
-                    candidate_id=candidate_id,
-                    agent="venture_scout",
-                    payload=proposal_payload.model_dump(),
-                    model_name=generated.model,
-                ))
-                db.commit()
-        except LLMUnavailable:
-            pass
-        kind = latest_decision.kind if latest_decision else DecisionKind.COLLECTION_ONLY.value
-        return {
-            "candidate_id": candidate_id,
-            "evidence_state": "conflicted" if kind == DecisionKind.BLOCKED_CONFLICT.value else "source_backed",
-            "proposal": proposal_payload,
-            "risks": proposal_payload.risks if proposal_payload else ["The local proposal model did not produce schema-valid output."],
-            "decision": kind,
-            "note": "This is a scoped proposal, not a prediction of game success.",
+            hunter = db.get(Proposal, proposal_id) if proposal_id else db.scalar(select(Proposal).where(
+                Proposal.candidate_id == candidate_id, Proposal.agent == "meta_hunter").order_by(Proposal.created_at.desc()))
+            packet = evidence_packet(db, candidate_id)
+            selected_id = hunter.id if hunter and hunter.candidate_id == candidate_id else None
+            hunter_payload = hunter.payload if selected_id else None
+            niche = run.niche if run else "Roblox"
+            latest_decision = db.scalar(select(DecisionRecord).where(DecisionRecord.candidate_id == candidate_id).order_by(DecisionRecord.created_at.desc()))
+            decision = latest_decision.kind if latest_decision else "collection_only"
+        result = {
+            "candidate_id": candidate_id, "proposal_id": selected_id, "proposal": None,
+            "gates": [gate.model_dump() for gate in readiness.gates],
+            "evidence_state": "blocked", "decision": decision,
+            "risks": [], "note": "Speculative design audit, not a prediction of game success.",
         }
+        if not readiness.ready:
+            result["risks"] = [g.label + ": " + g.detail for g in readiness.gates if g.state in {"fail", "missing"}]
+        else:
+            try:
+                kwargs = {
+                    "agent": "Venture Scout", "niche": niche,
+                    "sourced_name": "Selected sourced experience",
+                    "fact_ids": [p["id"] for p in packet], "evidence": packet,
+                    "hunter_proposal": hunter_payload, "gaps": gaps or [],
+                }
+                if budget:
+                    kwargs["before_attempt"] = budget.model_attempt
+                    generated = await asyncio.wait_for(self.llm.generate(**kwargs), timeout=budget.remaining)
+                else:
+                    generated = await asyncio.wait_for(self.llm.generate(**kwargs), timeout=180)
+                result["proposal"] = generated.payload.model_dump()
+                result["risks"] = generated.payload.risks
+                result["evidence_state"] = "source_backed_design_speculative"
+            except (LLMUnavailable, TimeoutError) as exc:
+                result["risks"] = ["Local model did not produce valid output within the budget."]
+                if budget:
+                    budget.error("scout", exc)
+        with self.session_factory() as db:
+            row = AuditRecord(candidate_id=candidate_id, proposal_id=selected_id, payload=result)
+            db.add(row)
+            db.commit()
+            return {**result, "audit_id": row.id}

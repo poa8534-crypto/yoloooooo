@@ -278,9 +278,11 @@ class AssociationService:
         *,
         niche: str = "",
         candidate_row_ids: dict[str, str] | None = None,
+        _evaluated=None,
+        _thresholds=None,
     ) -> AssociationDecision:
         """Decide one subject and write the append-only record."""
-        thresholds = self.thresholds
+        thresholds = _thresholds or self.thresholds
         matcher_row = self.register_matcher_version(db, thresholds)
         subject_row = self.upsert_subject(db, subject)
         candidate_row_ids = candidate_row_ids or {}
@@ -289,7 +291,7 @@ class AssociationService:
                 db, candidate, candidate_row_id=candidate_row_ids.get(candidate.candidate_id)
             )
 
-        verdict = evaluate(
+        verdict = _evaluated or evaluate(
             subject,
             pool,
             thresholds=thresholds,
@@ -340,6 +342,17 @@ class AssociationService:
         return AssociationDecision(
             record=record, verdict=verdict, subject_row=subject_row, candidate_row=candidate_row
         )
+
+    async def associate_async(self, db, subject, pool, *, niche="", candidate_row_ids=None):
+        """Only pure CPU scoring enters a worker; cancelled work cannot write SQL."""
+        import asyncio
+        thresholds = self.thresholds
+        subject_row = self.upsert_subject(db, subject)
+        verdict = await asyncio.to_thread(evaluate, subject, pool, thresholds=thresholds,
+            embedder=self.embedder, niche=niche or subject.niche, shadow_mode=self.shadow_mode,
+            duplicate_of=subject_row.duplicate_of_subject_id or "")
+        return self.associate(db, subject, pool, niche=niche, candidate_row_ids=candidate_row_ids,
+                              _evaluated=verdict, _thresholds=thresholds)
 
     # ------------------------------------------------------------------
     # Human review, append-only

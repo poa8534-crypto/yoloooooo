@@ -65,6 +65,30 @@ class Candidate(Base):
     run: Mapped[ResearchRun] = relationship(back_populates="candidates")
 
 
+class ResearchCheckpoint(Base):
+    __tablename__ = "research_checkpoints"
+    run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.id"), primary_key=True)
+    state: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ResearchReport(Base):
+    __tablename__ = "research_reports"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.id"), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AuditRecord(Base):
+    __tablename__ = "audit_records"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    candidate_id: Mapped[str] = mapped_column(ForeignKey("candidates.id"), index=True)
+    proposal_id: Mapped[str | None] = mapped_column(ForeignKey("proposals.id"))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class TrackedVideo(Base):
     __tablename__ = "tracked_videos"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
@@ -390,6 +414,7 @@ class AssociationOverride(Base):
 
 
 APPEND_ONLY = (
+    ResearchReport, AuditRecord,
     SourceArtifact, Observation, Fact, Proposal, Inference,
     ScoreRecord, ConfidenceRecord, DecisionRecord, DecisionOverride,
     AssociationRecord, AssociationReview, AssociationOverride, MatcherVersion,

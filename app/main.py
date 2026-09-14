@@ -22,10 +22,11 @@ from .association.service import human_confirmation
 from .calibration import calibration_status
 from .config import ROOT, get_settings
 from .db import SessionLocal, get_db, init_db
-from .evidence import candidate_facts, evidence_conflicts, fact_freshness, render_fact
+from .evidence import fact_freshness, render_fact
 from .matching import DEFAULT_EMBEDDING_MODEL
 from .models import (
     AssociationRecord,
+    AuditRecord,
     Candidate,
     ConfidenceRecord,
     DecisionOverride,
@@ -35,15 +36,18 @@ from .models import (
     MatchSubject,
     Observation,
     Proposal,
+    ResearchCheckpoint,
+    ResearchReport,
     ResearchRun,
     RunStatus,
     ScoreRecord,
     SourceArtifact,
     SystemState,
 )
+from .research_budget import progress
+from .research_evidence import audit_readiness, evidence_packet, history
 from .scheduler import catch_up_if_needed, start_scheduler
 from .schemas import (
-    AuditGate,
     AuditReadiness,
     AuditView,
     CalibrationStatus,
@@ -60,6 +64,7 @@ from .schemas import (
     ResearchRunCreate,
     RunView,
 )
+from .security import RedactedResponses, install_log_redaction, sanitize_url
 from .workflows import ResearchOrchestrator
 
 TASKS: set[asyncio.Task] = set()
@@ -95,7 +100,7 @@ async def lifespan(app: FastAPI):
             ResearchRun.status.in_([RunStatus.QUEUED.value, RunStatus.RUNNING.value])
         )))
         for run in orphaned:
-            run.status = RunStatus.FAILED.value
+            run.status = "interrupted"
             run.message = "Interrupted by a previous service shutdown; no evidence was fabricated."
             run.completed_at = datetime.now(UTC)
         db.commit()
@@ -106,32 +111,29 @@ async def lifespan(app: FastAPI):
     await catch_up_if_needed()
     yield
     app.state.scheduler.shutdown(wait=False)
+    for task in TASKS:
+        task.cancel()
+    await asyncio.gather(*TASKS, return_exceptions=True)
     await app.state.orchestrator.close()
 
 
 app = FastAPI(title="Roblox Venture Agents", version="0.1.0", lifespan=lifespan)
+install_log_redaction()
+app.add_middleware(RedactedResponses)
 
 
 def _candidate_view(db: Session, candidate: Candidate) -> CandidateView:
-    facts = candidate_facts(db, candidate.id)
-    fact_views = [
-        FactView(
-            id=fact.id,
-            text=render_fact(db, fact),
-            source_ids=fact.source_ids,
-            freshness=fact_freshness(db, fact),
-            verification_state=fact.verification_state,
-        ) for fact in facts
-    ]
-    name = "Sourced Roblox experience"
-    if candidate.display_name_observation_id:
-        observation = db.get(Observation, candidate.display_name_observation_id)
-        if observation is not None:
-            name = str(observation.value_json)
+    packet = evidence_packet(db, candidate.id)
+    fact_views = [FactView(id=f["id"], text=f["text"], source_ids=f["source_ids"],
+                          freshness=f["freshness"], verification_state="source_backed") for f in packet]
+    name = next((str(f["slots"][0]["value"]) for f in packet if f["template_id"] == "roblox_name"), "Sourced Roblox experience")
     proposal_row = db.scalar(
-        select(Proposal).where(Proposal.candidate_id == candidate.id).order_by(Proposal.created_at.desc())
+        select(Proposal).where(Proposal.candidate_id == candidate.id, Proposal.agent == "meta_hunter").order_by(Proposal.created_at.desc())
     )
-    proposal = ProposalPayload.model_validate(proposal_row.payload) if proposal_row else None
+    try:
+        proposal = ProposalPayload.model_validate(proposal_row.payload) if proposal_row else None
+    except ValueError:
+        proposal = None  # Legacy prose must satisfy the current firewall to display.
     decision = db.scalar(
         select(DecisionRecord).where(DecisionRecord.candidate_id == candidate.id).order_by(DecisionRecord.created_at.desc())
     )
@@ -164,6 +166,7 @@ def _run_view(db: Session, run: ResearchRun) -> RunView:
         completed_at=run.completed_at,
         candidates=candidates,
         passing_results=[candidate for candidate in candidates if candidate.decision == "recommend"],
+        progress=progress(db, run),
     )
 
 
@@ -171,6 +174,8 @@ def _run_view(db: Session, run: ResearchRun) -> RunView:
 async def create_research_run(body: ResearchRunCreate, db: Session = Depends(get_db)):
     run = ResearchRun(niche=" ".join(body.niche.split()))
     db.add(run)
+    db.flush()
+    db.add(ResearchCheckpoint(run_id=run.id, state={"mode": body.mode}))
     db.commit()
     task = asyncio.create_task(app.state.orchestrator.research(run.id))
     TASKS.add(task)
@@ -205,118 +210,81 @@ async def research_events(run_id: str):
                 if run is None:
                     yield "event: error\ndata: {\"detail\":\"research run not found\"}\n\n"
                     return
-                payload = {"status": run.status, "message": run.message}
+                payload = {"status": run.status, "message": run.message, **progress(db, run)}
             encoded = json.dumps(payload)
             if encoded != previous:
                 yield f"event: progress\ndata: {encoded}\n\n"
                 previous = encoded
-            if payload["status"] in {RunStatus.COMPLETE.value, RunStatus.FAILED.value}:
+            if payload["status"] in {"complete", "failed", "partial", "interrupted"}:
                 return
             await asyncio.sleep(1)
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 @app.post("/api/candidates/{candidate_id}/audit", response_model=AuditView)
-async def audit_candidate(candidate_id: str, db: Session = Depends(get_db)):
+async def audit_candidate(candidate_id: str, proposal_id: str | None = None, db: Session = Depends(get_db)):
     if db.get(Candidate, candidate_id) is None:
         raise HTTPException(404, "candidate not found")
     try:
-        result = await app.state.orchestrator.audit(candidate_id)
+        result = await app.state.orchestrator.audit(candidate_id, proposal_id)
         return AuditView.model_validate(result)
     except KeyError:
         raise HTTPException(404, "candidate not found")
 
 
+@app.get("/api/research-runs/{run_id}/report")
+def get_report(run_id: str, db: Session = Depends(get_db)):
+    row = db.scalar(select(ResearchReport).where(ResearchReport.run_id == run_id).order_by(ResearchReport.created_at.desc()))
+    if row is None:
+        raise HTTPException(404, "Report not finalized; see run progress")
+    payload = json.loads(json.dumps(row.payload))
+    for dossier in payload["comparison"]:
+        verified = {f["id"]: f for f in evidence_packet(db, dossier["candidate_id"], include_stale=True)}
+        original = dossier["facts"]
+        dossier["facts"] = [verified[f["id"]] for f in original if f["id"] in verified]
+        dossier["omitted_facts"] = len(original) - len(dossier["facts"])
+        dossier["history"] = history(db, dossier["candidate_id"])
+    return {"report_id": row.id, **payload}
+
+
+@app.get("/api/audits/{audit_id}", response_model=AuditView)
+def get_audit(audit_id: str, db: Session = Depends(get_db)):
+    row = db.get(AuditRecord, audit_id)
+    if row is None:
+        raise HTTPException(404, "audit not found")
+    return {**row.payload, "audit_id": row.id}
+
+
+@app.get("/api/candidates/{candidate_id}/history")
+def get_history(candidate_id: str, db: Session = Depends(get_db)):
+    if db.get(Candidate, candidate_id) is None:
+        raise HTTPException(404, "candidate not found")
+    return history(db, candidate_id)
+
+
+@app.post("/api/research-runs/{run_id}/resume", status_code=202)
+async def resume_run(run_id: str, db: Session = Depends(get_db)):
+    run = db.get(ResearchRun, run_id)
+    checkpoint = db.get(ResearchCheckpoint, run_id)
+    if run is None:
+        raise HTTPException(404, "research run not found")
+    if run.status != "interrupted" or not checkpoint or checkpoint.state.get("mode") != "deep":
+        raise HTTPException(409, "Only interrupted deep runs can resume")
+    run.status = "queued"
+    run.completed_at = None
+    db.commit()
+    task = asyncio.create_task(app.state.orchestrator.research(run_id))
+    TASKS.add(task)
+    task.add_done_callback(TASKS.discard)
+    return _run_view(db, run)
+
+
 @app.get("/api/candidates/{candidate_id}/audit-readiness", response_model=AuditReadiness)
 def candidate_audit_readiness(candidate_id: str, db: Session = Depends(get_db)):
-    """What is actually true about this candidate before an audit runs.
-
-    Every gate here is computed. The dashboard used to render all of these as
-    green the moment a candidate was selected, which claimed freshness,
-    conflict and association checks that nobody had performed.
-    """
-    candidate = db.get(Candidate, candidate_id)
-    if candidate is None:
+    try:
+        return audit_readiness(db, candidate_id)
+    except KeyError:
         raise HTTPException(404, "candidate not found")
-
-    facts = candidate_facts(db, candidate_id)
-    stale = [fact.id for fact in facts if fact_freshness(db, fact) != "fresh"]
-    conflicts = evidence_conflicts(db, candidate_id)
-    decision = db.scalar(
-        select(DecisionRecord)
-        .where(DecisionRecord.candidate_id == candidate_id)
-        .order_by(DecisionRecord.created_at.desc())
-        .limit(1)
-    )
-    external = list(db.scalars(
-        select(Observation).where(
-            Observation.candidate_id == candidate_id,
-            Observation.metric.like("youtube%") | Observation.metric.like("web%"),
-        )
-    ))
-    unresolved = [
-        row.id for row in external
-        if not row.association_id
-        or (record := db.get(AssociationRecord, row.association_id)) is None
-        or not is_association_usable(db, record)
-    ]
-
-    gates = [
-        {
-            "label": "Candidate exists",
-            "passed": True,
-            "detail": f"Internal ID {candidate.id}",
-        },
-        {
-            "label": "Source-backed facts present",
-            "passed": bool(facts),
-            "detail": f"{len(facts)} compiled fact(s)",
-        },
-        {
-            "label": "Evidence freshness checked",
-            "passed": bool(facts) and not stale,
-            "detail": "All facts fresh" if facts and not stale
-            else (f"{len(stale)} stale fact(s)" if facts else "No facts to check"),
-        },
-        {
-            "label": "Conflicts rechecked",
-            "passed": not conflicts,
-            "detail": "No conflicting metrics" if not conflicts
-            else "Conflicts: " + ", ".join(conflicts),
-        },
-        {
-            "label": "External metrics resolve through an approved association",
-            "passed": not unresolved,
-            "detail": f"{len(external)} external observation(s), {len(unresolved)} unresolved",
-        },
-        {
-            "label": "Deterministic verdict recorded",
-            "passed": decision is not None,
-            "detail": decision.kind if decision else "No decision record",
-        },
-    ]
-    return AuditReadiness(
-        candidate_id=candidate_id,
-        ready=all(gate["passed"] for gate in gates),
-        gates=[AuditGate(**gate) for gate in gates],
-        invariants=[
-            AuditGate(
-                label="Model cannot author URLs or metrics",
-                passed=True,
-                detail="Enforced by the proposal schema on every response",
-            ),
-            AuditGate(
-                label="Model cannot invent evidence IDs",
-                passed=True,
-                detail="Returned fact IDs must be a subset of those supplied",
-            ),
-            AuditGate(
-                label="Invalid model output fails closed",
-                passed=True,
-                detail="A schema violation raises rather than degrading",
-            ),
-        ],
-    )
 
 
 @app.get("/api/evidence/{fact_id}")
@@ -346,7 +314,7 @@ def get_evidence(fact_id: str, db: Session = Depends(get_db)):
         })
         artifacts[artifact.id] = {
             "id": artifact.id,
-            "url": artifact.url,
+            "url": sanitize_url(artifact.url),
             "publisher_owner": artifact.publisher_owner,
             "captured_at": artifact.captured_at,
             "sha256": artifact.sha256,
@@ -454,7 +422,9 @@ def dashboard_summary(db: Session = Depends(get_db)):
             "unmeasured_artifacts": int(unmeasured_artifacts),
             "observations": db.scalar(select(func.count(Observation.id))) or 0,
             "verified_facts": db.scalar(select(func.count(Fact.id))) or 0,
-            "candidate_clusters": db.scalar(select(func.count(Candidate.id))) or 0,
+            "candidate_clusters": 0,
+            "unique_games": db.scalar(select(func.count(func.distinct(Candidate.external_id)))) or 0,
+            "candidate_records": db.scalar(select(func.count(Candidate.id))) or 0,
             "proposals": db.scalar(select(func.count(Proposal.id))) or 0,
             "associations": db.scalar(select(func.count(AssociationRecord.id))) or 0,
             "conflicts": db.scalar(
@@ -575,7 +545,7 @@ def get_source(source_id: str, db: Session = Depends(get_db)):
     return {
         "artifact": {
             "id": artifact.id,
-            "url": artifact.url,
+            "url": sanitize_url(artifact.url),
             "publisher_owner": artifact.publisher_owner,
             "retrieval_method": artifact.retrieval_method,
             "captured_at": artifact.captured_at,
@@ -679,7 +649,7 @@ def _matching_review_view(db: Session, record: AssociationRecord) -> MatchingRev
     artifacts = [
         MatchingArtifactView(
             id=artifact.id,
-            url=artifact.url,
+            url=sanitize_url(artifact.url),
             publisher_owner=artifact.publisher_owner,
             sha256=artifact.sha256,
             source_tier=artifact.source_tier,
@@ -859,6 +829,7 @@ async def health(db: Session = Depends(get_db)):
     return {
         "status": "ok",
         "database": "connected",
+        "quotas": {row.key: row.value_json for row in db.scalars(select(SystemState).where(SystemState.key.like("quota:%:" + str(datetime.now(UTC).date()))))},
         "ollama": {**ollama, "base_url": settings.ollama_base_url},
         "embeddings": {
             "package_installed": importlib.util.find_spec("fastembed") is not None,

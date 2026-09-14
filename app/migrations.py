@@ -12,6 +12,28 @@ from dataclasses import dataclass
 from sqlalchemy import Engine, inspect, text
 
 
+def redact_credential_urls(engine: Engine) -> int:
+    """Narrow security exception to append-only policy; payload bytes stay intact.
+
+    Caller must hold the application offline and restore triggers in finally.
+    Transactional and idempotent. No original URL or secret enters the audit.
+    """
+    import json
+
+    from .security import sanitize_url
+    count = 0
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE IF NOT EXISTS security_redactions (artifact_id TEXT PRIMARY KEY, reason TEXT NOT NULL)"))
+        for row in connection.execute(text("SELECT id, url FROM source_artifacts")).all():
+            clean = sanitize_url(row.url)
+            if clean != row.url:
+                connection.execute(text("UPDATE source_artifacts SET url=:url WHERE id=:id"), {"url": clean, "id": row.id})
+                connection.execute(text("INSERT OR IGNORE INTO security_redactions VALUES (:id, :reason)"),
+                                   {"id": row.id, "reason": json.dumps({"migration": "credential-url-v1", "payload_unchanged": True})})
+                count += 1
+    return count
+
+
 @dataclass(frozen=True)
 class AddColumn:
     table: str

@@ -11,6 +11,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .config import Settings, get_settings
+from .security import sanitize_url
 
 ROBLOX_PLACE_RE = re.compile(r"roblox\.com/(?:[a-z]{2}/)?games/(\d+)", re.IGNORECASE)
 
@@ -70,7 +71,7 @@ class ConnectorResult:
 
 
 class Connectors:
-    def __init__(self, settings: Settings | None = None, client: httpx.AsyncClient | None = None):
+    def __init__(self, settings: Settings | None = None, client: httpx.AsyncClient | None = None, quota_meter=None):
         self.settings = settings or get_settings()
         self.client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(30.0),
@@ -78,18 +79,28 @@ class Connectors:
             headers={"User-Agent": "RobloxVentureAgents/0.1 evidence-research"},
         )
         self._owns_client = client is None
+        self.quota_meter = quota_meter
 
     async def close(self) -> None:
         if self._owns_client:
             await self.client.aclose()
 
     async def _json(self, method: str, url: str, **kwargs) -> ConnectorResult:
+        if self.quota_meter:
+            from .quotas import QuotaExceeded
+            try:
+                if "api.tavily.com/" in url:
+                    self.quota_meter.reserve("tavily", 1)
+                elif "googleapis.com/youtube/" in url:
+                    self.quota_meter.reserve("youtube", 100 if url.endswith("/search") else 1)
+            except QuotaExceeded as exc:
+                raise ConnectorError(str(exc)) from None
         try:
             response = await self.client.request(method, url, **kwargs)
             response.raise_for_status()
-            return ConnectorResult(str(response.url), response.json())
+            return ConnectorResult(sanitize_url(str(response.url)), response.json())
         except (httpx.HTTPError, ValueError) as exc:
-            raise ConnectorError(f"request failed for {url}: {exc}") from exc
+            raise ConnectorError(f"request failed for {sanitize_url(url)}: {type(exc).__name__}") from None
 
     async def tavily_search(self, query: str) -> ConnectorResult:
         if not self.settings.tavily_api_key:
@@ -180,7 +191,7 @@ class Connectors:
             if content_type not in {"text/html", "text/plain"}:
                 raise ConnectorError("only HTML and plain-text pages may be captured")
             text = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
-            return ConnectorResult(str(response.url), text, "text/plain")
+            return ConnectorResult(sanitize_url(str(response.url)), text, "text/plain")
         raise ConnectorError("too many redirects while capturing the page")
 
 

@@ -122,6 +122,141 @@ when real review labels accumulate, and `MIN_FUZZY_HELDOUT_DECISIONS` (20) is a 
 hand, not a statistically sufficient one. Twenty clean decisions only support a ~86% lower bound
 at 95% confidence; a genuine 99% claim needs hundreds.
 
+## Bounded deep research
+
+A research run has two modes. `quick` is the original single-pass collection and
+stays the default for the API. `deep` runs a bounded investigation loop and is
+what the dashboard sends.
+
+```text
+Research questions -> targeted discovery -> entity resolution and matching
+  -> capture and validate evidence -> update answered questions and gaps
+  -> follow-up research -> compare candidates -> generate concepts
+  -> audit concepts -> save evidence-backed report and limitations
+```
+
+Ceilings, not targets. A run stops as soon as the questions are answered or
+explicitly limited, or when two consecutive rounds add no admissible evidence.
+
+| Limit | Default |
+|---|---:|
+| Total elapsed time, including queueing and retries | 30 minutes |
+| Investigation rounds | 4 |
+| Tavily searches | 12 |
+| YouTube searches | 12 |
+| Page captures | 30 |
+| Unique Roblox universes | 30 |
+| Unique YouTube videos | 60 |
+| Model attempts, including retries and fallback | 24 |
+| Concurrent connector requests | 4 |
+| Concurrent model requests | 1 |
+
+Finalization begins with three minutes left, so a run that hits the deadline
+still writes a partial report rather than losing its work. Every stage,
+question, attempt, error and budget reservation is checkpointed, so an
+interrupted run is marked visibly and `POST /api/research-runs/{id}/resume`
+continues from the checkpoint without resetting budgets or repeating completed
+requests. A request whose outcome was never observed is *not* replayed
+automatically — it is refused, because silently re-sending it would spend quota
+twice.
+
+Thirty minutes is a maximum, not a promise of depth or completion. A longer run
+is not a better one.
+
+### What the model is and is not given
+
+Meta Hunter compares the verified candidates and proposes up to three research
+concepts with supporting facts, counterevidence and unanswered questions.
+Venture Scout receives the exact selected proposal, its evidence packet and the
+known gaps, and audits *that* proposal rather than inventing another concept.
+
+The model receives an evidence packet — approved fact text, typed values,
+capture dates, evidence IDs and limitations — not bare IDs. It may cite only
+evidence IDs it was actually given; a well-formed UUID it was never handed is
+refused. Numbers belong only in typed `design_assumptions` (session length,
+implementation effort, feature count), which are labelled unverified design
+assumptions and are never presented as measurements. Prose containing digits,
+URLs or domains is rejected outright.
+
+During collection these are **research concepts, not validated
+recommendations**, and niche relevance stays provisional until a human reviews
+it or a validated deterministic rule exists.
+
+## Credentials and redaction
+
+API keys are read from `.env`, which is git-ignored, and are never returned by
+the API. Request URLs are sanitized before they are stored, so a captured
+artifact records `https://www.googleapis.com/youtube/v3/videos?part=snippet`
+rather than the key. Logs, exception messages and JSON/SSE responses are passed
+through the same redaction.
+
+**Rotate your keys once, after upgrading.** Any artifact captured before this
+change stored the key inside the URL. The migration below removes it from the
+database, but the value was on disk, so treat it as exposed.
+
+### Migration
+
+`init_db()` runs on startup and is idempotent:
+
+1. Append-only triggers are dropped.
+2. Additive column migrations run (`ALTER TABLE ... ADD COLUMN`, nullable only).
+3. `create_all` adds the new tables: `research_checkpoints`, `research_reports`,
+   `audit_records`, `security_redactions`.
+4. `redact_credential_urls` rewrites credential-bearing URLs in
+   `source_artifacts` and records that a redaction happened — without recording
+   the secret.
+5. Triggers are reinstalled in a `finally`, so a failure mid-migration cannot
+   leave the ledger writable.
+
+Evidence IDs and captured payload hashes are unchanged: only the `url` column
+moves, and `security_redactions` names the affected artifacts. This is a
+deliberate, narrow exception to the append-only rule for a credential leak.
+
+### Rollback
+
+Stop the service and restore the database file and the artifact directory from
+backup — that is the whole rollback, because migrations only add columns and
+tables:
+
+```powershell
+Copy-Item .\dataenture_agents.db .\dataenture_agents.db.bak
+```
+
+Downgrading the code with the new tables still present is safe; the older code
+ignores them. The one thing rolling back does not undo is the URL redaction, and
+you would not want it undone. Rotate the keys regardless.
+
+## Running a deep run
+
+```powershell
+uv sync --extra dev --extra embeddings
+Set-Location frontend; npm install; npm run build; Set-Location ..
+ollama pull qwen3:14b
+powershell -ExecutionPolicy Bypass -File .\scripts\start_dashboard.ps1
+```
+
+Open `http://127.0.0.1:8742`, go to **Meta Hunter**, enter a niche and start the
+run. The dashboard sends `mode: deep`.
+
+If the service was already running when you upgraded, restart it — a process
+started before the upgrade is still serving the old code and will reject
+`mode: deep` with `extra_forbidden`.
+
+```powershell
+Get-ScheduledTask -TaskName "RobloxVentureAgents" | Restart-ScheduledTask
+```
+
+By API:
+
+```bash
+curl -X POST http://127.0.0.1:8742/api/research-runs   -H "Content-Type: application/json"   -d '{"niche":"cooperative cozy farming","mode":"deep"}'
+```
+
+Progress streams from `GET /api/research-runs/{id}/events` with stage, elapsed
+time, remaining budget, question coverage, evidence counts and stopping reason.
+The finished report is at `GET /api/research-runs/{id}/report`, and an audit at
+`GET /api/audits/{id}`.
+
 ## Setup
 
 Requirements already supported by this machine: Python 3.12, Node.js, `uv`, and Ollama.

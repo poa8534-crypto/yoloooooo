@@ -301,3 +301,27 @@ def test_dense_similarity_alone_cannot_approve_whatever_the_weights_say():
     dense = EmbeddingProvider(model_name="stub", scorer=lambda _q, docs: [0.99] * len(docs))
     verdict = evaluate(subject, pool, thresholds=greedy, embedder=dense, shadow_mode=False)
     assert verdict.outcome is not AssociationOutcome.AUTO_ASSOCIATE
+
+
+def test_the_benchmark_reports_recall_not_only_precision(dataset):
+    """Abstaining from everything yields perfect precision and no value.
+
+    The spec is explicit that rejecting everything is not sufficient, so the
+    report has to carry recall alongside precision, and recall has to be real.
+    """
+    probe = replace(Thresholds(), fuzzy_auto_enabled=True)
+    _frozen, report = run_benchmark(dataset=dataset, base=Thresholds())
+
+    for split in (SPLIT_TRAIN, SPLIT_DEV, SPLIT_TEST):
+        rows = report["splits"][split]
+        assert "automatic_recall" in rows, f"{split} reports no recall"
+        assert "labeled_positives" in rows
+        assert rows["labeled_positives"] > 0
+
+    measured = run_split(dataset, SPLIT_TRAIN, probe)
+    assert measured.labeled_positives > 0
+    # Recall is low by design, but a matcher that associates nothing at all is
+    # a failure the report must be able to show.
+    assert measured.automatic_recall is not None
+    assert measured.automatic_recall > 0.0, "the engine associated nothing on train"
+    assert measured.automatic_recall <= 1.0

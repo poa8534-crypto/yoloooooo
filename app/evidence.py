@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .models import Fact, Observation, SourceArtifact
+from .security import sanitize_url
 
 PRIMARY_OWNERS = {"roblox.com", "youtube.com", "googleapis.com"}
 EXTRACTOR = tldextract.TLDExtract(suffix_list_urls=())
@@ -24,6 +25,7 @@ FACT_TEMPLATES: dict[str, str] = {
     "roblox_visits": "Roblox reported {value} lifetime visits at capture time.",
     "roblox_favorites": "Roblox reported {value} favorites at capture time.",
     "roblox_updated": "Roblox reported the experience update time as {value}.",
+    "roblox_description": "The Roblox experience description states: {value}",
     "youtube_title": "YouTube lists the tracked video as {value}.",
     "youtube_views": "YouTube reported {value} views for the tracked video at capture time.",
     "web_claim": "A captured source states: {value}",
@@ -68,7 +70,7 @@ def record_artifact(
     raw = _canonical_json(payload) if "json" in content_type else str(payload).encode("utf-8")
     digest, raw_path = _store_bytes(raw, content_type)
     artifact = SourceArtifact(
-        url=url,
+        url=sanitize_url(url),
         publisher_owner=owner or publisher_owner(url),
         retrieval_method=retrieval_method,
         captured_at=captured_at or datetime.now(UTC),
@@ -194,7 +196,7 @@ def create_fact(
                 raise EvidenceError("observation no longer matches its JSON pointer")
         elif observation.extraction_method == "exact_passage":
             passage = observation.pointer.removeprefix("passage:")
-            if passage not in str(_load_artifact(artifact)):
+            if passage not in str(_load_artifact(artifact)) or str(observation.value_json) not in passage:
                 raise EvidenceError("observation passage is missing")
     fact = Fact(
         template_id=template_id,
@@ -226,7 +228,7 @@ def render_fact(db: Session, fact: Fact) -> str:
                 raise EvidenceError("render blocked by provenance mismatch")
         else:
             passage = observation.pointer.removeprefix("passage:")
-            if passage not in str(_load_artifact(artifact)):
+            if passage not in str(_load_artifact(artifact)) or str(observation.value_json) not in passage:
                 raise EvidenceError("render blocked by missing passage")
         values[slot] = observation.value_json
     return template.format(**values)

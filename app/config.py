@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     snapshot_minute: int = 0
     timezone: str = "Asia/Kolkata"
     max_search_results: int = Field(default=15, ge=1, le=50)
+    tavily_daily_allowance: int = Field(default=50, ge=0)
+    youtube_daily_allowance: int = Field(default=10000, ge=0)
 
     @property
     def tz(self) -> ZoneInfo:
@@ -44,4 +46,3 @@ def get_settings() -> Settings:
     settings.artifact_dir.mkdir(parents=True, exist_ok=True)
     settings.model_dir.mkdir(parents=True, exist_ok=True)
     return settings
-

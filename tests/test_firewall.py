@@ -14,7 +14,7 @@ def valid_payload(**updates):
         "build_steps": ["Create one planting interaction", "Add a compact harvest loop"],
         "risks": ["The loop may become repetitive without varied outcomes"],
         "questions": ["Which interaction should receive the earliest playtest?"],
-        "supporting_fact_ids": ["fact-1"],
+        "supporting_fact_ids": ["00000000-0000-0000-0000-000000000001"],
     }
     payload.update(updates)
     return payload
@@ -39,4 +39,3 @@ def test_proposal_schema_rejects_decision_and_score_fields():
 def test_creative_nonfactual_proposal_is_accepted():
     proposal = ProposalPayload.model_validate(valid_payload())
     assert proposal.concept_title == "Clockwork Orchard"
-

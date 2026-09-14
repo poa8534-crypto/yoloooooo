@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -47,15 +48,15 @@ class Example:
 
 
 def _daily_values(rows: list[Observation], metric: str) -> list[tuple[Any, float]]:
-    by_day: dict[Any, list[float]] = {}
-    for row in rows:
+    by_day: dict[Any, float] = {}
+    for row in sorted(rows, key=lambda r: (r.observed_at, r.id or "")):
         if row.metric == metric and isinstance(row.value_json, (int, float, str)):
             try:
                 value = float(row.value_json)
             except ValueError:
                 continue
-            by_day.setdefault(row.observed_at.date(), []).append(value)
-    return sorted((day, float(sum(values))) for day, values in by_day.items())
+            by_day[row.observed_at.date()] = value
+    return sorted(by_day.items())
 
 
 def _median(values: list[float]) -> float:
@@ -88,10 +89,14 @@ def build_example(db: Session, candidate: Candidate) -> Example | None:
     ccu = _daily_values(rows, "roblox_playing")
     visits = _daily_values(rows, "roblox_visits")
     views = _daily_values(rows, "youtube_views")
-    if len(ccu) < 30 or len(visits) < 7 or len(views) < 30:
+    if len(ccu) < 30 or len(visits) < 30 or len(views) < 30:
         return None
     if (ccu[-1][0] - ccu[0][0]).days < 29:
         return None
+    expected = {ccu[0][0] + timedelta(days=i) for i in range(30)}
+    if any({day for day, _ in series[:30]} != expected for series in (ccu, visits, views)):
+        return None
+    ccu, visits, views = ccu[:30], visits[:30], views[:30]
     ccu_open, ccu_end = _median(_window(ccu, True)), _median(_window(ccu, False))
     opening_ccu = _window(ccu, True)
     opening_visits = _window(visits, True)
@@ -212,11 +217,20 @@ def load_artifact() -> dict[str, Any] | None:
     path = current_artifact_path()
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    # Legacy per-game/run datasets are not validated niche clusters. There is
+    # intentionally no activation path until a provenance-validated cluster
+    # dataset, niche-separated split and frozen benchmark loader are implemented.
+    artifact["active"] = False
+    artifact["reason"] = "Activation locked: validated niche-cluster dataset and provenance benchmark not implemented."
+    return artifact
 
 
 def calibration_status(db: Session) -> CalibrationStatus:
-    count = len(collect_examples(db))
+    count = 0  # Games and repeated research runs are not validated niche clusters.
     artifact = load_artifact()
     if artifact:
         active = bool(artifact.get("active", False))
@@ -235,7 +249,7 @@ def calibration_status(db: Session) -> CalibrationStatus:
         complete_clusters=count,
         required_clusters=REQUIRED_CLUSTERS,
         scoring_active=False,
-        reason=f"Collecting complete 30-day windows ({count}/{REQUIRED_CLUSTERS}).",
+        reason="Collecting entity snapshots. Validated niche-cluster calibration is not implemented; automatic scoring remains locked.",
     )
 
 
@@ -291,11 +305,11 @@ def train(db: Session) -> dict[str, Any]:
     test_pred = test_prob >= threshold
     heldout_recommendations = int(test_pred.sum())
     heldout_precision = float(precision_score(y_test, test_pred, zero_division=0))
-    active = heldout_precision >= PRECISION_FLOOR and heldout_recommendations >= MIN_HELDOUT_RECOMMENDATIONS
+    active = False  # Legacy experimental benchmark cannot activate production scoring.
     reason = (
         "Precision gate passed; automatic recommendations are active."
         if active else
-        f"Benchmark gate failed: precision={heldout_precision:.3f}, recommendations={heldout_recommendations}."
+        "Experimental per-game benchmark only; niche-cluster and provenance validation required before activation."
     )
     artifact = {
         "active": active,

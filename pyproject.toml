@@ -45,3 +45,6 @@ asyncio_mode = "auto"
 [tool.ruff.lint.per-file-ignores]
 "app/main.py" = ["B008"]
 "app/workflows.py" = ["BLE001"]
+# The research controller must degrade on any connector or model failure
+# and record it, rather than aborting a 30-minute run.
+"app/deep_research.py" = ["BLE001"]
