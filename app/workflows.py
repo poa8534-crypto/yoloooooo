@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from datetime import UTC, datetime
@@ -342,10 +343,16 @@ class ResearchOrchestrator:
                     source_tier="primary",
                     pointer_prefix=f"/items/{index}",
                 )
-                decision = self.associations.associate(
-                    db, subject, pool, niche=niche, candidate_row_ids=candidate_row_ids,
+                # Retrieval can run the local embedding model, which is CPU
+                # bound and may download weights on first use. Running it
+                # inline would stall the event loop — and with it the whole
+                # local service — for the duration of every video.
+                decision = await asyncio.to_thread(
+                    self.associations.associate,
+                    db, subject, pool,
+                    niche=niche, candidate_row_ids=candidate_row_ids,
                 )
-                apply_association(db, decision.record)
+                await asyncio.to_thread(apply_association, db, decision.record)
             db.commit()
 
     def _record_decision(self, db: Session, candidate_id: str) -> DecisionRecord:

@@ -2,18 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select
+from sqlalchemy import Text, func, select
 from sqlalchemy.orm import Session
 
-from .association import active_thresholds, is_association_usable
+from .association import AssociationService, active_thresholds, is_association_usable
 from .association.materialize import apply_association
 from .association.service import human_confirmation
 from .calibration import calibration_status
@@ -58,9 +60,29 @@ from .workflows import ResearchOrchestrator
 
 TASKS: set[asyncio.Task] = set()
 
+LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def assert_local_only(host: str) -> None:
+    """Refuse to serve this API on a non-loopback interface.
+
+    There is no authentication on any endpoint: the ledger, the review
+    queue and the override controls are all open to whoever can reach the
+    port. That is acceptable bound to loopback and not acceptable anywhere
+    else, so binding wider fails loudly instead of quietly exposing it.
+    """
+    if host not in LOOPBACK_HOSTS:
+        raise RuntimeError(
+            f"refusing to bind {host}: this service has no authentication and "
+            "must stay on loopback. Put it behind an authenticating proxy if "
+            "you need remote access."
+        )
+SERVICE_STARTED_AT = datetime.now(UTC)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    assert_local_only(get_settings().host)
     init_db()
     with SessionLocal() as db:
         orphaned = list(db.scalars(select(ResearchRun).where(
@@ -148,6 +170,15 @@ async def create_research_run(body: ResearchRunCreate, db: Session = Depends(get
     TASKS.add(task)
     task.add_done_callback(TASKS.discard)
     return _run_view(db, run)
+
+
+@app.get("/api/research-runs", response_model=list[RunView])
+def list_research_runs(limit: int = 25, db: Session = Depends(get_db)):
+    safe_limit = max(1, min(limit, 100))
+    runs = db.scalars(
+        select(ResearchRun).order_by(ResearchRun.created_at.desc()).limit(safe_limit)
+    )
+    return [_run_view(db, run) for run in runs]
 
 
 @app.get("/api/research-runs/{run_id}", response_model=RunView)
@@ -238,6 +269,215 @@ def get_evidence(fact_id: str, db: Session = Depends(get_db)):
     }
 
 
+def _artifact_size(artifact: SourceArtifact) -> int:
+    try:
+        return Path(artifact.raw_path).stat().st_size
+    except OSError:
+        return 0
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+@app.get("/api/dashboard/summary")
+def dashboard_summary(db: Session = Depends(get_db)):
+    now = datetime.now(UTC)
+    # Aggregate in SQL. Loading every artifact and stat()-ing each raw file made
+    # this endpoint scale with the whole ledger on every dashboard refresh.
+    first_capture = _as_utc(db.scalar(select(func.min(SourceArtifact.captured_at))))
+    latest_capture = _as_utc(db.scalar(select(func.max(SourceArtifact.captured_at))))
+    artifact_count = db.scalar(select(func.count(SourceArtifact.id))) or 0
+    publisher_count = db.scalar(
+        select(func.count(func.distinct(SourceArtifact.publisher_owner)))
+    ) or 0
+    source_tiers = Counter(dict(db.execute(
+        select(SourceArtifact.source_tier, func.count()).group_by(SourceArtifact.source_tier)
+    ).all()))
+    recent_artifacts = list(db.scalars(
+        select(SourceArtifact).order_by(SourceArtifact.captured_at.desc()).limit(6)
+    ))
+    activity: list[dict] = []
+    for item in recent_artifacts:
+        activity.append({
+            "kind": "source",
+            "actor": item.publisher_owner,
+            "message": f"{item.retrieval_method.replace('_', ' ')} artifact captured",
+            "status": "discovery" if item.is_discovery_only else "verified",
+            "at": _as_utc(item.captured_at),
+            "target_id": item.id,
+        })
+    for run in db.scalars(
+        select(ResearchRun).order_by(ResearchRun.created_at.desc()).limit(6)
+    ):
+        activity.append({
+            "kind": "research",
+            "actor": "Meta Hunter",
+            "message": f"{run.niche}: {run.message}",
+            "status": run.status,
+            "at": _as_utc(run.completed_at or run.created_at),
+            "target_id": run.id,
+        })
+    for record in db.scalars(
+        select(AssociationRecord).order_by(AssociationRecord.created_at.desc()).limit(6)
+    ):
+        activity.append({
+            "kind": "match",
+            "actor": "Matching Engine",
+            "message": record.outcome.replace("_", " "),
+            "status": record.outcome,
+            "at": _as_utc(record.created_at),
+            "target_id": record.id,
+        })
+    activity.sort(key=lambda item: item["at"], reverse=True)
+    return {
+        "service_started_at": SERVICE_STARTED_AT,
+        "uptime_seconds": max(0, int((now - SERVICE_STARTED_AT).total_seconds())),
+        "collection_started_at": first_capture,
+        "collection_age_seconds": (
+            max(0, int((now - first_capture).total_seconds())) if first_capture else 0
+        ),
+        "latest_capture_at": latest_capture,
+        "counts": {
+            "unique_publishers": publisher_count,
+            "source_artifacts": artifact_count,
+            # Only the sampled artifacts are measured on disk; walking every
+            # raw file on each request is not worth the exactness.
+            "artifact_bytes": sum(_artifact_size(item) for item in recent_artifacts),
+            "observations": db.scalar(select(func.count(Observation.id))) or 0,
+            "verified_facts": db.scalar(select(func.count(Fact.id))) or 0,
+            "candidate_clusters": db.scalar(select(func.count(Candidate.id))) or 0,
+            "proposals": db.scalar(select(func.count(Proposal.id))) or 0,
+            "associations": db.scalar(select(func.count(AssociationRecord.id))) or 0,
+            "conflicts": db.scalar(
+                select(func.count(AssociationRecord.id)).where(
+                    AssociationRecord.outcome == "blocked_conflict"
+                )
+            ) or 0,
+            "research_runs": db.scalar(select(func.count(ResearchRun.id))) or 0,
+        },
+        "source_tiers": dict(source_tiers),
+        "activity": activity[:12],
+    }
+
+
+@app.get("/api/dashboard/timeline")
+def dashboard_timeline(db: Session = Depends(get_db)):
+    series = {
+        "artifacts": Counter(
+            value.date().isoformat() for value in db.scalars(select(SourceArtifact.captured_at))
+        ),
+        "observations": Counter(
+            value.date().isoformat() for value in db.scalars(select(Observation.observed_at))
+        ),
+        "facts": Counter(
+            value.date().isoformat() for value in db.scalars(select(Fact.created_at))
+        ),
+        "associations": Counter(
+            value.date().isoformat() for value in db.scalars(select(AssociationRecord.created_at))
+        ),
+    }
+    days = sorted({day for values in series.values() for day in values})
+    cumulative = {name: 0 for name in series}
+    points = []
+    for day in days:
+        point: dict[str, int | str] = {"day": day}
+        for name, values in series.items():
+            cumulative[name] += values[day]
+            point[name] = cumulative[name]
+        points.append(point)
+    return {"points": points}
+
+
+@app.get("/api/sources")
+def list_sources(limit: int = 100, db: Session = Depends(get_db)):
+    safe_limit = max(1, min(limit, 500))
+    rows = list(
+        db.scalars(
+            select(SourceArtifact)
+            .order_by(SourceArtifact.captured_at.desc())
+            .limit(safe_limit)
+        )
+    )
+    observation_counts = dict(
+        db.execute(
+            select(Observation.artifact_id, func.count(Observation.id))
+            .group_by(Observation.artifact_id)
+        ).all()
+    )
+    return [{
+        "id": item.id,
+        "url": item.url,
+        "publisher_owner": item.publisher_owner,
+        "retrieval_method": item.retrieval_method,
+        "captured_at": item.captured_at,
+        "sha256": item.sha256,
+        "content_type": item.content_type,
+        "source_tier": item.source_tier,
+        "is_discovery_only": item.is_discovery_only,
+        "raw_size": _artifact_size(item),
+        "observation_count": observation_counts.get(item.id, 0),
+    } for item in rows]
+
+
+@app.get("/api/sources/{source_id}")
+def get_source(source_id: str, db: Session = Depends(get_db)):
+    artifact = db.get(SourceArtifact, source_id)
+    if artifact is None:
+        raise HTTPException(404, "source artifact not found")
+    observations = list(
+        db.scalars(
+            select(Observation)
+            .where(Observation.artifact_id == source_id)
+            .order_by(Observation.observed_at)
+        )
+    )
+    observation_ids = {item.id for item in observations}
+    candidate_facts_rows = db.scalars(
+        select(Fact)
+        .where(Fact.source_ids.cast(Text).contains(source_id))
+        .order_by(Fact.created_at)
+    )
+    facts = [
+        item for item in candidate_facts_rows
+        if observation_ids.intersection((item.slot_observation_ids or {}).values())
+    ]
+    return {
+        "artifact": {
+            "id": artifact.id,
+            "url": artifact.url,
+            "publisher_owner": artifact.publisher_owner,
+            "retrieval_method": artifact.retrieval_method,
+            "captured_at": artifact.captured_at,
+            "sha256": artifact.sha256,
+            "content_type": artifact.content_type,
+            "source_tier": artifact.source_tier,
+            "is_discovery_only": artifact.is_discovery_only,
+            "raw_size": _artifact_size(artifact),
+        },
+        "observations": [{
+            "id": item.id,
+            "candidate_id": item.candidate_id,
+            "metric": item.metric,
+            "value": item.value_json,
+            "unit": item.unit,
+            "extraction_method": item.extraction_method,
+            "pointer": item.pointer,
+            "observed_at": item.observed_at,
+            "association_id": item.association_id,
+        } for item in observations],
+        "facts": [{
+            "id": item.id,
+            "text": render_fact(db, item),
+            "template_id": item.template_id,
+            "verification_state": item.verification_state,
+            "freshness": fact_freshness(db, item),
+        } for item in facts],
+    }
+
+
 @app.post("/api/decisions/{decision_id}/override")
 def override_decision(decision_id: str, body: OverrideCreate, db: Session = Depends(get_db)):
     decision = db.get(DecisionRecord, decision_id)
@@ -260,6 +500,15 @@ def override_decision(decision_id: str, body: OverrideCreate, db: Session = Depe
     }
 
 
+def association_service() -> AssociationService:
+    """The running service, or a default one when lifespan has not run."""
+    service = getattr(app.state, "association_service", None)
+    if service is None:
+        service = AssociationService(shadow_mode=True)
+        app.state.association_service = service
+    return service
+
+
 CONFLICT_CODES = {
     "multiple_conflicting_explicit_ids",
     "explicit_id_contradiction",
@@ -271,7 +520,6 @@ CONFLICT_CODES = {
     "duplicate_content_counted_once",
     "insufficient_top_two_margin",
     "insufficient_required_feature_coverage",
-    "dense_retrieval_unavailable",
 }
 
 
@@ -366,6 +614,7 @@ def _matching_review_view(db: Session, record: AssociationRecord) -> MatchingRev
 
 @app.get("/api/matching/status", response_model=MatchingStatus)
 def matching_status(db: Session = Depends(get_db)):
+    service = association_service()
     thresholds = active_thresholds()
     counts = dict(db.execute(
         select(AssociationRecord.outcome, func.count()).group_by(AssociationRecord.outcome)
@@ -376,7 +625,7 @@ def matching_status(db: Session = Depends(get_db)):
         normalization_version=thresholds.normalization_version,
         threshold_version=thresholds.threshold_version,
         weights_version=thresholds.weights_version,
-        shadow_mode=app.state.association_service.shadow_mode,
+        shadow_mode=service.shadow_mode,
         fuzzy_auto_enabled=thresholds.fuzzy_auto_enabled,
         validated=thresholds.validated,
         high_threshold=thresholds.high,
@@ -388,7 +637,8 @@ def matching_status(db: Session = Depends(get_db)):
         dataset_hash=thresholds.dataset_hash,
         embedding_model=thresholds.embedding_model,
         benchmark_reason=thresholds.benchmark_reason,
-        pending_reviews=len(app.state.association_service.pending_reviews(db, limit=1000)),
+        artifact_error=thresholds.artifact_error,
+        pending_reviews=len(service.pending_reviews(db, limit=1000)),
         total_associations=sum(counts.values()),
         outcome_counts={str(key): int(value) for key, value in counts.items()},
     )
@@ -403,7 +653,7 @@ def list_matching_reviews(
             select(AssociationRecord).order_by(AssociationRecord.created_at.desc()).limit(limit)
         ))
     else:
-        records = app.state.association_service.pending_reviews(db, limit=limit)
+        records = association_service().pending_reviews(db, limit=limit)
     return [_matching_review_view(db, record) for record in records]
 
 
@@ -421,7 +671,7 @@ def submit_matching_review(
 ):
     """Record a human decision. The engine's original verdict is never edited."""
     try:
-        review, override = app.state.association_service.record_review(
+        review, override = association_service().record_review(
             db,
             association_id,
             verdict=body.verdict,
@@ -496,6 +746,7 @@ if frontend_dist.exists():
 
 def run() -> None:
     settings = get_settings()
+    assert_local_only(settings.host)
     uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=False)
 
 

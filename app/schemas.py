@@ -196,6 +196,9 @@ class MatchingStatus(StrictModel):
     dataset_hash: str = ""
     embedding_model: str = ""
     benchmark_reason: str
+    # Non-empty when a stored policy artifact was refused and the engine
+    # fell back to shipped defaults.
+    artifact_error: str = ""
     pending_reviews: int
     total_associations: int
     outcome_counts: dict[str, int] = Field(default_factory=dict)

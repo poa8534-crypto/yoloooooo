@@ -164,8 +164,8 @@ def creator_agreement(subject: MatchSubjectView, candidate: MatchCandidateView) 
         return 0.0
     if subject_key == candidate_key:
         return 1.0
-    if subject.creator_external_id and subject.creator_external_id == candidate.creator_external_id:
-        return 1.0
+    # A YouTube channel ID and a Roblox creator ID are different namespaces;
+    # comparing them was dead code that would only ever fire on a collision.
     overlap = _dice(set(subject_key.split()), set(candidate_key.split()))
     return 1.0 if overlap >= 0.90 else round(0.5 * overlap, 6)
 
@@ -215,9 +215,15 @@ def compute_features(
         )
 
     alias_keys = candidate.alias_keys
+    # Whole-token containment, not substring: an alias of "pet" must not
+    # match "carpet".
+    subject_token_list = word_tokens(subject.raw_title)
     alias_hit = float(bool(alias_keys) and (
         subject_name_key in alias_keys
-        or any(alias in subject.normalized.normalized_title for alias in alias_keys)
+        or any(
+            _contains_sequence(subject_token_list, alias.split())
+            for alias in alias_keys
+        )
     ))
 
     embedding_score = context.embedding_score if context.embedding_available else None

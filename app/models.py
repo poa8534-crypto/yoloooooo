@@ -16,7 +16,7 @@ from sqlalchemy import (
     Text,
     event,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from .db import Base
 
@@ -265,6 +265,10 @@ class MatchSubject(Base):
     # nothing in the engine reads it as a command.
     untrusted_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
     duplicate_of_subject_id: Mapped[str | None] = mapped_column(String, index=True)
+    # Set when the source text changed after an earlier capture. The old
+    # row stays exactly as it was so the verdict recorded against it still
+    # points at the text that produced it.
+    supersedes_subject_id: Mapped[str | None] = mapped_column(String, index=True)
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -323,6 +327,8 @@ class AssociationRecord(Base):
     normalization_version: Mapped[str] = mapped_column(String(80))
     threshold_version: Mapped[str] = mapped_column(String(80))
     embedding_model: Mapped[str] = mapped_column(String(160), default="")
+    # SHA-256 of the model *identifier*, not of the weight bytes. It pins
+    # which model was declared, not which weights ran.
     embedding_model_hash: Mapped[str] = mapped_column(String(64), default="")
     embedding_available: Mapped[bool] = mapped_column(Boolean, default=False)
     source_artifact_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -342,6 +348,10 @@ class AssociationReview(Base):
     __tablename__ = "association_reviews"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     association_id: Mapped[str] = mapped_column(ForeignKey("association_records.id"), index=True)
+    # Monotonic per association. The wall clock cannot order these: on Windows
+    # two back-to-back writes routinely carry an identical timestamp, and a
+    # rejection must never lose a tiebreak to an earlier approval.
+    sequence: Mapped[int] = mapped_column(Integer, default=1, index=True)
     verdict: Mapped[str] = mapped_column(String(32), index=True)
     selected_candidate_id: Mapped[str | None] = mapped_column(
         ForeignKey("match_candidates.id"), index=True
@@ -363,6 +373,7 @@ class AssociationOverride(Base):
     __tablename__ = "association_overrides"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
     association_id: Mapped[str] = mapped_column(ForeignKey("association_records.id"), index=True)
+    sequence: Mapped[int] = mapped_column(Integer, default=1, index=True)
     requested_outcome: Mapped[str] = mapped_column(String(32))
     requested_candidate_id: Mapped[str | None] = mapped_column(
         ForeignKey("match_candidates.id"), index=True
@@ -381,6 +392,9 @@ APPEND_ONLY = (
 )
 
 
+APPEND_ONLY_TABLES = frozenset(model.__tablename__ for model in APPEND_ONLY)
+
+
 def _refuse_mutation(_mapper, _connection, target) -> None:
     raise ValueError(f"{type(target).__name__} is append-only")
 
@@ -388,4 +402,19 @@ def _refuse_mutation(_mapper, _connection, target) -> None:
 for _model in APPEND_ONLY:
     event.listen(_model, "before_update", _refuse_mutation)
     event.listen(_model, "before_delete", _refuse_mutation)
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _refuse_bulk_mutation(state) -> None:
+    """Refuse bulk UPDATE/DELETE against an append-only table.
+
+    The per-instance hooks above never see `session.execute(update(...))`.
+    Database triggers are the real backstop (see `app.migrations`); this turns
+    the resulting abort into a clear error at the point of the mistake.
+    """
+    if not (state.is_update or state.is_delete):
+        return
+    for mapper in state.all_mappers:
+        if mapper.local_table is not None and mapper.local_table.name in APPEND_ONLY_TABLES:
+            raise ValueError(f"{mapper.local_table.name} is append-only")
 

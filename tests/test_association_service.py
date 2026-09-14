@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select, text, update
+from sqlalchemy.exc import IntegrityError
 
 from app.association import (
     AssociationService,
@@ -17,6 +19,7 @@ from app.association import (
     resolved_candidate_id,
 )
 from app.association.features import FEATURE_NAMES
+from app.association.service import human_confirmation
 from app.models import (
     AssociationOverride,
     AssociationRecord,
@@ -134,6 +137,74 @@ def test_reviews_accumulate_rather_than_replace(db, service):
     assert len(reviews) == 2
     # The most recent review governs, but both remain in the ledger.
     assert resolved_candidate_id(db, decision.record) is None
+
+
+def test_review_order_survives_an_identical_timestamp(db, service):
+    """Two reviews in the same clock tick must still resolve in append order.
+
+    On Windows `datetime.now()` returns the same value for back-to-back calls,
+    so the wall clock cannot break the tie; the append sequence does.
+    """
+    decision = service.associate(db, subject("Grow a Garden full guide"), POOL)
+    tied = datetime(2026, 9, 14, 12, 0, 0, tzinfo=UTC)
+    # Inserted directly with a deliberately identical timestamp: the rows are
+    # append-only, so the tie has to be created at insert time, which is also
+    # exactly how the real clock produces it on this machine.
+    approved = AssociationReview(
+        association_id=decision.record.id, sequence=1, verdict="approved",
+        selected_candidate_id="c-garden", engine_outcome=decision.record.outcome,
+        engine_candidate_id=decision.record.candidate_id,
+        reason="First pass looked correct.", created_at=tied,
+    )
+    rejected = AssociationReview(
+        association_id=decision.record.id, sequence=2, verdict="rejected",
+        selected_candidate_id=None, engine_outcome=decision.record.outcome,
+        engine_candidate_id=decision.record.candidate_id,
+        reason="Second look: this is a different experience entirely.", created_at=tied,
+    )
+    db.add_all([approved, rejected])
+    db.commit()
+    assert approved.created_at == rejected.created_at
+    assert human_confirmation(db, decision.record.id).id == rejected.id
+    assert resolved_candidate_id(db, decision.record) is None
+    assert is_association_usable(db, decision.record) is False
+
+
+def test_the_ledger_refuses_bulk_and_raw_rewrites(db, service):
+    """Append-only has to hold against every writer, not just the ORM.
+
+    Attribute writes raise in the ORM; bulk statements and raw SQL are stopped
+    by database triggers.
+    """
+    decision = service.associate(db, subject("Grow a Garden full guide"), POOL)
+    db.commit()
+    record_id = decision.record.id
+
+    with pytest.raises(ValueError, match="append-only"):
+        db.execute(
+            update(AssociationRecord)
+            .where(AssociationRecord.id == record_id)
+            .values(outcome="auto_associate")
+        )
+    db.rollback()
+
+    with pytest.raises(ValueError, match="append-only"):
+        db.execute(delete(AssociationRecord).where(AssociationRecord.id == record_id))
+    db.rollback()
+
+    with pytest.raises(IntegrityError, match="append-only"):
+        db.execute(text(
+            "UPDATE association_records SET outcome='auto_associate' WHERE id=:id"
+        ), {"id": record_id})
+        db.commit()
+    db.rollback()
+
+    with pytest.raises(IntegrityError, match="append-only"):
+        db.execute(text("DELETE FROM association_records WHERE id=:id"), {"id": record_id})
+        db.commit()
+    db.rollback()
+
+    assert db.get(AssociationRecord, record_id).outcome == "review_required"
 
 
 def test_a_review_is_itself_append_only(db, service):
@@ -271,3 +342,34 @@ def test_a_duplicate_subject_is_recorded_as_a_duplicate(db, service):
     assert db.get(MatchSubject, "s-2").duplicate_of_subject_id == "s-1"
     assert decision.record.outcome == "no_match"
     assert "duplicate_content_counted_once" in decision.record.rationale_codes
+
+
+def test_retitled_source_gets_its_own_row_and_leaves_the_old_verdict_intact(db, service):
+    """A record must always describe the text the engine actually scored."""
+    first = service.associate(db, subject("Grow a Garden full guide"), POOL)
+    db.commit()
+    original_subject_id = first.record.subject_id
+
+    # Same video, retitled between runs.
+    second = service.associate(
+        db, subject("Garden Life Tycoon staff update walkthrough"), POOL
+    )
+    db.commit()
+
+    assert second.record.subject_id != original_subject_id
+    new_row = db.get(MatchSubject, second.record.subject_id)
+    old_row = db.get(MatchSubject, original_subject_id)
+    assert new_row.supersedes_subject_id == original_subject_id
+    assert new_row.external_id == old_row.external_id == "vid-1"
+    # The earlier record still points at the text it was decided on.
+    assert old_row.raw_title == "Grow a Garden full guide"
+    assert new_row.raw_title == "Garden Life Tycoon staff update walkthrough"
+    assert db.get(AssociationRecord, first.record.id).subject_id == original_subject_id
+
+
+def test_unchanged_source_text_reuses_the_same_row(db, service):
+    first = service.associate(db, subject("Grow a Garden full guide"), POOL)
+    second = service.associate(db, subject("Grow a Garden full guide"), POOL)
+    db.commit()
+    assert first.record.subject_id == second.record.subject_id
+    assert len(list(db.scalars(select(MatchSubject)))) == 1

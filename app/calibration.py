@@ -32,7 +32,6 @@ FEATURE_NAMES = [
     "creator_view_velocity",
     "active_competitor_count",
     "market_concentration",
-    "evidence_coverage",
     "conflict_flag",
 ]
 
@@ -98,7 +97,6 @@ def build_example(db: Session, candidate: Candidate) -> Example | None:
     opening_visits = _window(visits, True)
     start_view_velocity = _velocity(views, True)
     end_view_velocity = _velocity(views, False)
-    present = sum(bool(x) for x in (ccu, visits, views))
     base = {
         # Only the opening observation week is allowed to predict the later
         # 30-day outcome. Feeding the outcome window back into these features
@@ -107,7 +105,6 @@ def build_example(db: Session, candidate: Candidate) -> Example | None:
         "ccu_change_7d": _growth(_median(opening_ccu[-3:]), _median(opening_ccu[:3])),
         "visit_change_7d": _growth(opening_visits[-1], opening_visits[0]),
         "creator_view_velocity": math.log1p(max(start_view_velocity, 0.0)),
-        "evidence_coverage": present / 3.0,
         "conflict_flag": 1.0 if evidence_conflicts(db, candidate.id) else 0.0,
     }
     label = int(ccu_end >= 1.20 * max(ccu_open, 1.0) and end_view_velocity >= start_view_velocity)
@@ -133,7 +130,6 @@ def _live_base_features(db: Session, candidate: Candidate) -> tuple[dict[str, fl
         "ccu_change_7d": _growth(_median(ccu_values[-3:]), _median(ccu_values[:3])),
         "visit_change_7d": _growth(visit_values[-1], visit_values[0]),
         "creator_view_velocity": math.log1p(max(_velocity(views, True), 0.0)),
-        "evidence_coverage": 1.0,
         "conflict_flag": 1.0 if evidence_conflicts(db, candidate.id) else 0.0,
     }, current_ccu)
 
@@ -170,6 +166,42 @@ def collect_examples(db: Session) -> list[Example]:
             item.base_features["active_competitor_count"] = float(active)
             item.base_features["market_concentration"] = item.input_ccu / max(total, 1.0)
     return examples
+
+
+def grouped_time_split(
+    examples: list[Example],
+    *,
+    train_fraction: float = 0.60,
+    dev_fraction: float = 0.20,
+) -> tuple[list[int], list[int], list[int]]:
+    """Split by research run, in discovery order.
+
+    Candidates found in the same run are competitors in the same niche, and
+    two of their features — `active_competitor_count` and
+    `market_concentration` — are computed *from each other*. Cutting that group
+    across a split would let held-out rows carry information derived from
+    training rows, which is exactly the leakage the precision gate is supposed
+    to measure against.
+    """
+    by_run: dict[str, list[int]] = {}
+    for index, example in enumerate(examples):
+        by_run.setdefault(example.run_id, []).append(index)
+    ordered = sorted(
+        by_run.items(),
+        key=lambda item: (min(examples[i].created_at for i in item[1]), item[0]),
+    )
+    total = len(examples)
+    train_limit = total * train_fraction
+    dev_limit = total * (train_fraction + dev_fraction)
+    train: list[int] = []
+    dev: list[int] = []
+    test: list[int] = []
+    seen = 0
+    for _run_id, indexes in ordered:
+        target = train if seen < train_limit else (dev if seen < dev_limit else test)
+        target.extend(sorted(indexes))
+        seen += len(indexes)
+    return train, dev, test
 
 
 def current_artifact_path() -> Path:
@@ -235,26 +267,30 @@ def train(db: Session) -> dict[str, Any]:
     y = np.asarray([e.label for e in examples])
     if len(set(y.tolist())) < 2:
         raise ValueError("training data must contain both positive and negative outcomes")
-    n = len(examples)
-    train_end, dev_end = int(n * 0.60), int(n * 0.80)
-    scaler = StandardScaler().fit(X[:train_end])
+    train_idx, dev_idx, test_idx = grouped_time_split(examples)
+    if not (train_idx and dev_idx and test_idx):
+        raise ValueError(
+            "not enough distinct research runs to build leak-free train/dev/test splits"
+        )
+    y_dev, y_test = y[dev_idx], y[test_idx]
+    scaler = StandardScaler().fit(X[train_idx])
     model = LogisticRegression(C=1.0, max_iter=2000, class_weight="balanced", random_state=17)
-    model.fit(scaler.transform(X[:train_end]), y[:train_end])
-    dev_raw = model.predict_proba(scaler.transform(X[train_end:dev_end]))[:, 1]
-    calibrator = IsotonicRegression(out_of_bounds="clip").fit(dev_raw, y[train_end:dev_end])
+    model.fit(scaler.transform(X[train_idx]), y[train_idx])
+    dev_raw = model.predict_proba(scaler.transform(X[dev_idx]))[:, 1]
+    calibrator = IsotonicRegression(out_of_bounds="clip").fit(dev_raw, y_dev)
     dev_prob = calibrator.predict(dev_raw)
     thresholds: list[tuple[float, int]] = []
     for threshold in sorted(set(dev_prob.tolist()), reverse=True):
         pred = dev_prob >= threshold
         count = int(pred.sum())
-        if count >= 5 and precision_score(y[train_end:dev_end], pred, zero_division=0) >= PRECISION_FLOOR:
+        if count >= 5 and precision_score(y_dev, pred, zero_division=0) >= PRECISION_FLOOR:
             thresholds.append((float(threshold), count))
     threshold = min((item[0] for item in thresholds), default=1.01)
-    test_raw = model.predict_proba(scaler.transform(X[dev_end:]))[:, 1]
+    test_raw = model.predict_proba(scaler.transform(X[test_idx]))[:, 1]
     test_prob = calibrator.predict(test_raw)
     test_pred = test_prob >= threshold
     heldout_recommendations = int(test_pred.sum())
-    heldout_precision = float(precision_score(y[dev_end:], test_pred, zero_division=0))
+    heldout_precision = float(precision_score(y_test, test_pred, zero_division=0))
     active = heldout_precision >= PRECISION_FLOOR and heldout_recommendations >= MIN_HELDOUT_RECOMMENDATIONS
     reason = (
         "Precision gate passed; automatic recommendations are active."
@@ -275,9 +311,10 @@ def train(db: Session) -> dict[str, Any]:
         "threshold": threshold,
         "heldout_precision": heldout_precision,
         "heldout_recommendations": heldout_recommendations,
-        "train_count": train_end,
-        "dev_count": dev_end - train_end,
-        "test_count": n - dev_end,
+        "train_count": len(train_idx),
+        "dev_count": len(dev_idx),
+        "test_count": len(test_idx),
+        "split_strategy": "grouped_by_run_ordered_by_discovery_time",
         "reason": reason,
     }
     path = current_artifact_path()

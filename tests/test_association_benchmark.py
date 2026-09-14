@@ -3,18 +3,28 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
-from app.association.benchmark import run_benchmark, run_split
+from app.association import MatchCandidateView, MatchSubjectView
+from app.association.benchmark import (
+    PENALTY_FEATURES,
+    fit_weights,
+    run_benchmark,
+    run_split,
+)
 from app.association.dataset import (
     SPLIT_DEV,
     SPLIT_TEST,
     SPLIT_TRAIN,
+    Dataset,
+    LabeledExample,
     build_dataset,
     load_seed,
     split_by_cluster_and_time,
 )
+from app.association.decisions import AssociationOutcome
 from app.association.thresholds import (
     FUZZY_PRECISION_FLOOR,
     MIN_FUZZY_HELDOUT_DECISIONS,
@@ -98,15 +108,72 @@ def test_the_gate_keeps_fuzzy_matching_in_review_only_mode_by_default(dataset):
     assert str(FUZZY_PRECISION_FLOOR) in report["reason"] or "0.99" in report["reason"]
 
 
-def test_the_gate_enables_fuzzy_matching_when_the_evidence_supports_it(monkeypatch, dataset):
+def _fuzzy_auto_dataset() -> Dataset:
+    """A dataset whose held-out split the engine really can decide fuzzily.
+
+    Each cluster holds two competing candidates and a video whose title names
+    one of them outright, on that studio's own channel: two independent
+    features, a real runner-up to measure a margin against, and no ID.
+    """
+    examples: list[LabeledExample] = []
+    for index in range(9):
+        left = MatchCandidateView(
+            candidate_id=f"c{index}-a", universe_id=f"90{index}1", place_ids=(f"70{index}1",),
+            raw_name=f"Lantern Harbour {index}", creator_name=f"Studio {index}",
+        )
+        right = MatchCandidateView(
+            candidate_id=f"c{index}-b", universe_id=f"90{index}2", place_ids=(f"70{index}2",),
+            raw_name=f"Copper Foundry {index}", creator_name=f"Other Studio {index}",
+        )
+        subject = MatchSubjectView(
+            subject_id=f"s{index}", subject_type="youtube_video", external_id=f"v{index}",
+            raw_title=f"Lantern Harbour {index}",
+            raw_description="A full session with commentary from the team.",
+            creator_name=f"Studio {index}",
+            source_artifact_sha256="a" * 64, extraction_method="youtube_videos_api",
+            source_tier="primary",
+            discovered_at=datetime(2026, 1 + index, 1, tzinfo=UTC),
+        )
+        examples.append(LabeledExample(
+            example_id=f"ex{index}", cluster=f"cluster-{index}", niche="harbour building",
+            kind="exact_title", subject=subject, pool=(left, right),
+            label_candidate_id=left.candidate_id,
+            discovered_at=subject.discovered_at,
+        ))
+    return Dataset(
+        examples=tuple(examples), splits=split_by_cluster_and_time(examples)
+    )
+
+
+def test_the_engine_can_decide_fuzzily_when_the_evidence_is_there():
+    built = _fuzzy_auto_dataset()
+    probe = replace(Thresholds(), fuzzy_auto_enabled=True)
+    result = run_split(built, SPLIT_TEST, probe)
+    assert result.auto_fuzzy > 0, "the fuzzy path must be reachable at all"
+    assert result.false_positives == []
+
+
+def test_the_gate_enables_fuzzy_matching_when_the_evidence_supports_it(monkeypatch):
     # Hold the engine fixed and lower only the sample-size requirement, to prove
     # the gate flips when a held-out measurement actually clears the floor.
     monkeypatch.setattr("app.association.benchmark.MIN_FUZZY_HELDOUT_DECISIONS", 1)
-    frozen, report = run_benchmark(dataset=dataset)
+    frozen, report = run_benchmark(dataset=_fuzzy_auto_dataset())
     assert report["passed"] is True
     assert frozen.fuzzy_auto_enabled is True
     assert frozen.validated is True
     assert frozen.heldout_precision == 1.0
+
+
+def test_the_seed_dataset_yields_no_held_out_fuzzy_decisions(dataset):
+    """Documents where the engine actually stands on the shipped data.
+
+    Requiring a real runner-up plus two independent features means the seed
+    set produces no held-out fuzzy decisions at all, so the gate cannot open
+    on it however the precision floor is set.
+    """
+    _frozen, report = run_benchmark(dataset=dataset)
+    assert report["splits"][SPLIT_TEST]["auto_fuzzy"] == 0
+    assert report["passed"] is False
 
 
 def test_a_frozen_artifact_records_everything_needed_to_reproduce_it(dataset):
@@ -136,3 +203,60 @@ def test_an_artifact_frozen_against_another_normalization_is_refused(dataset):
     artifact["normalization_version"] = "norm-v0"
     with pytest.raises(ValueError, match="different normalization version"):
         thresholds_from_artifact(artifact)
+
+
+def test_learned_weights_are_fitted_only_on_the_training_split(dataset):
+    learned = fit_weights(dataset, replace(Thresholds(), fuzzy_auto_enabled=True))
+    assert learned is not None
+    assert learned.weights_version.startswith("weights-learned-")
+    assert set(learned.weights) == set(Thresholds().weights)
+
+
+def test_a_learned_penalty_can_never_become_a_bonus(dataset):
+    learned = fit_weights(dataset, replace(Thresholds(), fuzzy_auto_enabled=True))
+    for name in PENALTY_FEATURES:
+        assert learned.weights[name] <= 0.0, f"{name} was fitted as a reward"
+
+
+def test_learned_weights_are_refused_if_they_cost_exact_id_resolution(dataset):
+    """Verified-ID resolution is not tradeable for fuzzy coverage."""
+    _frozen, report = run_benchmark(dataset=dataset)
+    default_exact = run_split(
+        dataset, SPLIT_TEST, replace(Thresholds(), fuzzy_auto_enabled=True)
+    ).auto_exact_id
+    assert report["splits"][SPLIT_TEST]["auto_exact_id"] == default_exact
+    if report["learned_weights_rejected"]:
+        assert report["measured_weights_source"] == "default"
+
+
+def test_a_failed_gate_never_adopts_the_unvalidated_policy(dataset):
+    frozen, report = run_benchmark(dataset=dataset)
+    assert report["passed"] is False
+    assert report["frozen_weights_source"] == "default"
+    assert frozen.weights == Thresholds().weights
+    assert frozen.bias == Thresholds().bias
+
+
+def test_dense_similarity_alone_cannot_approve_whatever_the_weights_say():
+    """The independent-feature gate is a rule, not a weight."""
+    from app.association import MatchCandidateView, MatchSubjectView, evaluate
+    from app.association.retrieval import EmbeddingProvider
+
+    greedy = replace(
+        Thresholds(),
+        fuzzy_auto_enabled=True,
+        validated=True,
+        weights={**Thresholds().weights, "embedding_cosine": 50.0},
+    )
+    pool = [
+        MatchCandidateView(candidate_id="a", universe_id="1", place_ids=("11",), raw_name="Alpha"),
+        MatchCandidateView(candidate_id="b", universe_id="2", place_ids=("22",), raw_name="Beta"),
+    ]
+    subject = MatchSubjectView(
+        subject_id="s", subject_type="youtube_video", external_id="v",
+        raw_title="something entirely unrelated", raw_description="a description",
+        source_artifact_sha256="a" * 64, extraction_method="youtube_videos_api",
+    )
+    dense = EmbeddingProvider(model_name="stub", scorer=lambda _q, docs: [0.99] * len(docs))
+    verdict = evaluate(subject, pool, thresholds=greedy, embedder=dense, shadow_mode=False)
+    assert verdict.outcome is not AssociationOutcome.AUTO_ASSOCIATE

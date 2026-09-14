@@ -24,10 +24,12 @@ SUBJECT_WEB_PAGE = "web_page"
 SUBJECT_ROBLOX_EXPERIENCE = "roblox_experience"
 
 CANDIDATE_ROBLOX_EXPERIENCE = "roblox_experience"
-CANDIDATE_NICHE_CLUSTER = "niche_cluster"
 
 SUBJECT_TYPES = frozenset({SUBJECT_YOUTUBE_VIDEO, SUBJECT_WEB_PAGE, SUBJECT_ROBLOX_EXPERIENCE})
-CANDIDATE_TYPES = frozenset({CANDIDATE_ROBLOX_EXPERIENCE, CANDIDATE_NICHE_CLUSTER})
+# Only Roblox experiences are matched today. A niche-cluster candidate type
+# existed here but nothing ever created one, so it is gone rather than
+# implying a capability that does not exist.
+CANDIDATE_TYPES = frozenset({CANDIDATE_ROBLOX_EXPERIENCE})
 
 
 @dataclass(frozen=True)
@@ -93,7 +95,7 @@ class MatchSubjectView:
 
 @dataclass(frozen=True)
 class MatchCandidateView:
-    """One Roblox experience (or niche cluster) a subject may belong to."""
+    """One Roblox experience a subject may belong to."""
 
     candidate_id: str
     candidate_type: str = CANDIDATE_ROBLOX_EXPERIENCE

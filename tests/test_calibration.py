@@ -64,3 +64,37 @@ def test_outcome_period_is_not_leaked_into_training_features(db):
     assert shrinking.label == 0
     assert growing.base_features == shrinking.base_features
     assert growing.base_features["current_demand"] == math.log1p(13)
+
+
+def test_a_research_run_never_spans_two_calibration_splits():
+    """Candidates from one run share derived features, so they share a split."""
+    from datetime import timedelta
+
+    from app.calibration import Example, grouped_time_split
+
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    examples = [
+        Example(
+            candidate_id=f"c{run}-{seat}",
+            run_id=f"run-{run}",
+            created_at=base + timedelta(days=run),
+            base_features={},
+            label=seat % 2,
+            input_ccu=float(seat),
+        )
+        for run in range(10)
+        for seat in range(5)
+    ]
+    train, dev, test = grouped_time_split(examples)
+
+    assert train and dev and test
+    assert sorted(train + dev + test) == list(range(len(examples)))
+    homes: dict[str, set[str]] = {}
+    for name, indexes in (("train", train), ("dev", dev), ("test", test)):
+        for index in indexes:
+            homes.setdefault(examples[index].run_id, set()).add(name)
+    leaking = {run: splits for run, splits in homes.items() if len(splits) > 1}
+    assert not leaking, f"runs split across sets: {leaking}"
+    # And the splits stay in discovery order.
+    assert max(examples[i].created_at for i in train) <= min(examples[i].created_at for i in dev)
+    assert max(examples[i].created_at for i in dev) <= min(examples[i].created_at for i in test)

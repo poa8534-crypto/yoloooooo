@@ -5,7 +5,7 @@ import re
 import socket
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -14,9 +14,52 @@ from .config import Settings, get_settings
 
 ROBLOX_PLACE_RE = re.compile(r"roblox\.com/(?:[a-z]{2}/)?games/(\d+)", re.IGNORECASE)
 
+MAX_CAPTURE_REDIRECTS = 3
+
 
 class ConnectorError(RuntimeError):
     pass
+
+
+def _is_forbidden_address(address: str) -> bool:
+    """True for anything that is not a routable public address."""
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return True
+    # An IPv4 address tunnelled inside IPv6 has to be judged on the IPv4 value.
+    if getattr(parsed, "ipv4_mapped", None) is not None:
+        parsed = parsed.ipv4_mapped
+    return bool(
+        parsed.is_private
+        or parsed.is_loopback
+        or parsed.is_link_local
+        or parsed.is_multicast
+        or parsed.is_reserved
+        or parsed.is_unspecified
+    )
+
+
+def assert_public_http_url(url: str) -> None:
+    """Refuse anything that is not a public HTTP(S) URL.
+
+    Raises `ConnectorError` for a bad scheme, a host that will not resolve, or
+    a host that resolves to *any* private, loopback, link-local, multicast,
+    reserved or unspecified address.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ConnectorError("only public HTTP(S) pages may be captured")
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, None)}
+    except socket.gaierror as exc:
+        raise ConnectorError("page host cannot be resolved") from exc
+    if not addresses:
+        raise ConnectorError("page host cannot be resolved")
+    # Every resolved address has to be public: one bad answer is enough to
+    # reach a private host.
+    if any(_is_forbidden_address(address) for address in addresses):
+        raise ConnectorError("private network pages are blocked")
 
 
 @dataclass(frozen=True)
@@ -108,24 +151,37 @@ class Connectors:
         )
 
     async def capture_page(self, url: str) -> ConnectorResult:
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ConnectorError("only public HTTP(S) pages may be captured")
-        try:
-            addresses = {item[4][0] for item in socket.getaddrinfo(parsed.hostname, None)}
-        except socket.gaierror as exc:
-            raise ConnectorError("page host cannot be resolved") from exc
-        if any(ipaddress.ip_address(address).is_private or ipaddress.ip_address(address).is_loopback for address in addresses):
-            raise ConnectorError("private network pages are blocked")
-        response = await self.client.get(url)
-        response.raise_for_status()
-        if len(response.content) > 2_000_000:
-            raise ConnectorError("page exceeds the two-megabyte capture limit")
-        content_type = response.headers.get("content-type", "text/html").split(";", 1)[0]
-        if content_type not in {"text/html", "text/plain"}:
-            raise ConnectorError("only HTML and plain-text pages may be captured")
-        text = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
-        return ConnectorResult(str(response.url), text, "text/plain")
+        """Capture a public web page.
+
+        Redirects are followed by hand so that *every* hop is checked against
+        the private-address rules. Letting httpx follow them would validate
+        only the first URL, and a public host that redirects to 127.0.0.1
+        would be fetched.
+
+        Residual risk, stated plainly: the hostname is resolved for the check
+        and resolved again by the connection, so a DNS entry that flips between
+        the two (rebinding) is not caught here. Closing that needs connecting
+        to a pinned address, which httpx does not expose cleanly.
+        """
+        current = url
+        for _hop in range(MAX_CAPTURE_REDIRECTS + 1):
+            assert_public_http_url(current)
+            response = await self.client.get(current, follow_redirects=False)
+            if response.is_redirect:
+                location = response.headers.get("location", "")
+                if not location:
+                    raise ConnectorError("redirect without a destination")
+                current = urljoin(current, location)
+                continue
+            response.raise_for_status()
+            if len(response.content) > 2_000_000:
+                raise ConnectorError("page exceeds the two-megabyte capture limit")
+            content_type = response.headers.get("content-type", "text/html").split(";", 1)[0]
+            if content_type not in {"text/html", "text/plain"}:
+                raise ConnectorError("only HTML and plain-text pages may be captured")
+            text = BeautifulSoup(response.text, "html.parser").get_text(" ", strip=True)
+            return ConnectorResult(str(response.url), text, "text/plain")
+        raise ConnectorError("too many redirects while capturing the page")
 
 
 def extract_roblox_place_ids(search_payload: dict[str, Any]) -> list[str]:

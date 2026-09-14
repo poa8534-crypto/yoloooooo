@@ -12,7 +12,7 @@ import enum
 import math
 from dataclasses import dataclass, field
 
-from .features import FeatureContext, FeatureVector, compute_features
+from .features import FEATURE_NAMES, FeatureContext, FeatureVector, compute_features
 from .retrieval import EmbeddingProvider, RetrievalResult, retrieve
 from .rules import PairGuard, SubjectGuard, guard_pair, guard_subject
 from .subjects import MatchCandidateView, MatchSubjectView
@@ -41,6 +41,7 @@ CODE_MARGIN_PASS = "clear_top_two_margin"
 CODE_ALL_CANDIDATES_CONTRADICTED = "every_candidate_contradicted_by_explicit_id"
 CODE_RULE_PENALISED_REVIEW = "rule_penalised_but_named_by_source"
 CODE_RULE_BLOCKED_AUTO = "hard_rule_blocked_automatic_association"
+CODE_NO_RUNNER_UP = "no_runner_up_to_measure_a_margin_against"
 
 
 def logistic(value: float) -> float:
@@ -48,10 +49,15 @@ def logistic(value: float) -> float:
 
 
 def score_features(features: FeatureVector, thresholds: Thresholds) -> float:
-    """Frozen linear model, squashed into [0, 1]. No model call, no randomness."""
+    """Frozen linear model, squashed into [0, 1]. No model call, no randomness.
+
+    Summed in FEATURE_NAMES order rather than dict order: float addition is
+    not associative, and a policy rebuilt from a JSON artifact iterates its
+    weights in a different order than the in-memory default would.
+    """
     total = sum(
-        weight * features.values.get(name, 0.0)
-        for name, weight in thresholds.weights.items()
+        thresholds.weights.get(name, 0.0) * features.values.get(name, 0.0)
+        for name in FEATURE_NAMES
     )
     return round(logistic(total + thresholds.bias), 9)
 
@@ -183,20 +189,17 @@ def evaluate(
             thresholds, shadow_mode=shadow_mode, duplicate_of=duplicate_of,
         )
 
-    if subject_guard.blocked:
-        # Two conflicting explicit IDs: automatic association is impossible.
-        return _verdict(
-            subject, AssociationOutcome.BLOCKED_CONFLICT, working.codes, subject_guard,
-            thresholds, shadow_mode=shadow_mode,
-        )
-
     found = retrieval if retrieval is not None else retrieve(subject, pool, embedder=embedder)
     working.codes.extend(note for note in found.notes if note not in working.codes)
 
     if not found.candidates:
         working.add(CODE_NO_CANDIDATES)
+        outcome = (
+            AssociationOutcome.BLOCKED_CONFLICT if subject_guard.blocked
+            else AssociationOutcome.NO_MATCH
+        )
         return _verdict(
-            subject, AssociationOutcome.NO_MATCH, working.codes, subject_guard, thresholds,
+            subject, outcome, working.codes, subject_guard, thresholds,
             shadow_mode=shadow_mode, embedding_available=found.embedding_available,
             embedding_model=found.embedding_model, retrieval_notes=tuple(found.notes),
         )
@@ -226,6 +229,18 @@ def evaluate(
     evaluations.sort(key=lambda item: (-item.score, item.candidate_id))
     ranked = tuple(evaluations)
     admissible = [item for item in evaluations if not item.guard.hard_negative]
+
+    if subject_guard.blocked:
+        # Two conflicting explicit IDs: the engine will not pick between them,
+        # so no winner is nominated. The scored candidates are still recorded
+        # so a reviewer can see the options and choose one by hand.
+        return _verdict(
+            subject, AssociationOutcome.BLOCKED_CONFLICT, working.codes, subject_guard,
+            thresholds, shadow_mode=shadow_mode, evaluations=ranked,
+            embedding_available=found.embedding_available,
+            embedding_model=found.embedding_model,
+            retrieval_notes=tuple(found.notes),
+        )
 
     shared = {
         "subject_guard": subject_guard,
@@ -269,7 +284,15 @@ def evaluate(
         reasons_against.append(CODE_BELOW_HIGH)
     else:
         working.add(CODE_SCORE_PASS)
-    if margin < thresholds.margin_min:
+    exact_id = winner.guard.exact_id_evidence
+    if runner_up is None:
+        # There is no second candidate, so the runner-up score defaulted to
+        # zero and the margin is really just the winner's own score. That is
+        # not evidence of discrimination, so fuzzy evidence cannot lean on it;
+        # exact-ID evidence stands on its own and needs no margin.
+        if not exact_id:
+            reasons_against.append(CODE_NO_RUNNER_UP)
+    elif margin < thresholds.margin_min:
         reasons_against.append(CODE_THIN_MARGIN)
     else:
         working.add(CODE_MARGIN_PASS)
@@ -280,7 +303,6 @@ def evaluate(
         # already on the record; this one says the veto was decisive.
         reasons_against.append(CODE_RULE_BLOCKED_AUTO)
 
-    exact_id = winner.guard.exact_id_evidence
     if exact_id:
         working.add(CODE_EXACT_ID)
     else:

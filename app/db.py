@@ -38,13 +38,21 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
 
 def init_db(bind=None) -> None:
     from . import models  # noqa: F401
-    from .migrations import run_migrations
+    from .migrations import (
+        drop_append_only_triggers,
+        install_append_only_triggers,
+        run_migrations,
+    )
 
     target = bind or engine
+    # Triggers guard the append-only tables against every writer, including
+    # this one, so they come off for the migration and go straight back on.
+    drop_append_only_triggers(target)
     # Additive migrations run first so that create_all never sees a table it
     # would otherwise consider up to date while a column is still missing.
     run_migrations(target)
     Base.metadata.create_all(bind=target)
+    install_append_only_triggers(target)
 
 
 def get_db() -> Generator[Session, None, None]:

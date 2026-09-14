@@ -14,7 +14,10 @@ import unicodedata
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-NORMALIZATION_VERSION = "norm-v1"
+# v2 tokenizes Unicode letters instead of ASCII only. Under v1 every
+# non-Latin title tokenized to nothing, which made it score zero against every
+# candidate and get flagged as a generic title.
+NORMALIZATION_VERSION = "norm-v2"
 
 # Removed only from the boilerplate-stripped feature view. The raw text and the
 # plain normalized text keep these words.
@@ -61,17 +64,20 @@ INJECTION_PATTERNS = (
     re.compile(r"</?\s*(?:system|assistant|instructions?)\s*>"),
 )
 
-_WORD_RE = re.compile(r"[a-z0-9]+")
+# Unicode word characters minus the underscore. An ASCII-only class silently
+# erased Japanese, Korean, Chinese, Cyrillic, Greek, Thai and accented Latin
+# titles, which is most of Roblox outside English.
+_WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _WS_RE = re.compile(r"\s+")
 
 PLACE_URL_RE = re.compile(
-    r"roblox\.com/(?:[a-z]{2}(?:-[a-z]{2})?/)?games/(\d{4,})", re.IGNORECASE
+    r"roblox\.com/(?:[a-z]{2}(?:-[a-z]{2})?/)?games/(\d+)", re.IGNORECASE
 )
-PLACE_PARAM_RE = re.compile(r"\bplaceid=(\d{4,})", re.IGNORECASE)
-UNIVERSE_PATH_RE = re.compile(r"roblox\.com/universes/(\d{4,})", re.IGNORECASE)
-UNIVERSE_PARAM_RE = re.compile(r"\buniverseids?=(\d{4,})", re.IGNORECASE)
+PLACE_PARAM_RE = re.compile(r"\bplaceid=(\d+)", re.IGNORECASE)
+UNIVERSE_PATH_RE = re.compile(r"roblox\.com/universes/(\d+)", re.IGNORECASE)
+UNIVERSE_PARAM_RE = re.compile(r"\buniverseids?=(\d+)", re.IGNORECASE)
 ROBLOX_GAME_URL_RE = re.compile(
-    r"https?://(?:www\.)?roblox\.com/(?:[a-z]{2}(?:-[a-z]{2})?/)?games/(\d{4,})[^\s\"'<>]*",
+    r"https?://(?:www\.)?roblox\.com/(?:[a-z]{2}(?:-[a-z]{2})?/)?games/(\d+)[^\s\"'<>]*",
     re.IGNORECASE,
 )
 YOUTUBE_VIDEO_RE = re.compile(

@@ -156,7 +156,9 @@ def load_review_labels(db: Session) -> list[LabeledExample]:
     """
     examples: list[LabeledExample] = []
     reviews = list(db.scalars(
-        select(AssociationReview).order_by(AssociationReview.created_at, AssociationReview.id)
+        select(AssociationReview).order_by(
+            AssociationReview.association_id, AssociationReview.sequence
+        )
     ))
     seen: set[str] = set()
     for review in reversed(reviews):  # newest review per record wins

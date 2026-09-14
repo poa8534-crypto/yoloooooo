@@ -15,7 +15,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -92,11 +92,15 @@ def is_downstream_admissible(record: AssociationRecord) -> bool:
 
 
 def human_confirmation(db: Session, association_id: str) -> AssociationReview | None:
-    """The latest human review for a record, if there is one."""
+    """The latest human review for a record, if there is one.
+
+    Ordered by the append sequence, never by the clock: two reviews recorded in
+    the same tick must still resolve in the order a person made them.
+    """
     return db.scalar(
         select(AssociationReview)
         .where(AssociationReview.association_id == association_id)
-        .order_by(AssociationReview.created_at.desc(), AssociationReview.id.desc())
+        .order_by(AssociationReview.sequence.desc())
         .limit(1)
     )
 
@@ -174,26 +178,44 @@ class AssociationService:
         return row
 
     def upsert_subject(self, db: Session, view: MatchSubjectView) -> MatchSubject:
-        """Store a subject by internal ID, reusing the row for a known external ID."""
+        """Store a subject, versioning the row whenever the source text changes.
+
+        Reusing a row after a video was retitled would leave the stored record
+        describing text that is not what the engine scored. Instead the changed
+        text gets its own row, deterministically keyed by its fingerprint, and
+        the previous row is left untouched for the verdict already recorded
+        against it.
+        """
+        fingerprint = content_fingerprint(view.raw_title, view.raw_description)
         row: MatchSubject | None = db.get(MatchSubject, view.subject_id)
         if row is None and view.external_id:
             row = db.scalar(
                 select(MatchSubject).where(
                     MatchSubject.subject_type == view.subject_type,
                     MatchSubject.external_id == view.external_id,
-                )
+                ).order_by(MatchSubject.created_at.desc()).limit(1)
             )
-        fingerprint = content_fingerprint(view.raw_title, view.raw_description)
+        subject_id = view.subject_id
+        supersedes: str | None = None
         if row is not None:
-            return row
+            if row.content_fingerprint == fingerprint:
+                return row
+            # The captured text moved on. Key the new row by its content so the
+            # same text always lands on the same row.
+            subject_id = f"{view.subject_id}@{fingerprint[:12]}"
+            existing = db.get(MatchSubject, subject_id)
+            if existing is not None:
+                return existing
+            supersedes = row.id
         duplicate_of = db.scalar(
             select(MatchSubject.id).where(
                 MatchSubject.content_fingerprint == fingerprint,
-                MatchSubject.id != view.subject_id,
+                MatchSubject.id != subject_id,
             ).order_by(MatchSubject.created_at).limit(1)
         )
         row = MatchSubject(
-            id=view.subject_id,
+            id=subject_id,
+            supersedes_subject_id=supersedes,
             subject_type=view.subject_type,
             external_kind=view.subject_type,
             external_id=view.external_id,
@@ -354,8 +376,13 @@ class AssociationService:
         elif verdict == ReviewVerdict.REJECTED.value:
             chosen = None
 
+        next_sequence = 1 + (db.scalar(
+            select(func.max(AssociationReview.sequence))
+            .where(AssociationReview.association_id == association_id)
+        ) or 0)
         review = AssociationReview(
             association_id=association_id,
+            sequence=next_sequence,
             verdict=verdict,
             selected_candidate_id=chosen,
             engine_outcome=record.outcome,
@@ -376,6 +403,7 @@ class AssociationService:
         if disagrees:
             override = AssociationOverride(
                 association_id=association_id,
+                sequence=next_sequence,
                 requested_outcome=(
                     AssociationOutcome.NO_MATCH.value
                     if verdict == ReviewVerdict.REJECTED.value

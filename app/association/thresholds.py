@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,8 @@ from typing import Any
 from ..config import get_settings
 from .features import FEATURE_NAMES, FEATURE_SCHEMA_VERSION
 from .normalize import NORMALIZATION_VERSION
+
+LOGGER = logging.getLogger(__name__)
 
 MATCHER_VERSION = "assoc-v1"
 THRESHOLD_VERSION = "thresholds-v1"
@@ -83,6 +86,21 @@ class Thresholds:
     heldout_precision: float | None = None
     heldout_decisions: int | None = None
     benchmark_reason: str = "Shipped defaults; no benchmark has been recorded."
+    # Set when a stored artifact was refused and these defaults took over, so
+    # the fallback is visible instead of silent.
+    artifact_error: str = ""
+
+    def __post_init__(self) -> None:
+        # A weight set that does not line up with the feature schema would
+        # score silently and wrongly: an unknown key contributes nothing and
+        # the feature it was meant to weigh becomes free.
+        missing = sorted(set(FEATURE_NAMES) - set(self.weights))
+        unknown = sorted(set(self.weights) - set(FEATURE_NAMES))
+        if missing or unknown:
+            raise ValueError(
+                f"weights do not match feature schema {FEATURE_SCHEMA_VERSION}: "
+                f"missing={missing} unknown={unknown}"
+            )
 
     def weight_vector(self) -> list[float]:
         return [float(self.weights.get(name, 0.0)) for name in FEATURE_NAMES]
@@ -125,6 +143,14 @@ def thresholds_from_artifact(artifact: dict[str, Any]) -> Thresholds:
         raise ValueError("benchmark artifact was frozen against a different feature schema")
     if artifact.get("normalization_version") != NORMALIZATION_VERSION:
         raise ValueError("benchmark artifact was frozen against a different normalization version")
+    weights = artifact.get("weights") or {}
+    if set(weights) != set(FEATURE_NAMES):
+        missing = sorted(set(FEATURE_NAMES) - set(weights))
+        unknown = sorted(set(weights) - set(FEATURE_NAMES))
+        raise ValueError(
+            "benchmark artifact weights do not match the feature schema: "
+            f"missing={missing} unknown={unknown}"
+        )
     known = {f.name for f in Thresholds.__dataclass_fields__.values()}
     return Thresholds(**{key: value for key, value in artifact.items() if key in known})
 
@@ -133,15 +159,22 @@ def active_thresholds() -> Thresholds:
     """The policy in force right now.
 
     Falls back to the shipped defaults (fuzzy automatic association disabled)
-    whenever no valid artifact is present.
+    whenever no valid artifact is present. A *rejected* artifact is logged and
+    recorded in `artifact_error`, so an operator who thinks a validated policy
+    is running can see that it is not.
     """
     artifact = load_artifact()
     if not artifact:
         return Thresholds()
     try:
         return thresholds_from_artifact(artifact)
-    except (TypeError, ValueError):
-        return Thresholds()
+    except (TypeError, ValueError) as exc:
+        message = (
+            f"Frozen policy artifact at {artifact_path()} was refused ({exc}). "
+            "Running shipped defaults with fuzzy automatic association disabled."
+        )
+        LOGGER.warning(message)
+        return Thresholds(artifact_error=message, benchmark_reason=message)
 
 
 def write_artifact(thresholds: Thresholds) -> Path:

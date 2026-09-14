@@ -12,6 +12,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///./data/test_app.db")
 
 from app import models  # noqa: F401
 from app.db import Base
+from app.migrations import install_append_only_triggers
 
 
 def _memory_engine():
@@ -26,6 +27,8 @@ def _memory_engine():
         connection.execute("PRAGMA foreign_keys=ON")
 
     Base.metadata.create_all(engine)
+    # The suite runs against the same append-only enforcement as production.
+    install_append_only_triggers(engine)
     return engine
 
 
