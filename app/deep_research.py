@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy import select
 
+from . import query_planner
 from .association import MatchSubjectView, is_downstream_admissible
 from .association.normalize import word_tokens
 from .association.subjects import SUBJECT_WEB_PAGE
@@ -47,11 +48,30 @@ QUESTION_TEXT = {
 
 
 def discovery_queries(niche):
-    words = re.findall(r"[a-zA-Z]+", niche.lower())
-    words = [w for w in words if w not in {"with", "and", "the", "for", "roblox", "a", "of", "in"}]
-    chunks = [" ".join(words[:4]), " ".join(words[-3:]), " ".join(words[::2][:4])]
-    return list(dict.fromkeys(f"site:roblox.com/games {phrase} {suffix}".strip()
-                             for suffix in ("", "cooperative", "simulator", "social") for phrase in chunks if phrase))[:12]
+    """Deterministic queries from the curated vocabulary.
+
+    Kept as the floor beneath the planner: if the model is unavailable this
+    still produces sensible queries, where the previous version crossed word
+    slices with fixed suffixes and emitted things like "toilet social".
+    """
+    return query_planner.finalise([], niche)
+
+
+async def plan_discovery_queries(niche, llm=None, before_attempt=None):
+    """Model-proposed queries, checked and extended by the vocabulary.
+
+    The model contributes the platform's own words; the vocabulary refuses
+    repeats and nonsense and adds the terms it knows. A model that is
+    unavailable or answers with nothing usable costs the run nothing: the
+    deterministic queries stand on their own.
+    """
+    proposed = []
+    if llm is not None:
+        try:
+            proposed = await llm.plan_searches(niche, before_attempt=before_attempt)
+        except Exception:
+            proposed = []
+    return query_planner.finalise(proposed, niche)
 
 
 def _contiguous(haystack, needle):
@@ -324,7 +344,14 @@ class DeepResearch:
         return questions
 
     async def investigate(self):
-        queries = discovery_queries(self.niche)
+        # Planned once per run, then reused: the plan is part of the run's
+        # record, and re-planning every round would spend a model call to
+        # arrive at the same place.
+        queries = self.b.state.get("search_queries")
+        if not queries:
+            queries = await plan_discovery_queries(
+                self.niche, llm=getattr(self.o, "llm", None), before_attempt=self.b.model_attempt)
+            self.b.save(search_queries=queries)
         stagnant = self.b.state.get("stagnant_rounds", 0)
         prior = self.b.state.get("last_evidence_count", 0)
         questions = self.b.state.get("questions") or self.questions(self.dossiers())

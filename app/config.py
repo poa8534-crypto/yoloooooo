@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # Roblox's own search. First-party, no key, and it returns universe IDs
     # directly, so a resolution call per result is not needed.
     roblox_search_enabled: bool = True
+    # Public engines suspend an instance that queries them in bursts, so
+    # searches are spaced and repeated questions are answered from the cache.
+    search_min_interval_seconds: float = Field(default=4.0, ge=0)
+    search_cache_seconds: float = Field(default=86_400, ge=0)
     youtube_api_key: str = ""
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_primary_model: str = "qwen3:14b"

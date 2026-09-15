@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import time
+
 import ipaddress
 import re
 import socket
@@ -11,7 +14,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .config import Settings, get_settings
-from . import dependency_health
+from . import dependency_health, search_cache
 from .security import sanitize_url
 
 ROBLOX_PLACE_RE = re.compile(r"roblox\.com/(?:[a-z]{2}/)?games/(\d+)", re.IGNORECASE)
@@ -94,6 +97,9 @@ class Connectors:
         # Reuses the meter's session factory: anything metering quota already
         # has one, and nothing else needs to grow a parameter for this.
         self.health_factory = getattr(quota_meter, "factory", None)
+        # When the last outbound search went out, so the next one can be
+        # spaced rather than tripping an engine's rate limit.
+        self._last_search = 0.0
 
     async def close(self) -> None:
         if self._owns_client:
@@ -138,6 +144,30 @@ class Connectors:
             },
         )
 
+    async def _cached_search(self, method: str, query: str, call):
+        """One search, answered from the cache when it can be.
+
+        A cache hit costs no outbound request, which is the point: fewer
+        requests means fewer engine suspensions.
+        """
+        ttl = self.settings.search_cache_seconds
+        hit = search_cache.get(self.health_factory, method, query, ttl)
+        if hit is not None:
+            return ConnectorResult(hit["url"], hit["payload"])
+        await self._space_out()
+        result = await call()
+        search_cache.put(self.health_factory, method, query, result.url, result.payload)
+        return result
+
+    async def _space_out(self) -> None:
+        gap = self.settings.search_min_interval_seconds
+        if gap <= 0:
+            return
+        waited = time.monotonic() - self._last_search
+        if waited < gap:
+            await asyncio.sleep(gap - waited)
+        self._last_search = time.monotonic()
+
     async def searxng_search(self, query: str) -> ConnectorResult:
         """A local metasearch instance, so discovery needs no third-party key.
 
@@ -146,11 +176,11 @@ class Connectors:
         """
         if not self.settings.searxng_enabled:
             raise ConnectorError("local search is disabled")
-        return await self._json(
+        return await self._cached_search("searxng_search", query, lambda: self._json(
             "GET",
             self.settings.searxng_url.rstrip("/") + "/search",
             params={"q": query, "format": "json"},
-        )
+        ))
 
     async def roblox_search(self, query: str) -> ConnectorResult:
         """Roblox's own search, which answers with universe IDs directly.
@@ -161,11 +191,11 @@ class Connectors:
         """
         if not self.settings.roblox_search_enabled:
             raise ConnectorError("Roblox search is disabled")
-        return await self._json(
+        return await self._cached_search("roblox_search", query, lambda: self._json(
             "GET",
             "https://apis.roblox.com/search-api/omni-search",
             params={"searchQuery": query, "pageToken": "", "sessionId": "venture-agents"},
-        )
+        ))
 
     async def universe_for_place(self, place_id: str) -> ConnectorResult:
         return await self._json(

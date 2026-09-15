@@ -142,3 +142,96 @@ async def test_audit_idea_still_inherits_the_runs_niche(session_factory, setting
     assert result["operation"] == "audit_idea"
     assert result["niche"] == "cozy farming"
     assert llm.calls[0]["niche"] == "cozy farming"
+
+
+# --- the search cache -------------------------------------------------------
+
+
+def test_a_repeated_search_costs_no_request(session_factory, settings):
+    """Engines suspend an instance that queries them in bursts, so the same
+    question asked twice must not go out twice."""
+    import asyncio
+
+    import httpx
+
+    from app.connectors import Connectors
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={"results": [{"url": "https://www.roblox.com/games/1/A"}]})
+
+    class Meter:
+        factory = staticmethod(session_factory)
+
+        def reserve(self, provider, cost):
+            return None
+
+    async def run():
+        fast = settings.model_copy(update={"search_min_interval_seconds": 0})
+        connectors = Connectors(fast, httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                                quota_meter=Meter())
+        first = await connectors.searxng_search("obby parkour")
+        second = await connectors.searxng_search("obby parkour")
+        await connectors.close()
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert calls["n"] == 1, "the same query was sent twice"
+    assert second.payload == first.payload
+
+
+def test_a_different_search_is_not_served_from_the_cache(session_factory, settings):
+    """Positive control: a cache that answered everything would be worse than
+    none at all."""
+    import asyncio
+
+    import httpx
+
+    from app.connectors import Connectors
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"results": []})
+
+    class Meter:
+        factory = staticmethod(session_factory)
+
+        def reserve(self, provider, cost):
+            return None
+
+    async def run():
+        fast = settings.model_copy(update={"search_min_interval_seconds": 0})
+        connectors = Connectors(fast, httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                                quota_meter=Meter())
+        await connectors.searxng_search("obby parkour")
+        await connectors.searxng_search("pet hatching")
+        await connectors.close()
+
+    asyncio.run(run())
+    assert len(seen) == 2
+
+
+def test_an_expired_entry_is_a_miss(session_factory, settings):
+    """A cached answer is the web as it was. Past the window it is refetched."""
+    from datetime import UTC, datetime, timedelta
+
+    from app import search_cache
+    from app.models import SystemState
+
+    search_cache.put(session_factory, "searxng_search", "obby", "http://local/search", {"results": []})
+    assert search_cache.get(session_factory, "searxng_search", "obby", 3600) is not None
+    assert search_cache.get(session_factory, "searxng_search", "other", 3600) is None
+
+    # Age the stored entry rather than passing a zero window, which is caught
+    # by a different guard and left the expiry check unexercised.
+    with session_factory() as db:
+        row = next(r for r in db.query(SystemState).all() if r.key.startswith("search-cache:"))
+        row.value_json = {**row.value_json,
+                          "at": (datetime.now(UTC) - timedelta(hours=48)).isoformat()}
+        db.commit()
+    assert search_cache.get(session_factory, "searxng_search", "obby", 3600) is None
+    assert search_cache.get(session_factory, "searxng_search", "obby", 86_400 * 7) is not None

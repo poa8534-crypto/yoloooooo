@@ -70,6 +70,33 @@ Nothing breaks. The source is recorded as unavailable for that round and
 discovery continues on Roblox's own search. The Health page reports the local
 instance separately from the others, with when it was last observed.
 
+## Engine availability is the whole game
+
+`site:roblox.com/games <terms>` is the right query form. Measured on one query
+with Brave answering, SearxNG returned **14 Roblox games against Tavily's 15**.
+Alternatives without the operator -- `roblox toilet simulator game`,
+`"toilet simulator" roblox experience` -- returned **zero**.
+
+The difficulty is that public engines suspend a local instance that queries
+them in bursts, and Bing, the one that stays available longest, ignores the
+site operator and returns unrelated pages. So the tuning targets request
+volume, not query wording:
+
+* **Pacing.** Searches are spaced by `SEARCH_MIN_INTERVAL_SECONDS` (default 4).
+* **Caching.** A repeated query is answered from the ledger for
+  `SEARCH_CACHE_SECONDS` (default 24 hours) and costs no outbound request.
+* **A wider pool.** Brave, Google, DuckDuckGo, Startpage, Mojeek and Qwant all
+  honour the operator, so several being suspended still leaves one answering.
+* **A longer engine timeout.** Mojeek and Qwant regularly need more than six
+  seconds and were being recorded as unavailable on every search.
+
+A suspension is temporary. If a search returns nothing, the instance is most
+likely rate-limited rather than broken; `/search?q=...&format=json` reports
+`unresponsive_engines` with the reason.
+
+The tuned settings are kept at `config/searxng-settings.yml` with the secret
+removed. Copy it over `settings-local.yml` to restore them.
+
 ## The supported alternative
 
 SearxNG's own supported deployment is Docker, which is not installed on this

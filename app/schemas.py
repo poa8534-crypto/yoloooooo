@@ -113,6 +113,28 @@ class ProposalPayload(StrictModel):
         return values
 
 
+class SearchPlan(StrictModel):
+    """Search queries, not evidence.
+
+    Nothing here becomes a fact: these are the words typed into a search box,
+    and every result still passes the whole capture and association pipeline.
+    The validator keeps links and operators out, because the caller adds the
+    site restriction itself and a model-authored URL is never followed.
+    """
+
+    queries: list[str] = Field(min_length=2, max_length=10)
+
+    @field_validator("queries")
+    @classmethod
+    def plain_search_terms(cls, values: list[str]) -> list[str]:
+        for value in values:
+            if not 2 <= len(value.strip()) <= 80:
+                raise ValueError("a search query must be short and non-empty")
+            if re.search(r"https?://|www\.|site:", value, re.IGNORECASE):
+                raise ValueError("a search query may not contain a link or a site operator")
+        return [" ".join(value.split()) for value in values]
+
+
 class AuditCritique(StrictModel):
     """One deliberation pass: what is wrong with the draft the model just wrote.
 

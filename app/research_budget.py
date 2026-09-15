@@ -47,6 +47,9 @@ def progress(db, run):
             # capture was meant to answer. Recorded so a round's choices can
             # be read back rather than inferred from a slice index.
             "plan": state.get("plan", []),
+            # The searches this run decided to make, planned once at the
+            # start, so a reader can see what it actually looked for.
+            "search_queries": state.get("search_queries", []),
             "evidence_additions": state.get("evidence_additions", 0)}
 
 

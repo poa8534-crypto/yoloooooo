@@ -1,0 +1,69 @@
+﻿# Local SearxNG for Roblox Venture Agents.
+#
+# Bound to loopback and used only as a discovery search backend: the
+# application asks it for Roblox game pages and extracts place IDs. No results
+# are ever treated as evidence -- discovery output is discovery-tier, and every
+# measurement still comes from Roblox's own API.
+
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "Venture Agents local search"
+  # No public instance, so no need to advertise contact details.
+  donation_url: false
+  contact_url: false
+
+server:
+  # Loopback only. This instance must not be reachable from the network.
+  bind_address: "127.0.0.1"
+  port: 8888
+  # Replaced on first start by scripts/start_searxng.ps1 if left as-is.
+  secret_key: "change-me-local-only"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    # The application reads JSON; the HTML UI stays available for a human.
+    - html
+    - json
+
+# A small set of general engines is enough to find Roblox game pages, and
+# fewer engines means fewer ways for one slow backend to hold up a search.
+# Google, DuckDuckGo and Brave suspend a local instance quickly -- CAPTCHA or
+# rate limit -- and a suspended engine contributes nothing. Engines that
+# tolerate scripted queries are included so at least one is answering, and
+# Bing is kept because it answers even when the others are blocked.
+engines:
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: google
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: startpage
+    disabled: false
+  - name: qwant
+    disabled: false
+  - name: wikipedia
+    disabled: true
+  - name: wikidata
+    disabled: true
+
+outgoing:
+  # Mojeek and Qwant regularly need more than six seconds; at the old timeout
+  # they were recorded as unavailable on every search.
+  request_timeout: 10.0
+  max_request_timeout: 20.0
+  pool_connections: 20
+
