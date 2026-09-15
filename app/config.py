@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # Roblox's own search. First-party, no key, and it returns universe IDs
     # directly, so a resolution call per result is not needed.
     roblox_search_enabled: bool = True
+    # Roblox's own front page, sampled on a schedule. Every rate-of-change
+    # measurement in the system is a derivative, and a derivative needs two
+    # observations of the same game; this is what produces the second one.
+    roblox_charts_enabled: bool = True
+    market_sample_minutes: int = Field(default=30, ge=5)
     # Public engines suspend an instance that queries them in bursts, so
     # searches are spaced and repeated questions are answered from the cache.
     search_min_interval_seconds: float = Field(default=4.0, ge=0)

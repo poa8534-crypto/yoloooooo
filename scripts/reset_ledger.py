@@ -60,6 +60,9 @@ TABLES = (
     "proposals",
     "facts",
     "observations",
+    # Ahead of source_artifacts: every census row points at the artifact the
+    # sample was read from.
+    "market_samples",
     "tracked_videos",
     "candidates",
     "research_runs",

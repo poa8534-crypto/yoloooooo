@@ -445,8 +445,37 @@ class AssociationOverride(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
+class MarketSample(Base):
+    """One sampling of Roblox's own front page.
+
+    Deliberately separate from `facts`. A fact is a claim about one tracked
+    entity, resolved through an approved association and answerable by ID. A
+    market sample is a census: three hundred games Roblox itself ranked at one
+    moment, none of which the run asked about. Writing those as facts would
+    make "fact" mean two different things, and would attach hundreds of
+    candidates per sample to a table that exists to hold games under study.
+
+    Every row still points at the artifact it was read from, so a row is as
+    traceable as a fact is; it just is not one.
+    """
+
+    __tablename__ = "market_samples"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    artifact_id: Mapped[str] = mapped_column(ForeignKey("source_artifacts.id"), index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    sort_id: Mapped[str] = mapped_column(String(80), index=True)
+    rank: Mapped[int] = mapped_column(Integer)
+    universe_id: Mapped[str] = mapped_column(String(40), index=True)
+    name: Mapped[str] = mapped_column(Text)
+    player_count: Mapped[int] = mapped_column(Integer)
+    up_votes: Mapped[int] = mapped_column(Integer)
+    down_votes: Mapped[int] = mapped_column(Integer)
+    genre: Mapped[str] = mapped_column(String(80), index=True, default="")
+    sponsored: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 APPEND_ONLY = (
-    ResearchReport, AuditRecord, AuditActivityEvent,
+    ResearchReport, AuditRecord, AuditActivityEvent, MarketSample,
     SourceArtifact, Observation, Fact, Proposal, Inference,
     ScoreRecord, ConfidenceRecord, DecisionRecord, DecisionOverride,
     AssociationRecord, AssociationReview, AssociationOverride, MatcherVersion,

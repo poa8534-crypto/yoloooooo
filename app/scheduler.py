@@ -13,6 +13,7 @@ from .connectors import ConnectorError, Connectors
 from .db import SessionLocal
 from .evidence import add_json_observation, create_fact, record_artifact
 from .models import Candidate, SystemState, TrackedVideo
+from .market_pulse import sample_market
 
 
 async def snapshot_all(connectors: Connectors | None = None) -> dict[str, int]:
@@ -129,6 +130,20 @@ def start_scheduler() -> AsyncIOScheduler:
         coalesce=True,
         misfire_grace_time=86_400,
     )
+    if settings.roblox_charts_enabled:
+        # Far more often than the daily snapshot: a shelf called Up-and-Coming
+        # turns over within a day, so sampling it daily would record the
+        # survivors and miss the rise that made them interesting.
+        scheduler.add_job(
+            sample_market,
+            trigger="interval",
+            minutes=settings.market_sample_minutes,
+            id="market_pulse_sample",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=settings.market_sample_minutes * 60,
+        )
     scheduler.start()
     return scheduler
 

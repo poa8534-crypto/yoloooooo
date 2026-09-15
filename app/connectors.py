@@ -197,6 +197,26 @@ class Connectors:
             params={"searchQuery": query, "pageToken": "", "sessionId": "venture-agents"},
         ))
 
+    async def roblox_explore_sorts(self) -> ConnectorResult:
+        """Roblox's own front page: a census of what is being played right now.
+
+        Answers with several ranked shelves -- Top Trending, Up-and-Coming,
+        Top Playing Now, Top Revisited -- and for each game the live player
+        count, up and down votes, and genre. First-party, no key, and it is
+        the only source here that reports the whole market rather than the
+        games a query happened to surface.
+
+        Undocumented, like omni-search, so the shape is not guaranteed. A
+        sample that cannot be read is recorded as a failed sample; nothing
+        downstream treats a missing shelf as a shelf with nothing in it.
+        """
+        if not self.settings.roblox_charts_enabled:
+            raise ConnectorError("Roblox charts sampling is disabled")
+        return await self._json(
+            "GET", "https://apis.roblox.com/explore-api/v1/get-sorts",
+            params={"sessionId": "venture-agents", "sortsPageToken": ""},
+        )
+
     async def universe_for_place(self, place_id: str) -> ConnectorResult:
         return await self._json(
             "GET", f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
