@@ -27,7 +27,13 @@ class Settings(BaseSettings):
     ollama_primary_model: str = "qwen3:14b"
     ollama_fallback_model: str = "qwen3:8b"
     ollama_context: int = 16_384
-    ollama_timeout_seconds: float = 180.0
+    # A Venture Scout audit reasons, drafts, critiques its own draft and
+    # revises it. That is several minutes of local inference per pass, so the
+    # per-request timeout is generous on purpose; the run budget, not this
+    # value, is what stops a run from overspending.
+    ollama_timeout_seconds: float = 600.0
+    ollama_think: bool = True
+    scout_deliberation_passes: int = Field(default=3, ge=1, le=3)
     snapshot_hour: int = 2
     snapshot_minute: int = 0
     timezone: str = "Asia/Kolkata"

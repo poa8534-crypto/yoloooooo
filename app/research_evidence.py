@@ -44,10 +44,21 @@ def measurement_entity(row):
     return "roblox"
 
 
+# Measurements read straight out of the Roblox API response that named the
+# universe. Everything else -- a scraped page, a YouTube video -- is a claim
+# about this experience made somewhere else, and has to resolve through an
+# approved association before anything downstream may trust it. New metrics
+# are external until this set says otherwise, so the default is to refuse.
+FIRST_PARTY_METRICS = frozenset({
+    "roblox_name", "roblox_playing", "roblox_visits",
+    "roblox_favorites", "roblox_updated", "roblox_description",
+})
+
+
 def admissible_observation(db, row):
     if not row.artifact or row.artifact.is_discovery_only:
         return False
-    if row.metric.startswith("youtube"):
+    if row.metric not in FIRST_PARTY_METRICS:
         association = db.get(AssociationRecord, row.association_id) if row.association_id else None
         if not association or not is_association_usable(db, association):
             return False
@@ -116,21 +127,39 @@ def audit_readiness(db, candidate_id, proposal_id=None):
     conflicts = sorted({metric for cid in canonical_candidate_ids(db, candidate_id) for metric in evidence_conflicts(db, cid)})
     rows = list(db.scalars(select(Observation).where(Observation.candidate_id.in_(canonical_candidate_ids(db, candidate_id)))))
     # Broken source bytes block audits, even when filtered out of the packet.
-    broken = [row for row in rows if not row.metric.startswith("youtube") and not admissible_observation(db, row)]
-    external = [row for row in rows if row.metric.startswith("youtube")]
+    # Classified by the same rule the admissibility gate uses, so a claim that
+    # merely lacks an approved association is reported as unresolved rather
+    # than as corrupted first-party bytes.
+    broken = [row for row in rows if row.metric in FIRST_PARTY_METRICS and not admissible_observation(db, row)]
+    external = [row for row in rows if row.metric not in FIRST_PARTY_METRICS]
     unresolved = [row for row in external if not admissible_observation(db, row)]
     proposal = db.get(Proposal, proposal_id) if proposal_id else db.scalar(select(Proposal).where(
         Proposal.candidate_id == candidate_id, Proposal.agent == "meta_hunter").order_by(Proposal.created_at.desc()))
     valid_proposal = proposal is not None and proposal.candidate_id == candidate_id and proposal.agent == "meta_hunter"
     def gate(label, state, detail):
         return AuditGate(label=label, state=state, passed=state == "pass", detail=detail)
+    # A Hunter proposal narrows the audit to critiquing that exact design. Its
+    # absence is not a failure: Scout then analyses the captured evidence
+    # directly, which is the only way most candidates ever get a brief -- Hunter
+    # only writes proposals for the handful of candidates a run selects.
+    if proposal_id and not valid_proposal:
+        hunter_gate = gate("Selected Hunter proposal", "fail",
+                           "The requested proposal does not belong to this candidate")
+    elif valid_proposal:
+        hunter_gate = gate("Selected Hunter proposal", "pass",
+                           "Audit is bound to the selected proposal version")
+    else:
+        hunter_gate = gate("Selected Hunter proposal", "not_applicable",
+                           "No Hunter proposal; Scout analyses the captured evidence directly")
     gates = [
         gate("Required Roblox facts", "pass" if required <= metrics else "missing", ", ".join(sorted(required - metrics)) or "Name, CCU and visits available"),
         gate("Evidence integrity", "fail" if broken else ("pass" if packet else "missing"), f"{len(broken)} broken observation(s)"),
         gate("Evidence freshness", "pass" if packet and all(p["freshness"] == "fresh" for p in packet) else "missing", "Latest measurements must be within 48 hours"),
         gate("Conflicts", "fail" if conflicts else ("pass" if packet else "missing"), ", ".join(conflicts) or "No detected metric conflict"),
-        gate("External associations", "fail" if unresolved else ("pass" if external else "not_applicable"), "Roblox-only scope; creator evidence unavailable" if not external else f"{len(unresolved)} unresolved observation(s)"),
-        gate("Selected Hunter proposal", "pass" if valid_proposal else "missing", "Audit is bound to the selected proposal version"),
+        gate("External associations", "fail" if unresolved else ("pass" if external else "not_applicable"),
+             "Roblox-only scope; no external claim captured" if not external
+             else f"{len(unresolved)} of {len(external)} external claim(s) resolve to no approved association"),
+        hunter_gate,
     ]
     return AuditReadiness(candidate_id=candidate_id, ready=all(g.state in {"pass", "not_applicable"} for g in gates), gates=gates)
 

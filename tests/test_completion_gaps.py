@@ -57,7 +57,11 @@ async def test_deep_decode_schema_requires_supplied_citation(settings):
 async def test_complete_scout_schema_and_citation_are_accepted(settings):
     fid = "00000000-0000-0000-0000-000000000001"
     payload = {**VALID, "supporting_fact_ids": [fid], "essential_features": ["Planting"],
-               "excluded_features": ["Trading"], "dependencies": ["Studio"], "validation_tasks": ["Playtest the loop"]}
+               "excluded_features": ["Trading"], "dependencies": ["Studio"], "validation_tasks": ["Playtest the loop"],
+               "executive_summary": "A cooperative planting loop that a solo beginner can finish, "
+                                    "scoped down to one shared plot and one harvest cycle.",
+               "opportunity_gap": "Nothing captured here shows whether shared plots hold players, "
+                                  "so the gap is a hypothesis to test rather than a finding."}
     client = OllamaProposalClient(settings, httpx.AsyncClient(transport=httpx.MockTransport(
         lambda r: httpx.Response(200, json={"message": {"content": json.dumps(payload)}}))))
     result = await client.generate(agent="Venture Scout", niche="farming", sourced_name="garden", fact_ids=[fid], require_citations=True)

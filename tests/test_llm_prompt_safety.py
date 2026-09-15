@@ -48,6 +48,10 @@ def _client(handler) -> OllamaProposalClient:
         ollama_fallback_model="fallback",
         ollama_context=1024,
         ollama_timeout_seconds=5.0,
+        ollama_think=False,
+        # One pass: these tests pin single-completion behaviour. Deliberation
+        # has its own tests.
+        scout_deliberation_passes=1,
     )
     return OllamaProposalClient(
         settings=settings,

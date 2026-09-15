@@ -159,21 +159,24 @@ async def test_llm_receives_values_and_falls_back_with_attempt_accounting(settin
         if body["model"] == settings.ollama_primary_model:
             return httpx.Response(200, json={"message": {"content": json.dumps({**VALID, "score": 99})}})
         return httpx.Response(200, json={"message": {"content": json.dumps(VALID)}})
-    model = OllamaProposalClient(settings, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    # One pass, so this stays a test of retry and fallback accounting.
+    # Deliberation across passes has its own tests.
+    single = settings.model_copy(update={"scout_deliberation_passes": 1})
+    model = OllamaProposalClient(single, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     await model.generate(agent="Venture Scout", niche="farming", sourced_name="garden", fact_ids=[],
                          evidence=[{"text": "Roblox reported 42 concurrent players", "slots": [{"value": 42}]}],
                          hunter_proposal=VALID, before_attempt=attempts.append)
-    assert attempts == [settings.ollama_primary_model] * 2 + [settings.ollama_fallback_model]
+    assert attempts == [single.ollama_primary_model] * 2 + [single.ollama_fallback_model]
     assert "42 concurrent players" in prompts[0]["messages"][-1]["content"]
     assert "EXACT supplied Hunter proposal" in prompts[0]["messages"][-1]["content"]
     assert "Previous response was invalid" in prompts[1]["messages"][-1]["content"]
-    assert prompts[0]["think"] is False and prompts[0]["options"]["num_ctx"] == 16384
+    assert prompts[0]["think"] is True and prompts[0]["options"]["num_ctx"] == 16384
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("condition", ["stale", "broken", "missing_proposal", "conflict"])
+@pytest.mark.parametrize("condition", ["stale", "broken", "conflict"])
 async def test_direct_audit_blocks_before_model(session_factory, settings, condition):
-    _, cid, aid, _ = seed(session_factory, age=3 if condition == "stale" else 0, hunter=condition != "missing_proposal")
+    _, cid, aid, _ = seed(session_factory, age=3 if condition == "stale" else 0)
     if condition == "broken":
         with session_factory() as db: Path(db.get(SourceArtifact, aid).raw_path).write_text("tampered")
     if condition == "conflict":

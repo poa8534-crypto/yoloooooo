@@ -29,28 +29,35 @@ class DesignAssumption(StrictModel):
 
 
 class ProposalPayload(StrictModel):
+    # Prose limits are generous because a Venture Scout audit is meant to read
+    # like an analyst brief, not a caption. The firewall that matters is the
+    # validator below, which refuses URLs and metric-like claims at any length.
     concept_title: str = Field(min_length=3, max_length=100)
-    core_loop: str = Field(min_length=10, max_length=500)
-    differentiator: str = Field(min_length=10, max_length=500)
-    build_steps: list[str] = Field(min_length=1, max_length=8)
-    risks: list[str] = Field(min_length=1, max_length=8)
-    questions: list[str] = Field(default_factory=list, max_length=8)
+    core_loop: str = Field(min_length=10, max_length=2000)
+    differentiator: str = Field(min_length=10, max_length=2000)
+    build_steps: list[str] = Field(min_length=1, max_length=12)
+    risks: list[str] = Field(min_length=1, max_length=12)
+    questions: list[str] = Field(default_factory=list, max_length=12)
     supporting_fact_ids: list[str] = Field(default_factory=list)
     design_assumptions: list[DesignAssumption] = Field(default_factory=list, max_length=8)
-    essential_features: list[str] = Field(default_factory=list, max_length=8)
-    excluded_features: list[str] = Field(default_factory=list, max_length=8)
-    dependencies: list[str] = Field(default_factory=list, max_length=8)
-    validation_tasks: list[str] = Field(default_factory=list, max_length=8)
-    counterevidence: list[str] = Field(default_factory=list, max_length=8)
+    essential_features: list[str] = Field(default_factory=list, max_length=12)
+    excluded_features: list[str] = Field(default_factory=list, max_length=12)
+    dependencies: list[str] = Field(default_factory=list, max_length=12)
+    validation_tasks: list[str] = Field(default_factory=list, max_length=12)
+    counterevidence: list[str] = Field(default_factory=list, max_length=12)
+    # Authored only by a Venture Scout audit; a Hunter concept leaves them empty.
+    executive_summary: str = Field(default="", max_length=2500)
+    opportunity_gap: str = Field(default="", max_length=2000)
+    competitive_notes: list[str] = Field(default_factory=list, max_length=12)
 
-    @field_validator("concept_title", "core_loop", "differentiator")
+    @field_validator("concept_title", "core_loop", "differentiator", "executive_summary", "opportunity_gap")
     @classmethod
     def no_untrusted_metrics(cls, value: str) -> str:
         if FORBIDDEN_PROPOSAL_TEXT.search(value):
             raise ValueError("proposal text may not contain URLs or metric-like claims")
         return value.strip()
 
-    @field_validator("build_steps", "risks", "questions", "essential_features", "excluded_features", "dependencies", "validation_tasks", "counterevidence")
+    @field_validator("build_steps", "risks", "questions", "essential_features", "excluded_features", "dependencies", "validation_tasks", "counterevidence", "competitive_notes")
     @classmethod
     def no_untrusted_metrics_in_lists(cls, values: list[str]) -> list[str]:
         if any(FORBIDDEN_PROPOSAL_TEXT.search(v) for v in values):
@@ -64,6 +71,27 @@ class ProposalPayload(StrictModel):
         for value in values:
             UUID(value)
         return values
+
+
+class AuditCritique(StrictModel):
+    """One deliberation pass: what is wrong with the draft the model just wrote.
+
+    Kept separate from `ProposalPayload` so the critique cannot be mistaken for
+    a proposal, and so a weak critique fails on its own terms rather than
+    silently producing a weak revision.
+    """
+
+    weaknesses: list[str] = Field(min_length=1, max_length=8)
+    missing_dependencies: list[str] = Field(default_factory=list, max_length=8)
+    scope_risks: list[str] = Field(default_factory=list, max_length=8)
+    unsupported_claims: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("weaknesses", "missing_dependencies", "scope_risks", "unsupported_claims")
+    @classmethod
+    def no_untrusted_metrics_in_lists(cls, values: list[str]) -> list[str]:
+        if any(FORBIDDEN_PROPOSAL_TEXT.search(v) for v in values):
+            raise ValueError("critique may not contain URLs or metric-like claims")
+        return [v.strip() for v in values]
 
 
 class OverrideCreate(StrictModel):

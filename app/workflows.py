@@ -16,6 +16,7 @@ from .association import (
 )
 from .association.materialize import apply_association
 from .calibration import current_features, load_artifact, score_features
+from .config import get_settings
 from .connectors import ConnectorError, Connectors, extract_roblox_place_ids
 from .evidence import (
     add_json_observation,
@@ -469,7 +470,14 @@ class ResearchOrchestrator:
                     kwargs["before_attempt"] = budget.model_attempt
                     generated = await asyncio.wait_for(self.llm.generate(**kwargs), timeout=budget.remaining)
                 else:
-                    generated = await asyncio.wait_for(self.llm.generate(**kwargs), timeout=180)
+                    # A manual audit is not inside a run budget, so it gets the
+                    # full deliberation allowance: every pass may take the whole
+                    # per-request timeout on a local model.
+                    settings = get_settings()
+                    generated = await asyncio.wait_for(
+                        self.llm.generate(**kwargs),
+                        timeout=settings.ollama_timeout_seconds * settings.scout_deliberation_passes,
+                    )
                 result["proposal"] = generated.payload.model_dump()
                 result["risks"] = generated.payload.risks
                 result["evidence_state"] = "source_backed_design_speculative"

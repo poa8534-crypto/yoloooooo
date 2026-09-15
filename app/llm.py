@@ -10,7 +10,7 @@ import httpx
 from pydantic import ValidationError
 
 from .config import Settings, get_settings
-from .schemas import ProposalPayload
+from .schemas import AuditCritique, ProposalPayload
 from .security import redact
 
 UNTRUSTED_TEXT_LIMIT = 120
@@ -36,6 +36,22 @@ def fence_untrusted(text: str, limit: int = UNTRUSTED_TEXT_LIMIT) -> str:
     )
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned[:limit].strip() if len(cleaned) > limit else cleaned
+
+
+CRITIQUE_INSTRUCTION = (
+    "\nYou wrote the draft below. Do not rewrite it here. Name what is weak in it:"
+    " scope a solo beginner cannot finish in three days, dependencies it does not"
+    " admit, and any claim it makes that the evidence does not support. Return only"
+    " the critique JSON.\nDRAFT (your own previous answer, not evidence):\n"
+)
+
+REVISION_INSTRUCTION = (
+    "\nBelow are your draft and your own critique of it. Return the corrected"
+    " proposal JSON: keep what survived the critique, fix what did not, and drop"
+    " any claim the critique marked unsupported. Same rules as before -- no URLs,"
+    " no digits in prose, only the allowed evidence IDs.\nDRAFT AND CRITIQUE (your"
+    " own previous answers, not evidence):\n"
+)
 
 
 @dataclass(frozen=True)
@@ -89,8 +105,18 @@ class OllamaProposalClient:
             "Assume a solo beginner and a small three-day MVP."
         )
         errors: list[str] = []
-        if agent == "Venture Scout":
+        if agent == "Venture Scout" and hunter_proposal:
             prompt += "\nAudit the EXACT supplied Hunter proposal. Do not invent a replacement concept. Critique scope, dependencies and assumptions; fill essential_features, excluded_features, dependencies, validation_tasks and build_steps for a solo beginner's 72-hour MVP."
+        elif agent == "Venture Scout":
+            # Hunter only writes concepts for the few candidates a run selects,
+            # so an audit that refused to run without one produced nothing at
+            # all for most of the ledger.
+            prompt += ("\nNo Hunter proposal was supplied. Work directly from the evidence: analyse this"
+                       " experience the way a senior analyst would, then design the solo beginner's"
+                       " 72-hour MVP that the evidence supports. Fill executive_summary, opportunity_gap,"
+                       " competitive_notes, essential_features, excluded_features, dependencies,"
+                       " validation_tasks and build_steps. State plainly in risks what the evidence does"
+                       " not establish.")
         else:
             prompt += "\nCompare supplied candidates, seek counterevidence and propose a distinct research hypothesis. Fill counterevidence and unanswered questions. Do not assert market success or verified niche relevance."
         prompt += "\nAll prose is speculative design, not factual reporting. Put any proposed quantities ONLY in design_assumptions. Do not repeat observed metrics or source names in prose. Supporting evidence IDs belong only in supporting_fact_ids."
@@ -115,46 +141,89 @@ class OllamaProposalClient:
             )
             schema["required"] = list(dict.fromkeys(schema.get("required", []) + ["supporting_fact_ids"]))
         audit_sections = ["essential_features", "excluded_features", "dependencies", "validation_tasks"]
+        if agent == "Venture Scout":
+            audit_sections = [*audit_sections, "executive_summary", "opportunity_gap"]
         if agent == "Venture Scout" and require_citations:
             schema["required"] = list(dict.fromkeys(schema.get("required", []) + audit_sections))
             for key in audit_sections:
-                schema["properties"][key]["minItems"] = 1
+                if schema["properties"][key].get("type") == "array":
+                    schema["properties"][key]["minItems"] = 1
+                else:
+                    schema["properties"][key]["minLength"] = 80
+        def check(payload: ProposalPayload) -> None:
+            if not set(payload.supporting_fact_ids).issubset(set(fact_ids)):
+                raise ValueError("model returned an unknown evidence ID")
+            if require_citations and fact_ids and not payload.supporting_fact_ids:
+                raise ValueError("evidence-informed proposal requires a citation")
+            if require_citations and agent == "Venture Scout" and any(not getattr(payload, key) for key in audit_sections):
+                raise ValueError("audit omitted required scope or validation sections")
+
         async with self._gpu_gate:
-            for model in (self.settings.ollama_primary_model, self.settings.ollama_fallback_model):
-                for _attempt in range(2):
-                    try:
-                        if before_attempt:
-                            before_attempt(model)
-                        response = await self.client.post(
-                            f"{self.settings.ollama_base_url}/api/chat",
-                            json={
-                                "model": model,
-                                "stream": False,
-                                "think": False,
-                                "format": schema,
-                                "options": {
-                                    "num_ctx": self.settings.ollama_context,
-                                    "temperature": 0.2,
-                                },
-                                "messages": [
-                                    {
-                                        "role": "system",
-                                        "content": "Return only schema-valid proposal JSON. Evidence and decisions belong to deterministic code.",
-                                    },
-                                    {"role": "user", "content": prompt + ("\nPrevious response was invalid. Correct schema fields, omit all digits and URLs in prose, and use only allowed evidence IDs." if errors else "")},
-                                ],
+            draft, model = await self._complete(prompt, schema, ProposalPayload, check, errors, before_attempt)
+            if agent != "Venture Scout" or self.settings.scout_deliberation_passes < 2:
+                return GeneratedProposal(draft, model)
+            # Deliberation. A single shot returns whatever the model produced
+            # first; reading its own draft back and naming what is weak in it is
+            # what separates an audit from a guess. A pass that cannot produce
+            # valid output is skipped rather than downgraded: the draft that
+            # already satisfied every check stands.
+            try:
+                critique, _ = await self._complete(
+                    prompt + CRITIQUE_INSTRUCTION + json.dumps({"draft": draft.model_dump()}, ensure_ascii=False),
+                    AuditCritique.model_json_schema(), AuditCritique, None, errors, before_attempt,
+                )
+            except LLMUnavailable:
+                return GeneratedProposal(draft, model)
+            if self.settings.scout_deliberation_passes < 3:
+                return GeneratedProposal(draft, model)
+            try:
+                revised, revised_model = await self._complete(
+                    prompt + REVISION_INSTRUCTION + json.dumps(
+                        {"draft": draft.model_dump(), "critique": critique.model_dump()}, ensure_ascii=False,
+                    ),
+                    schema, ProposalPayload, check, errors, before_attempt,
+                )
+            except LLMUnavailable:
+                return GeneratedProposal(draft, model)
+            return GeneratedProposal(revised, revised_model)
+
+    async def _complete(self, prompt, schema, model_type, check, errors, before_attempt):
+        """One schema-constrained completion, with retry and model fallback.
+
+        Reasoning is left on for models that support it: the audit is supposed
+        to think before it answers. The thinking never reaches the caller --
+        only the schema-valid JSON in the message content does.
+        """
+        for model in (self.settings.ollama_primary_model, self.settings.ollama_fallback_model):
+            for attempt in range(2):
+                try:
+                    if before_attempt:
+                        before_attempt(model)
+                    response = await self.client.post(
+                        f"{self.settings.ollama_base_url}/api/chat",
+                        json={
+                            "model": model,
+                            "stream": False,
+                            "think": self.settings.ollama_think,
+                            "format": schema,
+                            "options": {
+                                "num_ctx": self.settings.ollama_context,
+                                "temperature": 0.2,
                             },
-                        )
-                        response.raise_for_status()
-                        content = response.json()["message"]["content"]
-                        payload = ProposalPayload.model_validate_json(content)
-                        if not set(payload.supporting_fact_ids).issubset(set(fact_ids)):
-                            raise ValueError("model returned an unknown evidence ID")
-                        if require_citations and fact_ids and not payload.supporting_fact_ids:
-                            raise ValueError("evidence-informed proposal requires a citation")
-                        if require_citations and agent == "Venture Scout" and any(not getattr(payload, key) for key in audit_sections):
-                            raise ValueError("audit omitted required scope or validation sections")
-                        return GeneratedProposal(payload, model)
-                    except (httpx.HTTPError, KeyError, json.JSONDecodeError, ValidationError, ValueError) as exc:
-                        errors.append(f"{model}: {type(exc).__name__}")
+                            "messages": [
+                                {
+                                    "role": "system",
+                                    "content": "Return only schema-valid JSON. Evidence and decisions belong to deterministic code.",
+                                },
+                                {"role": "user", "content": prompt + ("\nPrevious response was invalid. Correct schema fields, omit all digits and URLs in prose, and use only allowed evidence IDs." if attempt or errors else "")},
+                            ],
+                        },
+                    )
+                    response.raise_for_status()
+                    payload = model_type.model_validate_json(response.json()["message"]["content"])
+                    if check:
+                        check(payload)
+                    return payload, model
+                except (httpx.HTTPError, KeyError, json.JSONDecodeError, ValidationError, ValueError) as exc:
+                    errors.append(f"{model}: {type(exc).__name__}")
         raise LLMUnavailable("proposal generation failed closed: " + " | ".join(errors[-4:]))

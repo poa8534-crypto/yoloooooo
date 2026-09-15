@@ -26,7 +26,9 @@ def _llm(payload, settings_obj) -> OllamaProposalClient:
         return httpx.Response(200, json={"message": {"content": json.dumps(payload)}})
 
     return OllamaProposalClient(
-        settings=settings_obj,
+        # One pass, so a rejection here is the validator talking and not a
+        # later deliberation pass quietly rescuing or replacing the answer.
+        settings=settings_obj.model_copy(update={"scout_deliberation_passes": 1}),
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
 
@@ -258,7 +260,8 @@ def test_the_check_survives_titles_with_no_usable_tokens():
 
 # --- 8. The audit must actually contain an audit ---------------------------
 
-SCOUT_SECTIONS = ("essential_features", "excluded_features", "dependencies", "validation_tasks")
+SCOUT_SECTIONS = ("essential_features", "excluded_features", "dependencies", "validation_tasks",
+                  "executive_summary", "opportunity_gap")
 
 
 def _scout_payload(**overrides) -> dict:
@@ -268,6 +271,10 @@ def _scout_payload(**overrides) -> dict:
         "excluded_features": ["Monetisation"],
         "dependencies": ["A single reusable interaction script"],
         "validation_tasks": ["Playtest the loop with two people"],
+        "executive_summary": "A shared objective board gives two players one thing to work on "
+                             "together, which is the smallest cooperative loop worth building first.",
+        "opportunity_gap": "The captured evidence shows what exists, not why players stay, so the "
+                           "cooperative angle remains an untested hypothesis rather than a gap.",
     }
     payload.update(overrides)
     return payload
@@ -282,7 +289,8 @@ async def test_a_scout_audit_missing_a_required_section_fails_closed(settings, m
     be deleted and the suite would stay green.
     """
     cited = str(uuid4())
-    payload = _scout_payload(supporting_fact_ids=[cited], **{missing: []})
+    empty = "" if isinstance(_scout_payload()[missing], str) else []
+    payload = _scout_payload(supporting_fact_ids=[cited], **{missing: empty})
     with pytest.raises(LLMUnavailable):
         await _llm(payload, settings).generate(
             agent="Venture Scout", niche="cozy farming",
