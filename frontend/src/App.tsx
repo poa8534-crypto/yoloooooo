@@ -517,6 +517,10 @@ function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Ca
   const [operation, setOperation] = useState<ScoutOperation>('analyze_game')
   const [readiness, setReadiness] = useState<AuditReadiness | null>(null)
   const [readinessError, setReadinessError] = useState('')
+  // An audit is written to the ledger, so a reload must bring it back. The Idea
+  // Panel already did this; leaving it out here meant the same result survived
+  // a refresh on one page and disappeared on the other.
+  const [stored, setStored] = useState<AuditResult | null>(null)
   // Only a candidate carrying a selected Meta Hunter proposal can be audited;
   // the rest fail the binding gate before the model is ever called. Default to
   // one that can actually run rather than to whichever loaded first.
@@ -534,6 +538,17 @@ function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Ca
       .catch(caught => { if (!cancelled) setReadinessError((caught as Error).message) })
     return () => { cancelled = true }
   }, [candidateId])
+
+  useEffect(() => {
+    let cancelled = false
+    setStored(null)
+    if (!candidateId) return
+    api<AuditResult>(`/api/candidates/${candidateId}/audit`)
+      .then(result => { if (!cancelled) setStored(result) })
+      .catch(() => { if (!cancelled) setStored(null) })
+    return () => { cancelled = true }
+  }, [candidateId, audit])
+  const shown = audit?.candidate_id === candidateId ? audit : stored
   return <section className="workspace"><div className="scout-guard"><div><strong>Venture Scout audit guardrail</strong><span>Fail-closed enforced</span></div><p>Scout does two different things. <strong>Analyze game</strong> works from the captured evidence alone and needs no Meta Hunter proposal. <strong>Audit idea</strong> critiques one exact Hunter proposal. Both are scoped to a solo beginner and a three-day MVP, and neither can invent facts or override a deterministic decision.</p></div>
     <div className="agent-columns"><article className="data-panel"><div className="panel-heading"><div><span>Solo MVP configuration</span><h2>Scout operation</h2></div></div>{candidates.length ? <><label>Operation<select value={operation} onChange={event => setOperation(event.target.value as ScoutOperation)}>
       <option value="analyze_game">Analyze game — from captured evidence alone</option>
@@ -546,7 +561,7 @@ function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Ca
           : readiness ? <><div className="audit-gates">{readiness.gates.map(gate => <div key={gate.label}><i />{gate.label}<small>{gate.detail}</small><Badge tone={gate.passed ? 'verified' : 'insufficient'}>{gate.state.replaceAll('_', ' ')}</Badge></div>)}</div>
             <div className="invariant-note"><span>Always-on pipeline invariants</span>{readiness.invariants.map(item => <div key={item.label}><b>{item.label}</b><small>{item.detail}</small></div>)}</div></>
           : <div className="drawer-loading">Checking gates…</div>}</article></div>
-    {audit?.candidate_id === candidateId && audit.proposal_id === candidate?.proposal_id && audit.proposal ? <div className="audit-output"><article className="data-panel"><div className="section-number">01</div><h2>{audit.proposal.concept_title}</h2><div className="classified proposal"><Badge tone="proposal">Model proposal</Badge><p>{audit.proposal.core_loop}</p></div><div className="classified inference"><Badge tone="inference">Differentiator</Badge><p>{audit.proposal.differentiator}</p></div></article><article className="data-panel"><div className="section-number">02</div><h2>72-hour milestone plan</h2><div className="milestone-grid">{audit.proposal.build_steps.map((step, index) => <div key={step}><span>Milestone {index + 1}</span><strong>{step}</strong><small>Human scope confirmation required</small></div>)}</div></article><article className="data-panel"><div className="section-number">03</div><h2>Risk and mitigation ledger</h2><div className="risk-list">{audit.proposal.risks.map(risk => <div key={risk}><Badge tone="proposal">Proposed risk</Badge><p>{risk}</p><span>Not a measured probability</span></div>)}</div></article></div> : audit?.candidate_id === candidateId ? <article className="data-panel"><div className="panel-heading"><div><span>Audit recorded without a model proposal</span><h2>Audit blocked</h2></div><Badge tone="insufficient">fail closed</Badge></div><p>The audit ran and was written to the ledger; the model was not asked for a design because the reasons below were not cleared.</p><div className="risk-list">{(audit.risks || []).map(risk => <div key={risk}><Badge tone="insufficient">Blocking reason</Badge><p>{risk}</p></div>)}</div></article> : <article className="data-panel"><EmptyState title="No Venture Scout result loaded">Pick an operation and a game, then run it. Analyze game needs only captured evidence; Audit idea needs that game's Hunter proposal. Invalid model output fails closed either way.</EmptyState></article>}
+    {shown?.proposal ? <div className="audit-output"><article className="data-panel"><div className="section-number">01</div><h2>{shown.proposal.concept_title}</h2><div className="classified proposal"><Badge tone="proposal">Model proposal</Badge><p>{shown.proposal.core_loop}</p></div><div className="classified inference"><Badge tone="inference">Differentiator</Badge><p>{shown.proposal.differentiator}</p></div></article><article className="data-panel"><div className="section-number">02</div><h2>72-hour milestone plan</h2><div className="milestone-grid">{shown.proposal.build_steps.map((step, index) => <div key={step}><span>Milestone {index + 1}</span><strong>{step}</strong><small>Human scope confirmation required</small></div>)}</div></article><article className="data-panel"><div className="section-number">03</div><h2>Risk and mitigation ledger</h2><div className="risk-list">{shown.proposal.risks.map(risk => <div key={risk}><Badge tone="proposal">Proposed risk</Badge><p>{risk}</p><span>Not a measured probability</span></div>)}</div></article></div> : shown ? <article className="data-panel"><div className="panel-heading"><div><span>Audit recorded without a model proposal</span><h2>Audit blocked</h2></div><Badge tone="insufficient">fail closed</Badge></div><p>The audit ran and was written to the ledger; the model was not asked for a design because the reasons below were not cleared.</p><div className="risk-list">{(shown.risks || []).map(risk => <div key={risk}><Badge tone="insufficient">Blocking reason</Badge><p>{risk}</p></div>)}</div></article> : <article className="data-panel"><EmptyState title="No Venture Scout result loaded">Pick an operation and a game, then run it. Analyze game needs only captured evidence; Audit idea needs that game's Hunter proposal. Invalid model output fails closed either way.</EmptyState></article>}
   </section>
 }
 

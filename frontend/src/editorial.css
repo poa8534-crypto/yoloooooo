@@ -121,3 +121,71 @@ label { text-transform: none; letter-spacing: 0; font-size: 14px; }
   .page-title h1 { font-size: 26px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+/* Responsive corrections.
+   This stylesheet loads after styles.css, so its nav rules were overriding the
+   icon-rail collapse there and the sidebar kept its full width on a narrow
+   screen: every page scrolled sideways below about 820px. Below that width the
+   shell becomes a single column and the navigation becomes a horizontal strip
+   above the content, which reads better at phone width than an icon rail. */
+@media (max-width: 820px) {
+  .app-shell { grid-template-columns: minmax(0, 1fr); }
+  .app-sidebar {
+    position: static; height: auto; padding: 10px 12px;
+    border-right: 0; border-bottom: 1px solid var(--line-sidebar);
+  }
+  .app-sidebar nav { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+  .nav-group { display: flex; gap: 8px; margin-top: 0; align-items: center; }
+  .nav-group > span { display: none; }
+  .nav-group button { font-size: 13px; padding: 7px 10px; min-height: 36px; white-space: nowrap; }
+  .brand { padding-inline: 0; }
+  .node-status, .sidebar-footer { display: none; }
+  .main, .page-title { padding-left: 14px; padding-right: 14px; }
+}
+
+@media (max-width: 540px) {
+  /* Tables stay readable by scrolling inside their own container, never by
+     widening the page. */
+  .table-scroll { overflow-x: auto; }
+  .history-row > header { padding: 14px; }
+  .brand strong { font-size: 15px; }
+}
+
+/* Banners and panels are flex rows that would not wrap, so their content
+   forced the page wider than the screen at tablet and phone widths. Nothing
+   here is allowed to set its own width larger than the column it sits in;
+   anything that genuinely needs more room scrolls inside its own container. */
+@media (max-width: 820px) {
+  .workspace, .main > * { min-width: 0; max-width: 100%; }
+  .agent-columns, .health-bottom, .module-grid, .dashboard-columns { grid-template-columns: minmax(0, 1fr); }
+  .engine-banner, .agent-boundary, .scout-guard, .keyring-banner,
+  .context-banner, .calibration-warning, .panel-heading, .section-intro,
+  .brief-toolbar, .history-toolbar, .audit-result-banner {
+    flex-wrap: wrap; align-items: flex-start; gap: 10px;
+  }
+  .data-panel, .article, article { min-width: 0; max-width: 100%; }
+  .data-panel > *, .workspace p, .workspace h2 { min-width: 0; overflow-wrap: anywhere; }
+  .evidence-badge { white-space: normal; }
+}
+
+/* `1fr` leaves the track's minimum at `auto`, so a wide child can still force
+   the column past the container. `minmax(0, 1fr)` is what actually lets these
+   collapse. */
+@media (max-width: 1180px) {
+  .dashboard-columns, .agent-columns, .calibration-grid, .brief-layout, .review-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* The container itself needs it too: a grid item defaults to min-width auto,
+     so a wide child pushed the whole grid past its parent. */
+  .agent-columns, .dashboard-columns, .calibration-grid, .brief-layout, .review-layout,
+  .agent-columns > *, .dashboard-columns > *, .calibration-grid > * { min-width: 0; }
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .form-grid input, .form-grid select, .search-input { min-width: 0; width: 100%; }
+}
+
+/* `.workspace` is a grid with no declared columns, so its single implicit
+   track is sized `auto` -- whose minimum is min-content. A wide child (a form
+   input, a long table row) therefore stretched the track past the container
+   and the whole page scrolled sideways. Capping the track is the fix, and it
+   is correct at every width, not just narrow ones. */
+.workspace { grid-template-columns: minmax(0, 1fr); }

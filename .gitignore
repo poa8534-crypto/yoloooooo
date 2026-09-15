@@ -8,3 +8,7 @@ frontend/dist/
 *.pyc
 
 *.tsbuildinfo
+
+# Playwright artifacts
+frontend/test-results/
+frontend/playwright-report/
