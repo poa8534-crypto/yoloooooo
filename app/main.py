@@ -28,6 +28,7 @@ from .db import SessionLocal, get_db, init_db
 from .evidence import fact_freshness, render_fact
 from .matching import DEFAULT_EMBEDDING_MODEL
 from . import pillars as pillars_module
+from . import scout_queue
 from .research_budget import utc as budget_utc
 from .models import (
     AssociationRecord,
@@ -78,6 +79,7 @@ from .schemas import (
     ProposalPayload,
     ResearchRunCreate,
     RunView,
+    ScoutQueueRun,
 )
 from .security import RedactedResponses, install_log_redaction, sanitize_url
 from .workflows import ResearchOrchestrator
@@ -307,6 +309,72 @@ async def start_audit_job(candidate_id: str, operation: str, proposal_id: str | 
         raise HTTPException(409, str(exc))
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+
+
+def _busy_candidates() -> set[str]:
+    """Games with a Scout job already in flight, from the job store itself."""
+    jobs = getattr(app.state, "audit_jobs", None)
+    if jobs is None:
+        return set()
+    busy = set()
+    with SessionLocal() as db:
+        for row in db.scalars(select(SystemState).where(SystemState.key.like("audit-job:%"))):
+            job = row.value_json
+            if job.get("status") in ACTIVE_AUDIT_STATES:
+                busy.add(job.get("candidate_id"))
+    return busy
+
+
+@app.get("/api/scout/queue")
+def scout_queue_view(db: Session = Depends(get_db)):
+    """Every Hunter concept routed to the Scout and still waiting.
+
+    Routing is automatic and running is not, so this reports what *would* run
+    and leaves the decision alone. The count is what the run button shows.
+    """
+    rows = scout_queue.pending(db, active_candidates=_busy_candidates())
+    runnable = [row for row in rows if row["available"]]
+    return {
+        "queued": rows,
+        "runnable": len(runnable),
+        "blocked": len(rows) - len(runnable),
+        "note": "Hunter concepts reach this queue on their own. Nothing runs "
+                "until you start it: each audit spends several minutes of the "
+                "local model, and the model runs one request at a time.",
+    }
+
+
+@app.post("/api/scout/queue/run", status_code=202)
+async def run_scout_queue(selection: ScoutQueueRun, db: Session = Depends(get_db)):
+    """Start one Scout audit per selected concept.
+
+    Every job is started now and they serialize behind the model's own gate,
+    so this returns immediately with the jobs to follow rather than holding a
+    request open for what can be half an hour of work.
+
+    A selection that cannot run is reported per concept. One unstartable
+    concept does not cancel the others: the caller asked for the set, and
+    silently dropping part of it would leave them waiting for a result that
+    was never going to come.
+    """
+    started, skipped = [], []
+    known = {row["proposal_id"]: row for row in scout_queue.pending(db)}
+    for proposal_id in dict.fromkeys(selection.proposal_ids):
+        entry = known.get(proposal_id)
+        if entry is None:
+            skipped.append({"proposal_id": proposal_id,
+                            "reason": "Not in the queue; it may already be audited"})
+            continue
+        try:
+            started.append(app.state.audit_jobs.start(entry["candidate_id"], "audit_idea", proposal_id))
+        except (JobConflict, ValueError, KeyError) as exc:
+            skipped.append({"proposal_id": proposal_id, "reason": str(exc) or "Could not start"})
+    return {"started": started, "skipped": skipped}
+
+
+@app.get("/api/scout/results")
+def scout_results(limit: int = 60, db: Session = Depends(get_db)):
+    return {"cards": scout_queue.audited(db, limit=limit)}
 
 
 @app.get("/api/audit-jobs/{job_id}")

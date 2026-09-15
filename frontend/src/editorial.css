@@ -226,3 +226,31 @@ label { text-transform: none; letter-spacing: 0; font-size: 14px; }
 .pillar.unmeasured > small { color: #80868b; font-style: italic; }
 @media (max-width: 1100px) { .pillar-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .pillar-grid { grid-template-columns: 1fr; } }
+
+/* The audit queue and its results. Cards scroll sideways on purpose: the set
+   is meant to be compared against itself, and stacking them vertically turns
+   a comparison into scrolling. */
+.queue-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 4px 0 8px; }
+.queue-actions small { color: #5f6368; }
+.queue-progress { margin-top: 14px; padding: 14px 16px; border: 1px solid #dadce0; border-radius: 6px; background: #f8f9fa; }
+.queue-progress p { margin: 6px 0 0; font-size: 13px; color: #5f6368; }
+.queue-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid #ecedef; cursor: pointer; }
+.queue-row input { margin-top: 3px; flex: 0 0 auto; }
+.queue-row strong { display: block; font: 600 14px/1.4 system-ui, sans-serif; }
+.queue-row small { display: block; color: #5f6368; font-size: 12px; line-height: 1.5; }
+.queue-row.unavailable { opacity: .55; cursor: not-allowed; }
+.queue-row .blocked-note { color: #b06000; }
+.drawer-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid #dadce0; }
+
+.card-strip { display: flex; gap: 16px; overflow-x: auto; padding: 4px 2px 14px; scroll-snap-type: x proximity; }
+.concept-card { flex: 0 0 300px; scroll-snap-align: start; text-align: left; display: flex; flex-direction: column;
+  gap: 8px; padding: 18px; border: 1px solid #dadce0; border-radius: 8px; background: #fff; cursor: pointer;
+  font: inherit; min-height: 190px; }
+.concept-card:hover { border-color: #9aa0a6; box-shadow: 0 1px 4px rgba(32,33,36,.12); }
+.concept-card-niche { font: 500 11px/1.4 system-ui, sans-serif; color: #5f6368; text-transform: none; }
+.concept-card > strong { font: 600 16px/1.35 system-ui, sans-serif; color: #202124; }
+.concept-card > p { margin: 0; font-size: 13px; line-height: 1.5; color: #3c4043;
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.concept-card-footer { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.concept-card-footer small { color: #5f6368; font-size: 12px; }
+@media (max-width: 760px) { .concept-card { flex-basis: 84%; } }

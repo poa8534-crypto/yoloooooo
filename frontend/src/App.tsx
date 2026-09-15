@@ -770,6 +770,196 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
   </section>
 }
 
+type QueuedConcept = {
+  proposal_id: string; candidate_id: string; universe_id: string; game_name: string
+  concept_title: string; core_loop: string; niche: string; created_at: string
+  facts: number; available: boolean; unavailable_reason: string
+}
+type ScoutQueue = { queued: QueuedConcept[]; runnable: number; blocked: number; note: string }
+type ResultCard = {
+  audit_id: string; candidate_id: string; proposal_id: string | null; universe_id: string
+  niche: string; concept_title: string; core_loop: string; evidence_state: string
+  risks: number; cited_facts: number; created_at: string
+}
+
+function ScoutQueuePanel({ queue, chosen, onToggle, onClose, onRun, busy }: {
+  queue: QueuedConcept[]; chosen: Set<string>; onToggle: (id: string) => void
+  onClose: () => void; onRun: () => void; busy: boolean
+}) {
+  const runnable = queue.filter(entry => entry.available)
+  return <div className="drawer-scrim open" onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
+    <aside role="dialog" aria-modal="true" aria-label="Choose which concepts to audit" className="evidence-drawer">
+      <header><div><span>Routed from Meta Hunter</span><strong>{runnable.length} concept(s) selected</strong></div>
+        <button aria-label="Close selection" onClick={onClose}>×</button></header>
+      <div className="drawer-body">
+        <p>Every Hunter concept arrives here on its own. Clear the ones you do not
+          want and the rest run in order — the local model takes one at a time.</p>
+        {queue.map(entry => <label key={entry.proposal_id}
+          className={entry.available ? 'queue-row' : 'queue-row unavailable'}>
+          <input type="checkbox" checked={chosen.has(entry.proposal_id)} disabled={!entry.available}
+            onChange={() => onToggle(entry.proposal_id)} />
+          <div><strong>{entry.concept_title}</strong>
+            <small>{entry.game_name} · {entry.niche || 'no niche recorded'} · {entry.facts} admissible fact(s)</small>
+            {!entry.available && <small className="blocked-note">{entry.unavailable_reason}</small>}</div>
+        </label>)}
+        {!queue.length && <EmptyState title="Nothing waiting">Run Meta Hunter and its concepts appear here.</EmptyState>}
+      </div>
+      <div className="drawer-actions">
+        <button className="text-button" onClick={onClose}>Cancel</button>
+        <button className="primary" disabled={busy || !chosen.size} onClick={onRun}>
+          {busy ? 'Starting…' : `Yes, run ${chosen.size}`}</button>
+      </div>
+    </aside></div>
+}
+
+function ResultDetail({ card, onClose }: { card: ResultCard; onClose: () => void }) {
+  const [audit, setAudit] = useState<AuditResult | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    api<AuditResult>(`/api/audits/${card.audit_id}`)
+      .then(result => { if (!cancelled) setAudit(result) })
+      .catch(caught => { if (!cancelled) setError((caught as Error).message) })
+    return () => { cancelled = true }
+  }, [card.audit_id])
+  return <div className="drawer-scrim open" onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
+    <aside role="dialog" aria-modal="true" aria-label={card.concept_title} className="evidence-drawer">
+      <header><div><span>{card.niche || 'Audited concept'}</span><strong>{card.concept_title}</strong></div>
+        <button aria-label="Close concept" onClick={onClose}>×</button></header>
+      <div className="drawer-body">
+        {error && <div className="warning-box"><p>{error}</p></div>}
+        {!audit && !error && <div className="drawer-loading">Reading the audit…</div>}
+        {audit && <>
+          <Badge tone={audit.evidence_state === 'source_backed' ? 'verified' : 'insufficient'}>
+            {(audit.evidence_state || 'unknown').replaceAll('_', ' ')}</Badge>
+          {audit.proposal && <>
+            <section><h2>Core loop</h2><p>{audit.proposal.core_loop}</p></section>
+            <section><h2>Differentiator</h2><p>{audit.proposal.differentiator}</p></section>
+            <section><h2>Build steps</h2><ol>{audit.proposal.build_steps.map((step, index) =>
+              <li key={index}>{step}</li>)}</ol></section>
+          </>}
+          <section><h2>Risks</h2>{audit.risks?.length
+            ? <ul>{audit.risks.map((risk, index) => <li key={index}>{risk}</li>)}</ul>
+            : <p>None recorded.</p>}</section>
+          <dl><dt>Universe</dt><dd><code>{card.universe_id}</code></dd>
+            <dt>Audited</dt><dd>{formatDate(card.created_at)}</dd>
+            <dt>Audit record</dt><dd><code>{card.audit_id}</code></dd></dl>
+          <p><a href={`/api/audits/${card.audit_id}`} target="_blank" rel="noreferrer">Persistent audit record</a></p>
+        </>}
+      </div></aside></div>
+}
+
+function ResultStrip({ cards, onOpen }: { cards: ResultCard[]; onOpen: (card: ResultCard) => void }) {
+  if (!cards.length) return <EmptyState title="No audited concepts yet">Run the queue and the finished briefs appear here.</EmptyState>
+  return <div className="card-strip" role="list" aria-label="Audited concepts">
+    {cards.map(card => <button key={card.audit_id} role="listitem" className="concept-card"
+      onClick={() => onOpen(card)}>
+      <span className="concept-card-niche">{card.niche || 'Audited concept'}</span>
+      <strong>{card.concept_title}</strong>
+      <p>{card.core_loop}</p>
+      <div className="concept-card-footer">
+        <Badge tone={card.evidence_state === 'source_backed' ? 'verified' : 'insufficient'}>
+          {card.evidence_state.replaceAll('_', ' ')}</Badge>
+        <small>{card.cited_facts} cited · {card.risks} risk(s)</small>
+      </div>
+    </button>)}
+  </div>
+}
+
+function ScoutQueueSection() {
+  const [queue, setQueue] = useState<ScoutQueue | null>(null)
+  const [cards, setCards] = useState<ResultCard[]>([])
+  const [chosen, setChosen] = useState<Set<string>>(new Set())
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [detail, setDetail] = useState<ResultCard | null>(null)
+  const [jobs, setJobs] = useState<AuditJob[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    try {
+      const [next, results] = await Promise.all([
+        api<ScoutQueue>('/api/scout/queue'),
+        api<{ cards: ResultCard[] }>('/api/scout/results'),
+      ])
+      setQueue(next); setCards(results.cards); setError('')
+      // Everything routed is selected by default; the panel is for removing,
+      // not for opting in. A concept the operator already cleared stays
+      // cleared across refreshes.
+      setChosen(previous => previous.size || !next.queued.length
+        ? previous
+        : new Set(next.queued.filter(entry => entry.available).map(entry => entry.proposal_id)))
+    } catch (caught) { setError((caught as Error).message) }
+  }, [])
+  useEffect(() => { load() }, [load])
+
+  const active = jobs.filter(job => JOB_ACTIVE.includes(job.status))
+  useEffect(() => {
+    if (!active.length) return
+    const timer = window.setInterval(async () => {
+      const next = await Promise.all(jobs.map(job =>
+        api<AuditJob>(`/api/audit-jobs/${job.id}`).catch(() => job)))
+      setJobs(next)
+      if (!next.some(job => JOB_ACTIVE.includes(job.status))) load()
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [jobs, active.length, load])
+
+  async function run() {
+    setBusy(true); setError('')
+    try {
+      const response = await api<{ started: AuditJob[]; skipped: Array<{ proposal_id: string; reason: string }> }>(
+        '/api/scout/queue/run', { method: 'POST', body: JSON.stringify({ proposal_ids: [...chosen] }) })
+      setJobs(response.started)
+      setPanelOpen(false)
+      if (response.skipped.length) {
+        setError(`${response.skipped.length} could not start: ${response.skipped.map(entry => entry.reason).join('; ')}`)
+      }
+      await load()
+    } catch (caught) { setError((caught as Error).message) } finally { setBusy(false) }
+  }
+
+  const selectable = queue?.queued.filter(entry => entry.available) || []
+  const selected = selectable.filter(entry => chosen.has(entry.proposal_id)).length
+  const done = jobs.filter(job => !JOB_ACTIVE.includes(job.status)).length
+  return <>
+    <article className="data-panel"><div className="panel-heading"><div>
+      <span>Routed automatically from Meta Hunter</span><h2>Audit queue</h2></div>
+      <Badge tone={selected ? 'proposal' : 'insufficient'}>{selected} selected</Badge></div>
+      <p className="body-copy">{queue?.note}</p>
+      {error && <div className="warning-box"><p>{error}</p></div>}
+      <div className="queue-actions">
+        <button className="primary" disabled={busy || !selected || !!active.length} onClick={run}>
+          {active.length ? 'Running…' : `Yes, run ${selected} idea${selected === 1 ? '' : 's'}`}</button>
+        <button className="secondary" disabled={!queue?.queued.length} onClick={() => setPanelOpen(true)}>
+          Choose which to run</button>
+        {!!queue?.blocked && <small>{queue.blocked} cannot run yet</small>}
+      </div>
+      {!!jobs.length && <div className="queue-progress">
+        <strong>{done} of {jobs.length} finished</strong>
+        <small>The model takes one audit at a time; the rest are queued behind it.</small>
+        {jobs.map(job => <p key={job.id}><code>{job.id.slice(0, 8)}</code> — {job.status}
+          {job.error ? ` · ${job.error}` : ''}</p>)}
+      </div>}
+    </article>
+
+    <article className="data-panel"><div className="panel-heading"><div>
+      <span>Scroll sideways; open one for the full brief</span><h2>Audited concepts</h2></div>
+      <Badge>{cards.length}</Badge></div>
+      <ResultStrip cards={cards} onOpen={setDetail} />
+    </article>
+
+    {panelOpen && queue && <ScoutQueuePanel queue={queue.queued} chosen={chosen} busy={busy}
+      onToggle={id => setChosen(previous => {
+        const next = new Set(previous)
+        if (!next.delete(id)) next.add(id)
+        return next
+      })}
+      onClose={() => setPanelOpen(false)} onRun={run} />}
+    {detail && <ResultDetail card={detail} onClose={() => setDetail(null)} />}
+  </>
+}
+
 function VentureScoutPage({ candidates }: { candidates: Candidate[] }) {
   const [candidateId, setCandidateId] = useState(candidates[0]?.id || '')
   const [operation, setOperation] = useState<ScoutOperation>('analyze_game')
@@ -797,6 +987,7 @@ function VentureScoutPage({ candidates }: { candidates: Candidate[] }) {
   const startJob = () => start(operation, candidate?.proposal_id)
   const cancelJob = cancel
   return <section className="workspace">
+    <ScoutQueueSection />
     <BackgroundWorkDrawer job={job} events={job?.events || []} open={workOpen}
       onClose={() => setWorkOpen(false)} onCancel={cancelJob} onResume={resume} />
     <div className="scout-guard"><div><strong>Venture Scout audit guardrail</strong><span>Fail-closed enforced</span></div><p>Scout does two different things. <strong>Analyze game</strong> works from the captured evidence alone and needs no Meta Hunter proposal. <strong>Audit idea</strong> critiques one exact Hunter proposal. Both are scoped to a solo beginner and a three-day MVP, and neither can invent facts or override a deterministic decision.</p></div>

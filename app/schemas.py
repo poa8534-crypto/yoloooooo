@@ -61,6 +61,17 @@ class ResearchRunCreate(StrictModel):
     mode: Literal["quick", "deep"] = "quick"
 
 
+class ScoutQueueRun(StrictModel):
+    """The concepts the operator chose to audit.
+
+    Capped because each one spends several minutes of a model that runs a
+    single request at a time: a selection of two hundred is a mistake, not an
+    instruction, and it would be discovered hours later.
+    """
+
+    proposal_ids: list[str] = Field(min_length=1, max_length=25)
+
+
 class DesignAssumption(StrictModel):
     kind: Literal["session_length", "implementation_effort", "feature_count"]
     value: float = Field(gt=0, le=10000, allow_inf_nan=False)

@@ -384,3 +384,110 @@ test.describe('discovery is visible', () => {
     await expect(fold).toContainText('plumbing simulator')
   })
 })
+
+test.describe('the Hunter to Scout queue', () => {
+  test('concepts arrive routed and selected, and the count is on the button', async ({ page }) => {
+    // Routing is the automatic half. Nothing should need clicking for a
+    // Hunter concept to be waiting here.
+    await page.goto('/#/scout')
+    const panel = page.locator('.data-panel', { hasText: 'Audit queue' })
+    await expect(panel).toBeVisible()
+    const run = panel.getByRole('button', { name: /Yes, run \d+ idea/ })
+    await expect(run).toBeVisible()
+    await expect(run).toBeEnabled()
+    await expect(run).toContainText(/Yes, run [1-9]/)
+  })
+
+  test('nothing runs until the button is pressed', async ({ page }) => {
+    // The whole point of the split: an audit spends minutes of a serialized
+    // model, so arriving in the queue must not start anything.
+    let started = 0
+    await page.route('**/api/scout/queue/run', async route => { started += 1; await route.abort() })
+    await page.goto('/#/scout')
+    await expect(page.locator('.data-panel', { hasText: 'Audit queue' })).toBeVisible()
+    await page.waitForTimeout(1200)
+    expect(started).toBe(0)
+  })
+
+  test('a concept can be de-selected before running, and the count follows', async ({ page }) => {
+    await page.goto('/#/scout')
+    const panel = page.locator('.data-panel', { hasText: 'Audit queue' })
+    const runButton = panel.getByRole('button', { name: /Yes, run/ })
+    // Wait for the queue to actually load; reading the count while it still
+    // says zero compares nothing against nothing.
+    await expect(runButton).toContainText(/Yes, run [1-9]/)
+    const before = Number((await runButton.innerText()).match(/\d+/)![0])
+    await panel.getByRole('button', { name: 'Choose which to run' }).click()
+    const dialog = page.getByRole('dialog', { name: /Choose which concepts/i })
+    await expect(dialog).toBeVisible()
+    await dialog.locator('input[type=checkbox]:not([disabled])').first().uncheck()
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await expect(runButton).toContainText(`Yes, run ${before - 1}`)
+  })
+
+  test('a concept that cannot run is shown with its reason, not hidden', async ({ page }) => {
+    await page.route('**/api/scout/queue', async route => {
+      await route.fulfill({ json: {
+        queued: [
+          { proposal_id: 'p1', candidate_id: 'c1', universe_id: '1', game_name: 'Alpha',
+            concept_title: 'Runnable concept', core_loop: 'loop', niche: 'n', created_at: '2026-09-15T00:00:00+00:00',
+            facts: 3, available: true, unavailable_reason: '' },
+          { proposal_id: 'p2', candidate_id: 'c2', universe_id: '2', game_name: 'Beta',
+            concept_title: 'Blocked concept', core_loop: 'loop', niche: 'n', created_at: '2026-09-15T00:00:00+00:00',
+            facts: 0, available: false, unavailable_reason: 'No admissible evidence remains for this game' },
+        ], runnable: 1, blocked: 1, note: 'note' } })
+    })
+    await page.goto('/#/scout')
+    const panel = page.locator('.data-panel', { hasText: 'Audit queue' })
+    await panel.getByRole('button', { name: 'Choose which to run' }).click()
+    const blocked = page.locator('.queue-row.unavailable')
+    await expect(blocked).toContainText('Blocked concept')
+    await expect(blocked).toContainText('No admissible evidence')
+    await expect(blocked.locator('input')).toBeDisabled()
+  })
+
+  test('results are cards that scroll sideways without the page doing so', async ({ page }) => {
+    await page.route('**/api/scout/results*', async route => {
+      await route.fulfill({ json: { cards: Array.from({ length: 8 }, (_, index) => ({
+        audit_id: `a${index}`, candidate_id: 'c1', proposal_id: 'p1', universe_id: '77',
+        niche: 'cooperative fishing', concept_title: `Concept ${index}`, core_loop: 'A loop.',
+        evidence_state: 'source_backed', risks: 2, cited_facts: 3,
+        created_at: '2026-09-15T00:00:00+00:00' })) } })
+    })
+    await page.goto('/#/scout')
+    const strip = page.locator('.card-strip')
+    await expect(strip).toBeVisible()
+    await expect(strip.locator('.concept-card')).toHaveCount(8)
+    // The strip scrolls; the document must not.
+    const scrollable = await strip.evaluate(node => node.scrollWidth > node.clientWidth + 4)
+    expect(scrollable).toBe(true)
+    const pageScrolls = await page.evaluate(() =>
+      document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)
+    expect(pageScrolls).toBe(false)
+  })
+
+  test('clicking a card opens the full brief for that concept', async ({ page }) => {
+    await page.route('**/api/scout/results*', async route => {
+      await route.fulfill({ json: { cards: [{
+        audit_id: 'audit-9', candidate_id: 'c1', proposal_id: 'p1', universe_id: '77',
+        niche: 'cooperative fishing', concept_title: 'Lantern Bay', core_loop: 'Fish at dusk.',
+        evidence_state: 'source_backed', risks: 1, cited_facts: 2,
+        created_at: '2026-09-15T00:00:00+00:00' }] } })
+    })
+    await page.route('**/api/audits/audit-9', async route => {
+      await route.fulfill({ json: {
+        candidate_id: 'c1', audit_id: 'audit-9', evidence_state: 'source_backed',
+        risks: ['Retention is unproven'],
+        proposal: { concept_title: 'Lantern Bay', core_loop: 'Fish at dusk.',
+                    differentiator: 'Shared nets.', build_steps: ['Build the dock'],
+                    risks: [], questions: [], supporting_fact_ids: [] } } })
+    })
+    await page.goto('/#/scout')
+    await page.locator('.concept-card', { hasText: 'Lantern Bay' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Lantern Bay' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toContainText('Shared nets')
+    await expect(dialog).toContainText('Build the dock')
+    await expect(dialog).toContainText('Retention is unproven')
+  })
+})
