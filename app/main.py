@@ -129,6 +129,23 @@ install_log_redaction()
 app.add_middleware(RedactedResponses)
 
 
+def _audited_candidate_ids(db: Session) -> set[str]:
+    """Candidates that already have a stored audit, resolved once per session.
+
+    The Idea Panel had no way to tell which of a hundred-odd candidates had
+    been audited, so the only way to find a finished brief was to open them one
+    at a time. Audit records are append-only, so the row count is enough to
+    know the cached answer is still current.
+    """
+    total = db.scalar(select(func.count(AuditRecord.id))) or 0
+    cached = db.info.get("audited_candidates")
+    if cached is not None and cached[0] == total:
+        return cached[1]
+    audited = set(db.scalars(select(AuditRecord.candidate_id).distinct()))
+    db.info["audited_candidates"] = (total, audited)
+    return audited
+
+
 def _candidate_view(db: Session, candidate: Candidate) -> CandidateView:
     packet = evidence_packet(db, candidate.id)
     fact_views = [FactView(id=f["id"], text=f["text"], source_ids=f["source_ids"],
@@ -163,6 +180,7 @@ def _candidate_view(db: Session, candidate: Candidate) -> CandidateView:
         confidence=confidence.value if active and confidence else None,
         cited_fact_ids=cited,
         withdrawn_fact_ids=withdrawn,
+        has_audit=candidate.id in _audited_candidate_ids(db),
     )
 
 

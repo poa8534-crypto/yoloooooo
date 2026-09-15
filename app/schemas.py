@@ -152,6 +152,7 @@ class CandidateView(StrictModel):
     # proposal was written.
     cited_fact_ids: list[str] = Field(default_factory=list)
     withdrawn_fact_ids: list[str] = Field(default_factory=list)
+    has_audit: bool = False
 
 
 class RunView(StrictModel):

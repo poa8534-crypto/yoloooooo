@@ -13,11 +13,24 @@ type Report = {
   audits: Array<{ audit_id: string; candidate_id: string; proposal_id: string; evidence_state: string; proposal: Design | null; risks: string[] }>
 }
 
-export function DesignDetails({ design }: { design: Design }) {
+export type CitedFact = { id: string; text: string }
+
+/** A citation reads as the claim it points at, not as its row id.
+ *
+ * These were rendered as "Inspect cited fact <uuid>" linking to raw JSON, so a
+ * reader saw seven identical-looking hex strings and learned nothing from any
+ * of them. `facts` supplies the text; `onInspect` opens the evidence drawer in
+ * place instead of throwing the reader into a new tab.
+ */
+export function DesignDetails({ design, facts, onInspect }: { design: Design; facts?: CitedFact[]; onInspect?: (id: string) => void }) {
+  const textFor = (id: string) => facts?.find(fact => fact.id === id)?.text || ''
+
   return <div className="classified proposal"><span className="evidence-badge proposal">Speculative design · human validation required</span>
-    {!!design.supporting_fact_ids?.length && <div><h3>Cited evidence</h3><p>Citations identify inputs; they do not verify the model's interpretation.</p><ul>{design.supporting_fact_ids.map(id => <li key={id}><a href={`/api/evidence/${id}`} target="_blank" rel="noreferrer">Inspect cited fact {id}</a></li>)}</ul></div>}
-    {([['Essential features', design.essential_features], ['Excluded features', design.excluded_features], ['Dependencies', design.dependencies], ['Validation tasks', design.validation_tasks], ['Counterevidence / challenges to investigate', design.counterevidence], ['Unanswered questions', design.questions]] as const).map(([label, values]) => values?.length ? <div key={label}><h3>{label}</h3><ul>{values.map((value, i) => <li key={i}>{value}</li>)}</ul></div> : null)}
-    {!!design.design_assumptions?.length && <div><h3>Unverified design quantities</h3><ul>{design.design_assumptions.map((a, i) => <li key={i}>{a.kind.replaceAll('_', ' ')}: {a.value} {a.unit} — {a.basis.replaceAll('_', ' ')}</li>)}</ul></div>}
+    {!!design.supporting_fact_ids?.length && <details className="brief-fold"><summary>Cited evidence<span>{design.supporting_fact_ids.length}</span></summary><p>Citations identify inputs; they do not verify the model's interpretation.</p><ul className="cited-list">{design.supporting_fact_ids.map(id => <li key={id}>{onInspect
+      ? <button type="button" className="text-button" onClick={() => onInspect(id)}>{textFor(id) || `Fact ${id.slice(0, 8)}`}</button>
+      : <a href={`/api/evidence/${id}`} target="_blank" rel="noreferrer">{textFor(id) || `Fact ${id.slice(0, 8)}`}</a>}</li>)}</ul></details>}
+    {([['Essential features', design.essential_features], ['Excluded features', design.excluded_features], ['Dependencies', design.dependencies], ['Validation tasks', design.validation_tasks], ['Counterevidence / challenges to investigate', design.counterevidence], ['Unanswered questions', design.questions]] as const).map(([label, values]) => values?.length ? <details className="brief-fold" key={label} open={values.length <= 4}><summary>{label}<span>{values.length}</span></summary><ul>{values.map((value, i) => <li key={i}>{value}</li>)}</ul></details> : null)}
+    {!!design.design_assumptions?.length && <details className="brief-fold"><summary>Unverified design quantities<span>{design.design_assumptions.length}</span></summary><ul>{design.design_assumptions.map((a, i) => <li key={i}>{a.kind.replaceAll('_', ' ')}: {a.value} {a.unit} — {a.basis.replaceAll('_', ' ')}</li>)}</ul></details>}
   </div>
 }
 

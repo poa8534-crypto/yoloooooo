@@ -555,3 +555,57 @@ def test_the_model_passes_reach_the_drawer(session_factory, settings):
         assert expected in stages, f"{expected} never reached the feed; saw {stages}"
     refused = next(event for event in events if event["stage"] == "attempt_refused")
     assert refused["model"] == "fake" and refused["attempt"] == 1, refused
+
+
+# --- 10. A finished audit is findable -------------------------------------
+
+
+def test_a_candidate_view_says_whether_an_audit_exists(session_factory, settings, monkeypatch):
+    """With a hundred-odd candidates and no marker, the only way to find a
+    finished brief was to open them one at a time."""
+    from fastapi.testclient import TestClient
+
+    from app.db import get_db
+    from app.main import app
+
+    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    monkeypatch.setattr(app.state, "orchestrator", orchestrator(session_factory, FakeLLM()), raising=False)
+
+    def dependency():
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = dependency
+    try:
+        client = TestClient(app)
+
+        def flag() -> bool:
+            runs = client.get("/api/research-runs").json()
+            candidate = next(c for run in runs for c in run["candidates"] if c["id"] == candidate_id)
+            return candidate["has_audit"]
+
+        assert flag() is False, "a candidate with no audit was marked as audited"
+        assert client.post(f"/api/candidates/{candidate_id}/audit").status_code == 200
+        assert flag() is True, "a stored audit left no trace on the candidate"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_the_audited_set_notices_an_audit_written_in_the_same_session(session_factory, settings):
+    """The lookup is cached per session, which is only safe if it reloads.
+
+    A request that audits and then re-reads would otherwise keep reporting the
+    candidate as un-audited for the rest of that session.
+    """
+    from app.main import _audited_candidate_ids
+    from app.models import AuditRecord
+
+    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    with session_factory() as db:
+        assert candidate_id not in _audited_candidate_ids(db)
+        db.add(AuditRecord(candidate_id=candidate_id, proposal_id=None, payload={
+            "candidate_id": candidate_id, "proposal": None, "gates": [], "risks": [],
+            "evidence_state": "blocked", "decision": "collection_only", "note": "n",
+        }))
+        db.commit()
+        assert candidate_id in _audited_candidate_ids(db), "a stale cache hid an audit written in this session"
