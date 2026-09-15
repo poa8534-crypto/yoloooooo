@@ -8,6 +8,7 @@ association had ever approved. Each test here pins one of those changes.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import httpx
@@ -609,3 +610,201 @@ def test_the_audited_set_notices_an_audit_written_in_the_same_session(session_fa
         }))
         db.commit()
         assert candidate_id in _audited_candidate_ids(db), "a stale cache hid an audit written in this session"
+
+
+# --- 11. Every agent run is findable afterwards ---------------------------
+
+
+def _history_client(session_factory, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.db import get_db
+    from app.main import app
+
+    monkeypatch.setattr(app.state, "orchestrator", orchestrator(session_factory, FakeLLM()), raising=False)
+
+    def dependency():
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = dependency
+    return TestClient(app), app
+
+
+def test_both_agents_appear_in_the_history(session_factory, settings, monkeypatch):
+    """Both write to the ledger and neither was listed anywhere, so a finished
+    concept or audit could only be found by remembering its candidate."""
+    _, candidate_id, _, proposal_id = seed(session_factory)  # seeds a Meta Hunter proposal
+    client, app = _history_client(session_factory, monkeypatch)
+    try:
+        assert client.post(f"/api/candidates/{candidate_id}/audit").status_code == 200
+        runs = client.get("/api/agent-runs").json()
+        by_kind = {run["kind"]: run for run in runs}
+        assert set(by_kind) == {"meta_hunter", "venture_scout"}, [run["kind"] for run in runs]
+        assert by_kind["meta_hunter"]["id"] == proposal_id
+        assert by_kind["venture_scout"]["outcome"] == "design"
+        for run in runs:
+            assert run["candidate_id"] == candidate_id
+            assert run["candidate_name"] == "Evidence Garden", run["candidate_name"]
+            assert run["niche"] == "cozy farming"
+            assert run["title"], "a produced design was listed with no title"
+        assert [run["created_at"] for run in runs] == sorted((r["created_at"] for r in runs), reverse=True)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_history_can_be_filtered_to_one_agent(session_factory, settings, monkeypatch):
+    seed(session_factory)
+    client, app = _history_client(session_factory, monkeypatch)
+    try:
+        assert {run["kind"] for run in client.get("/api/agent-runs?kind=meta_hunter").json()} == {"meta_hunter"}
+        assert client.get("/api/agent-runs?kind=venture_scout").json() == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_a_blocked_audit_is_listed_with_its_reason(session_factory, settings, monkeypatch):
+    """A run that produced nothing is still a run, and the reason is the point."""
+    _, candidate_id, *_ = seed(session_factory, age=3)  # stale evidence
+    client, app = _history_client(session_factory, monkeypatch)
+    try:
+        client.post(f"/api/candidates/{candidate_id}/audit")
+        scout = next(r for r in client.get("/api/agent-runs").json() if r["kind"] == "venture_scout")
+        assert scout["outcome"] == "blocked"
+        assert scout["payload"] is None
+        assert scout["blocking_reasons"], "a blocked run was listed with no reason"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_history_citations_carry_their_text_and_are_re_verified(session_factory, settings, monkeypatch):
+    """History re-resolves citations rather than replaying the stored list, and
+    shows the claim rather than a column of identical-looking row ids."""
+    from fastapi.testclient import TestClient
+
+    from app.db import get_db
+    from app.llm import GeneratedProposal
+    from app.main import app
+    from app.schemas import ProposalPayload
+
+    class CitingLLM:
+        """Cites the first fact it was handed, the way a real answer does."""
+
+        async def generate(self, **kwargs):
+            supplied = kwargs["fact_ids"]
+            assert supplied, "the audit handed the model no evidence to cite"
+            return GeneratedProposal(
+                ProposalPayload(**_scout(supporting_fact_ids=[supplied[0]])), "fake",
+            )
+
+        async def close(self):
+            pass
+
+    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    monkeypatch.setattr(app.state, "orchestrator", orchestrator(session_factory, CitingLLM()), raising=False)
+
+    def dependency():
+        with session_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = dependency
+    client = TestClient(app)
+    try:
+        client.post(f"/api/candidates/{candidate_id}/audit")
+        scout = next(r for r in client.get("/api/agent-runs").json() if r["kind"] == "venture_scout")
+        assert scout["cited_facts"], "a cited run came back with no fact text"
+        assert [fact["id"] for fact in scout["cited_facts"]] == scout["cited_fact_ids"]
+        for fact in scout["cited_facts"]:
+            assert fact["text"] and fact["text"] != fact["id"]
+        assert scout["withdrawn_fact_ids"] == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_history_is_ordered_newest_first(session_factory, settings, monkeypatch):
+    """Timestamps written back to back on this machine can be identical, so an
+    ordering assertion over one batch passes without the sort doing anything."""
+    from app.models import AuditRecord
+
+    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    stamps = [
+        datetime(2026, 1, 3, 12, 0, tzinfo=UTC),
+        datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+        datetime(2026, 1, 2, 12, 0, tzinfo=UTC),
+    ]
+    with session_factory() as db:
+        for created in stamps:
+            db.add(AuditRecord(candidate_id=candidate_id, proposal_id=None, created_at=created, payload={
+                "candidate_id": candidate_id, "proposal": None, "gates": [],
+                "risks": [created.isoformat()], "evidence_state": "blocked",
+                "decision": "collection_only", "note": "n",
+            }))
+        db.commit()
+
+    client, app = _history_client(session_factory, monkeypatch)
+    try:
+        listed = [run["created_at"] for run in client.get("/api/agent-runs?kind=venture_scout").json()]
+    finally:
+        app.dependency_overrides.clear()
+
+    assert len(listed) == 3
+    assert listed == sorted(listed, reverse=True), listed
+    assert listed[0].startswith("2026-01-03"), listed
+
+
+def test_history_interleaves_the_two_agents_by_time(session_factory, settings, monkeypatch):
+    """Each agent is queried in its own descending order, so only the merge can
+    put a newer concept above an older audit. Without it the page shows every
+    audit first and then every concept, which is not a history."""
+    from app.models import AuditRecord, Proposal
+
+    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    with session_factory() as db:
+        db.add(AuditRecord(candidate_id=candidate_id, proposal_id=None,
+                           created_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC), payload={
+                               "candidate_id": candidate_id, "proposal": None, "gates": [],
+                               "risks": ["old audit"], "evidence_state": "blocked",
+                               "decision": "collection_only", "note": "n"}))
+        db.add(Proposal(candidate_id=candidate_id, agent="meta_hunter", model_name="fake",
+                        created_at=datetime(2026, 1, 2, 12, 0, tzinfo=UTC), payload=VALID))
+        db.add(AuditRecord(candidate_id=candidate_id, proposal_id=None,
+                           created_at=datetime(2026, 1, 3, 12, 0, tzinfo=UTC), payload={
+                               "candidate_id": candidate_id, "proposal": None, "gates": [],
+                               "risks": ["new audit"], "evidence_state": "blocked",
+                               "decision": "collection_only", "note": "n"}))
+        db.commit()
+
+    client, app = _history_client(session_factory, monkeypatch)
+    try:
+        runs = client.get("/api/agent-runs").json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert [run["kind"] for run in runs] == ["venture_scout", "meta_hunter", "venture_scout"],         [(run["kind"], run["created_at"]) for run in runs]
+
+
+def test_history_withdraws_a_citation_that_no_longer_resolves(session_factory, settings, monkeypatch):
+    """Positive control for re-verification: replaying the stored list would
+    show evidence as verified long after it stopped being admissible."""
+    from app.models import AuditRecord
+
+    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    invented = str(uuid4())
+    with session_factory() as db:
+        db.add(AuditRecord(candidate_id=candidate_id, proposal_id=None, payload={
+            "candidate_id": candidate_id, "gates": [], "risks": ["r"], "note": "n",
+            "evidence_state": "source_backed_design_speculative", "decision": "collection_only",
+            "proposal": _scout(supporting_fact_ids=[invented]),
+            "cited_fact_ids": [invented], "withdrawn_fact_ids": [],
+        }))
+        db.commit()
+
+    client, app = _history_client(session_factory, monkeypatch)
+    try:
+        scout = next(r for r in client.get("/api/agent-runs").json() if r["kind"] == "venture_scout")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert scout["cited_fact_ids"] == [], "a citation that no longer resolves was listed as verified"
+    assert scout["cited_facts"] == []
+    assert scout["withdrawn_fact_ids"] == [invented]

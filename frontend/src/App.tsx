@@ -96,18 +96,18 @@ type MatchingStatus = {
   outcome_counts: Record<string, number>
 }
 
-type PageId = 'home' | 'ideas' | 'sources' | 'matching' | 'meta' | 'scout' | 'calibration' | 'health'
+type PageId = 'home' | 'ideas' | 'sources' | 'history' | 'matching' | 'meta' | 'scout' | 'calibration' | 'health'
 type Tone = 'verified' | 'proposal' | 'inference' | 'override' | 'conflict' | 'insufficient'
 
 const navigation: Array<{ group: string; items: Array<[PageId, string, string]> }> = [
-  { group: 'Intelligence', items: [['home', '⌂', 'Command Center'], ['ideas', '◉', 'Idea Panel'], ['sources', '▦', 'Sources']] },
+  { group: 'Intelligence', items: [['home', '⌂', 'Command Center'], ['ideas', '◉', 'Idea Panel'], ['sources', '▦', 'Sources'], ['history', '≡', 'Agent History']] },
   { group: 'Engine', items: [['matching', '⌘', 'Matching Engine'], ['meta', '◎', 'Meta Hunter'], ['scout', '◈', 'Venture Scout']] },
   { group: 'System', items: [['calibration', '☷', 'Collection & Calibration'], ['health', '⌁', 'System Health']] },
 ]
 
 const pageNames: Record<PageId, string> = {
   home: 'Command Center', ideas: 'Idea Panel', sources: 'Sources', matching: 'Matching Engine',
-  meta: 'Meta Hunter', scout: 'Venture Scout', calibration: 'Collection & Calibration', health: 'System Health',
+  meta: 'Meta Hunter', scout: 'Venture Scout', history: 'Agent History', calibration: 'Collection & Calibration', health: 'System Health',
 }
 
 function describeError(detail: unknown, status: number): string {
@@ -523,6 +523,78 @@ function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Ca
   </section>
 }
 
+type AgentRun = {
+  id: string; kind: 'meta_hunter' | 'venture_scout'; created_at: string
+  run_id: string | null; niche: string; candidate_id: string; candidate_name: string
+  title: string; summary: string; outcome: string; model_name: string
+  cited_fact_ids: string[]; cited_facts: Fact[]; withdrawn_fact_ids: string[]; blocking_reasons: string[]
+  payload: Proposal | null
+}
+
+const AGENT_LABEL: Record<string, string> = { meta_hunter: 'Meta Hunter', venture_scout: 'Venture Scout' }
+const OUTCOME_TONE: Record<string, Tone> = { design: 'verified', concept: 'proposal', blocked: 'insufficient', unreadable: 'conflict' }
+
+// Both agents wrote to the ledger and neither was listed anywhere, so a
+// finished concept or audit could only be found by remembering which candidate
+// it belonged to and opening that brief.
+function AgentHistoryPage({ onInspectFact, onOpenCandidate }: { onInspectFact: (id: string) => void; onOpenCandidate: (id: string) => void }) {
+  const [runs, setRuns] = useState<AgentRun[] | null>(null)
+  const [error, setError] = useState('')
+  const [kind, setKind] = useState<'all' | 'venture_scout' | 'meta_hunter'>('all')
+  const [query, setQuery] = useState('')
+  const [openId, setOpenId] = useState('')
+  const reload = useCallback(() => {
+    setRuns(null); setError('')
+    api<AgentRun[]>(`/api/agent-runs?limit=200&kind=${kind}`)
+      .then(setRuns).catch(caught => setError((caught as Error).message))
+  }, [kind])
+  useEffect(() => { reload() }, [reload])
+  const term = query.trim().toLowerCase()
+  const shown = (runs || []).filter(run => !term
+    || run.title.toLowerCase().includes(term)
+    || run.candidate_name.toLowerCase().includes(term)
+    || run.niche.toLowerCase().includes(term))
+
+  return <section className="workspace">
+    <div className="section-intro">
+      <div><span>Everything both agents have produced</span><h2>Agent History</h2>
+        <p>Every Meta Hunter concept and Venture Scout audit written to the ledger, newest first. Citations are re-checked now, not replayed from the stored record.</p></div>
+      <div className="filter-row">{([['all', 'All'], ['venture_scout', 'Venture Scout'], ['meta_hunter', 'Meta Hunter']] as const).map(([value, label]) =>
+        <button key={value} className={kind === value ? 'active' : ''} onClick={() => setKind(value)}>{label}</button>)}</div>
+    </div>
+    <div className="history-toolbar">
+      <input placeholder="Filter by concept, experience or niche" value={query} onChange={event => setQuery(event.target.value)} />
+      <button className="text-button" onClick={reload}>Refresh</button>
+      {runs && <span>{shown.length} of {runs.length} run(s)</span>}
+    </div>
+    {error && <div className="warning-box"><strong>History unavailable</strong><span>{error}</span></div>}
+    {!runs ? <div className="drawer-loading">Loading agent history…</div>
+      : shown.length ? <div className="history-list">{shown.map(run => <article key={`${run.kind}-${run.id}`} className="history-row">
+        <header onClick={() => setOpenId(current => current === run.id ? '' : run.id)}>
+          <div>
+            <Badge tone={run.kind === 'venture_scout' ? 'inference' : 'proposal'}>{AGENT_LABEL[run.kind]}</Badge>
+            <Badge tone={OUTCOME_TONE[run.outcome] || 'proposal'}>{run.outcome}</Badge>
+            <strong>{run.title || run.candidate_name}</strong>
+          </div>
+          <div><span>{run.candidate_name}</span><span>{run.niche || 'no niche recorded'}</span><span>{formatDate(run.created_at)}</span><b>{openId === run.id ? 'Hide ▴' : 'Open ▾'}</b></div>
+        </header>
+        {openId === run.id && <div className="history-body">
+          {run.summary && <p>{run.summary}</p>}
+          {!!run.blocking_reasons.length && <div className="warning-box"><strong>No design was produced</strong>{run.blocking_reasons.map(reason => <p key={reason}>{reason}</p>)}</div>}
+          {!run.payload && !run.blocking_reasons.length && <p className="body-copy">The stored record does not satisfy the current evidence firewall, so it is listed but not rendered as a proposal.</p>}
+          {run.payload && <DesignDetails design={run.payload} facts={run.cited_facts} onInspect={onInspectFact} />}
+          {!!run.withdrawn_fact_ids.length && <div className="warning-box"><strong>Citations withdrawn since this ran</strong><span>Cited at the time; they no longer resolve to admissible evidence.</span>{run.withdrawn_fact_ids.map(id => <p key={id}><code>{id}</code></p>)}</div>}
+          <div className="history-actions">
+            <button className="text-button" onClick={() => onOpenCandidate(run.candidate_id)}>Open the full brief</button>
+            {run.kind === 'venture_scout' && <a href={`/api/audits/${run.id}`} target="_blank" rel="noreferrer">Stored audit record</a>}
+            {run.model_name && <span>{run.model_name}</span>}
+          </div>
+        </div>}
+      </article>)}</div>
+      : <EmptyState title="No agent runs yet">Neither agent has written a concept or an audit to the ledger.</EmptyState>}
+  </section>
+}
+
 function CalibrationPage({ calibration, summary }: { calibration: Calibration | null; summary: DashboardSummary | null }) {
   const progress = calibration ? Math.min(100, calibration.complete_clusters / calibration.required_clusters * 100) : 0
   const gates = [
@@ -714,6 +786,7 @@ export default function App() {
         {page === 'home' && <CommandCenter summary={summary} timeline={timeline} sources={sources} runs={runs} health={health} calibration={calibration} onSource={openSource} onNavigate={navigate} />}
         {page === 'ideas' && <IdeasPanel runs={runs} selectedId={selectedIdea} onSelect={setSelectedIdea} onInspectFact={inspectFact} onAudit={runAudit} audit={audit} busy={busy} />}
         {page === 'sources' && <SourcesPage sources={sources} onSource={openSource} />}
+        {page === 'history' && <AgentHistoryPage onInspectFact={inspectFact} onOpenCandidate={id => { setSelectedIdea(id); setPage('ideas') }} />}
         {page === 'matching' && <MatchingEnginePage status={matchingStatus} reviews={matchingReviews} selectedId={selectedMatch} onSelect={setSelectedMatch} onReload={loadMatching} onReview={reviewMatch} busy={busy} />}
         {page === 'meta' && <MetaHunterPage runs={runs} health={health} onStart={startResearch} busy={busy} />}
         {page === 'scout' && <VentureScoutPage candidates={candidates} onAudit={runAudit} audit={audit} busy={busy} />}

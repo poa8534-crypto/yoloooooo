@@ -291,6 +291,34 @@ class MatchingStatus(StrictModel):
     outcome_counts: dict[str, int] = Field(default_factory=dict)
 
 
+class AgentRunView(StrictModel):
+    """One completed agent run, for the history page.
+
+    Both agents write to the ledger but neither was listed anywhere, so a
+    finished concept or audit could only be found by remembering which
+    candidate it belonged to.
+    """
+
+    id: str
+    kind: Literal["meta_hunter", "venture_scout"]
+    created_at: datetime
+    run_id: str | None = None
+    niche: str = ""
+    candidate_id: str
+    candidate_name: str = ""
+    title: str = ""
+    summary: str = ""
+    outcome: str
+    model_name: str = ""
+    cited_fact_ids: list[str] = Field(default_factory=list)
+    # The claim each citation points at, so history reads as evidence rather
+    # than as a column of identical-looking row ids.
+    cited_facts: list[FactView] = Field(default_factory=list)
+    withdrawn_fact_ids: list[str] = Field(default_factory=list)
+    blocking_reasons: list[str] = Field(default_factory=list)
+    payload: ProposalPayload | None = None
+
+
 class AuditGate(StrictModel):
     label: str
     passed: bool

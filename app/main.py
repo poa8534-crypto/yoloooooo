@@ -55,6 +55,7 @@ from .research_evidence import (
 )
 from .scheduler import catch_up_if_needed, start_scheduler
 from .schemas import (
+    AgentRunView,
     AuditReadiness,
     AuditView,
     CalibrationStatus,
@@ -296,6 +297,102 @@ def get_audit(audit_id: str, db: Session = Depends(get_db)):
     if row is None:
         raise HTTPException(404, "audit not found")
     return {**row.payload, "audit_id": row.id}
+
+
+def _candidate_labels(db: Session, candidate_ids: set[str]) -> dict[str, tuple[str, str, str]]:
+    """Name, run id and niche for each candidate, in two queries.
+
+    Deliberately not `_candidate_view`: that rebuilds the whole evidence packet
+    per candidate, which is far too much work to label a list of history rows.
+    """
+    if not candidate_ids:
+        return {}
+    names: dict[str, str] = {}
+    for row in db.scalars(
+        select(Observation)
+        .where(Observation.candidate_id.in_(candidate_ids), Observation.metric == "roblox_name")
+        .order_by(Observation.observed_at)
+    ):
+        names[row.candidate_id] = str(row.value_json)
+    labels: dict[str, tuple[str, str, str]] = {}
+    for candidate, run in db.execute(
+        select(Candidate, ResearchRun)
+        .join(ResearchRun, ResearchRun.id == Candidate.run_id, isouter=True)
+        .where(Candidate.id.in_(candidate_ids))
+    ):
+        labels[candidate.id] = (
+            names.get(candidate.id, "Sourced Roblox experience"),
+            run.id if run else "",
+            run.niche if run else "",
+        )
+    return labels
+
+
+@app.get("/api/agent-runs", response_model=list[AgentRunView])
+def list_agent_runs(limit: int = 100, kind: str = "all", db: Session = Depends(get_db)):
+    """Every Meta Hunter concept and Venture Scout audit, newest first."""
+    safe_limit = max(1, min(limit, 500))
+    rows: list[tuple] = []
+    if kind in {"all", "venture_scout"}:
+        rows += [("venture_scout", row) for row in db.scalars(
+            select(AuditRecord).order_by(AuditRecord.created_at.desc()).limit(safe_limit)
+        )]
+    if kind in {"all", "meta_hunter"}:
+        rows += [("meta_hunter", row) for row in db.scalars(
+            select(Proposal).where(Proposal.agent == "meta_hunter")
+            .order_by(Proposal.created_at.desc()).limit(safe_limit)
+        )]
+    rows.sort(key=lambda item: item[1].created_at, reverse=True)
+    rows = rows[:safe_limit]
+    labels = _candidate_labels(db, {row.candidate_id for _, row in rows})
+    # Several runs usually share a candidate, and building the packet is the
+    # expensive part, so resolve each candidate once for the whole page.
+    packets = {
+        candidate_id: {item["id"]: item for item in evidence_packet(db, candidate_id)}
+        for candidate_id in {row.candidate_id for _, row in rows}
+    }
+
+    views: list[AgentRunView] = []
+    for row_kind, row in rows:
+        name, run_id, niche = labels.get(row.candidate_id, ("Sourced Roblox experience", "", ""))
+        raw = row.payload if row_kind == "meta_hunter" else (row.payload or {}).get("proposal")
+        try:
+            design = ProposalPayload.model_validate(raw) if raw else None
+        except ValueError:
+            # Stored before the current firewall; listed, but not rendered as
+            # though it still satisfies it.
+            design = None
+        stored = row.payload if row_kind == "venture_scout" else {}
+        # A stored citation list records what was admissible when the run
+        # happened; the brief re-resolves it, and so does this.
+        live = packets.get(row.candidate_id, {})
+        claimed = list(dict.fromkeys(design.supporting_fact_ids if design else []))
+        cited = [fact_id for fact_id in claimed if fact_id in live]
+        withdrawn = [fact_id for fact_id in claimed if fact_id not in live]
+        views.append(AgentRunView(
+            id=row.id,
+            kind=row_kind,
+            created_at=row.created_at,
+            run_id=run_id or None,
+            niche=niche,
+            candidate_id=row.candidate_id,
+            candidate_name=name,
+            title=design.concept_title if design else "",
+            summary=(design.executive_summary or design.core_loop) if design else "",
+            outcome=("design" if design else "blocked") if row_kind == "venture_scout" else (
+                "concept" if design else "unreadable"),
+            model_name=getattr(row, "model_name", "") or "",
+            cited_fact_ids=cited,
+            cited_facts=[
+                FactView(id=fact_id, text=live[fact_id]["text"], source_ids=live[fact_id]["source_ids"],
+                         freshness=live[fact_id]["freshness"], verification_state="source_backed")
+                for fact_id in cited
+            ],
+            withdrawn_fact_ids=withdrawn,
+            blocking_reasons=list(stored.get("risks", [])) if row_kind == "venture_scout" and not design else [],
+            payload=design,
+        ))
+    return views
 
 
 @app.get("/api/candidates/{candidate_id}/audit-activity")

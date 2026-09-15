@@ -1097,3 +1097,29 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
 .audit-result-banner span { color: var(--text-secondary); font-size: 11.5px; }
 .audit-result-banner > div:last-child { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
 .audit-result-banner a, .audit-result-banner .text-button { color: var(--blue); font-size: 11.5px; font-weight: 600; }
+
+/* Agent history. Both agents write to the ledger; this is where those runs
+   are actually findable afterwards. */
+.history-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 14px; }
+.history-toolbar input {
+  flex: 1 1 280px; padding: 8px 12px; border: 1px solid var(--input-border);
+  border-radius: 8px; background: var(--input-bg); color: var(--text-primary); font-size: 12.5px;
+}
+.history-toolbar span { color: var(--text-muted); font: 500 11px var(--mono); }
+.history-list { display: flex; flex-direction: column; gap: 10px; }
+.history-row { border: 1px solid var(--line); border-radius: 10px; background: var(--bg-surface); overflow: hidden; }
+.history-row > header {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 12px 16px; cursor: pointer;
+}
+.history-row > header:hover { background: var(--hover-row); }
+.history-row > header > div:first-child { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.history-row > header strong { color: var(--text-primary); font-size: 13.5px; }
+.history-row > header > div:last-child { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.history-row > header span { color: var(--text-muted); font-size: 11.5px; }
+.history-row > header b { color: var(--blue); font-size: 11.5px; }
+.history-body { padding: 4px 16px 16px; border-top: 1px solid var(--line-subtle); }
+.history-body > p { color: var(--text-secondary); font-size: 12.5px; line-height: 1.6; }
+.history-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 12px; }
+.history-actions a { color: var(--blue); font-size: 11.5px; font-weight: 600; }
+.history-actions span { color: var(--text-muted); font: 500 11px var(--mono); }

@@ -10,6 +10,11 @@ A local, evidence-first research dashboard with two constrained agent workflows:
   **Show activity** opens a live feed of the run: which pass, which model,
   and the exact reason any answer was refused. The feed lives in the running
   service and does not survive a restart; the stored audit is the record.
+- **Agent History** lists every Meta Hunter concept and Venture Scout audit ever
+  written, newest first, filterable by agent and searchable. Blocked runs are
+  listed with the reason they produced nothing. Citations are re-resolved when
+  the page loads, so a claim whose evidence has since been rejected shows as
+  withdrawn rather than as verified.
 
 The trusted layer targets **zero unsupported factual slots**: facts are compiled from hashed source artifacts through JSON pointers or captured exact passages. This is a tested provenance invariant, not a guarantee of source truth or semantic correctness of model prose. The language model cannot author source URLs, observed metrics, scores, confidence, or verdicts; its designs and interpretations remain speculative.
 
