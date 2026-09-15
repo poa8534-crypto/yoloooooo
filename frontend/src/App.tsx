@@ -24,7 +24,7 @@ interface AuditResult {
 type Run = {
   id: string; niche: string; status: string; message: string; created_at: string; completed_at: string | null
   candidates: Candidate[]; passing_results: Candidate[]
-  progress?: { stage: string; elapsed_seconds: number; remaining_seconds: number; usage: Record<string, number>; stop_reason?: string; round?: number; questions: Array<{ id: string; question: string; state: string }> }
+  progress?: { stage: string; elapsed_seconds: number; remaining_seconds: number; usage: Record<string, number>; stop_reason?: string; round?: number; search_queries?: string[]; questions: Array<{ id: string; question: string; state: string }> }
 }
 type Calibration = {
   phase: string; complete_clusters: number; required_clusters: number; scoring_active: boolean
@@ -591,6 +591,16 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
         </>
       })()}</article>
     <article className="data-panel"><div className="panel-heading"><div><span>Append-only run records</span><h2>Run history</h2></div></div>{runs.length ? <div className="table-scroll"><table><thead><tr><th>Niche</th><th>Status</th><th>Started</th><th>Candidates</th><th>Result</th></tr></thead><tbody>{runs.map(run => <tr key={run.id}><td><strong>{run.niche}</strong><small><code>{run.id}</code></small></td><td><Badge tone={toneFor(run.status)}>{run.status}</Badge></td><td>{formatDate(run.created_at)}</td><td className="numeric">{run.candidates.length}</td><td>{run.message}</td></tr>)}</tbody></table></div> : <EmptyState title="No Meta Hunter runs">Submit the first niche above when you are ready to collect evidence.</EmptyState>}</article>
+    {latest?.progress && <article className="data-panel"><div className="panel-heading"><div><span>Where the games came from</span><h2>Discovery sources</h2></div></div>
+      <p className="body-copy">Every source is asked and the run keeps whatever answers. One being unavailable is recorded as an abstention, not a failure.</p>
+      <div className="table-scroll"><table><thead><tr><th>Source</th><th>Searches made</th><th>Needs a key</th></tr></thead><tbody>
+        {([['Roblox search', 'roblox_search', false], ['Local search (SearxNG)', 'searxng_search', false], ['Tavily', 'tavily_search', true]] as const).map(([label, key, keyed]) =>
+          <tr key={key}><td>{label}</td><td className="numeric">{latest.progress?.usage[key] ?? 0}</td><td>{keyed ? 'yes' : 'no'}</td></tr>)}
+      </tbody></table></div>
+      {!!latest.progress?.search_queries?.length && <details className="brief-fold"><summary>Planned searches<span>{latest.progress.search_queries.length}</span></summary>
+        <p>Written from your niche by the query planner, then reused every round.</p>
+        <ul>{latest.progress!.search_queries!.map(q => <li key={q}><code>{q}</code></li>)}</ul></details>}
+    </article>}
     {latest && <><label>Inspect research run<select value={latest.id} onChange={e => setReportId(e.target.value)}>{runs.map(r => <option key={r.id} value={r.id}>{r.niche} — {r.status}</option>)}</select></label>{latest.progress && <article className="data-panel"><h3>{latest.progress.stage}</h3><p>{Math.round(latest.progress.elapsed_seconds)}s elapsed · {Math.round(latest.progress.remaining_seconds)}s {["queued", "running"].includes(latest.status) ? "remaining" : "unused budget"}</p><div className="metrics-grid compact">{Object.entries(latest.progress.usage).map(([key, value]) => <Metric key={key} label={key.replaceAll("_", " ")} value={value} note="Reserved attempts / captured entities" />)}</div>{latest.progress.questions.map(q => <p key={q.id}>{q.question} — {q.state}</p>)}</article>}<ResearchReport runId={latest.id} status={latest.status} /></>}
     <div className="api-readiness"><span>Tavily <b>{health?.connectors.tavily_configured ? 'Configured — not a live authentication check' : 'Missing key'}</b></span><span>YouTube <b>{health?.connectors.youtube_configured ? 'Configured — not a live authentication check' : 'Missing key'}</b></span><span>Roblox <b>Public interface</b></span><span>Qwen <b>{health?.ollama.primary_present ? '14B ready' : 'Unavailable'}</b></span></div>
   </section>

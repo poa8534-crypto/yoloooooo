@@ -343,3 +343,44 @@ test.describe('interrupted jobs', () => {
     await expect.poll(() => resumed, { timeout: 10_000 }).toBe(true)
   })
 })
+
+test.describe('discovery is visible', () => {
+  test('health lists the local and first-party search sources', async ({ page }) => {
+    // Both were being recorded and never shown, so an operator could not tell
+    // whether the local instance was answering.
+    await page.goto('/#/health')
+    await expect(page.locator('table tbody tr', { hasText: 'Local search (SearxNG)' })).toBeVisible()
+    await expect(page.locator('table tbody tr', { hasText: 'Roblox search' })).toBeVisible()
+    await expect(page.locator('table tbody tr', { hasText: 'Tavily search' })).toBeVisible()
+  })
+
+  test('the Meta Hunter page shows which sources were asked', async ({ page }) => {
+    await page.goto('/#/meta')
+    const panel = page.locator('.data-panel', { hasText: 'Discovery sources' })
+    await expect(panel).toBeVisible()
+    for (const label of ['Roblox search', 'Local search (SearxNG)', 'Tavily']) {
+      await expect(panel.locator('tbody tr', { hasText: label })).toBeVisible()
+    }
+  })
+
+  test('the planned searches are readable, not just sent', async ({ page }) => {
+    // The plan reached the API and nothing rendered it.
+    await page.route('**/api/research-runs*', async route => {
+      const response = await route.fetch()
+      const runs = await response.json()
+      if (runs[0]?.progress) {
+        runs[0].progress.search_queries = [
+          'site:roblox.com/games toilet tycoon',
+          'site:roblox.com/games plumbing simulator',
+        ]
+      }
+      await route.fulfill({ json: runs })
+    })
+    await page.goto('/#/meta')
+    const fold = page.locator('details.brief-fold', { hasText: 'Planned searches' })
+    await expect(fold).toBeVisible()
+    await fold.locator('summary').click()
+    await expect(fold).toContainText('toilet tycoon')
+    await expect(fold).toContainText('plumbing simulator')
+  })
+})

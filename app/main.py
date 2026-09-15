@@ -1237,6 +1237,16 @@ async def health(db: Session = Depends(get_db)):
         select(AssociationRecord).order_by(AssociationRecord.created_at.desc()).limit(1)
     )
     seen = dependency_health.observations(db)
+    # A local instance costs nothing to ask, so its state is observed rather
+    # than inferred from whenever a run last happened to use it.
+    searxng_reachable = None
+    if settings.searxng_enabled:
+        try:
+            async with httpx.AsyncClient(timeout=2.5) as client:
+                probe = await client.get(settings.searxng_url.rstrip("/") + "/healthz")
+                searxng_reachable = probe.status_code < 500
+        except httpx.HTTPError:
+            searxng_reachable = False
     return {
         "status": "ok",
         "database": "connected",
@@ -1264,6 +1274,13 @@ async def health(db: Session = Depends(get_db)):
                                        observed=None, reachable=ollama["available"]),
             dependency_health.describe("Roblox public API", configured=True,
                                        observed=seen.get("roblox")),
+            # Local, so it can be probed for nothing, like the model server.
+            dependency_health.describe("Local search (SearxNG)",
+                                       configured=settings.searxng_enabled,
+                                       observed=seen.get("searxng"),
+                                       reachable=searxng_reachable),
+            dependency_health.describe("Roblox search", configured=settings.roblox_search_enabled,
+                                       observed=seen.get("roblox_search")),
             dependency_health.describe("Tavily search", configured=bool(settings.tavily_api_key),
                                        observed=seen.get("tavily")),
             dependency_health.describe("YouTube Data API", configured=bool(settings.youtube_api_key),

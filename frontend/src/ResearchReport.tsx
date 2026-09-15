@@ -6,7 +6,8 @@ type Design = { concept_title: string; core_loop: string; differentiator: string
 type Report = {
   report_id: string; selection_rule: string; questions: Question[]; quota_note: string
   progress: { stop_reason: string; elapsed_seconds: number; errors?: Array<{ stage: string; error: string }>;
-    budget_stops?: Array<{ stage: string; error: string }> }; api_usage: Record<string, number>
+    budget_stops?: Array<{ stage: string; error: string }>; search_queries?: string[] }
+  api_usage: Record<string, number>
   abstentions?: Array<{ stage: string; reason: string }>
   comparison: Array<{ candidate_id: string; universe_id: string; niche_relevance: string; omitted_facts?: number; facts: Array<{ id: string; text: string; freshness: string }>; history: History }>
   concepts: Array<{ id: string; candidate_id: string; payload: Design }>
@@ -76,7 +77,10 @@ export function ResearchReport({ runId, status }: { runId: string; status: strin
     {!!report.progress.errors?.length && <div className="warning-box"><strong>Incomplete steps</strong>{report.progress.errors.map((e, i) => <p key={i}>{e.stage}: {e.error}</p>)}</div>}
     {/* A configured cap stopping further work is the budget holding, not a failure. */}
     {!!report.progress.budget_stops?.length && <div className="warning-box"><strong>Budget caps reached</strong>{report.progress.budget_stops.map((e, i) => <p key={i}>{e.stage}: {e.error}</p>)}<small>Work stopped at a configured limit; nothing failed.</small></div>}
-    {!!report.abstentions?.length && <details><summary>Deliberate abstentions</summary>{report.abstentions.map((a, i) => <p key={i}>{a.stage}: {a.reason}</p>)}</details>}
+    {!!report.progress.search_queries?.length && <details className="brief-fold"><summary>What this run searched for<span>{report.progress.search_queries.length}</span></summary>
+      <p>Planned once at the start from the niche, then reused every round. A search is not evidence; it only nominates games to capture.</p>
+      <ul>{report.progress.search_queries.map(query => <li key={query}><code>{query}</code></li>)}</ul></details>}
+    {!!report.abstentions?.length && <details className="brief-fold"><summary>Deliberate abstentions<span>{report.abstentions.length}</span></summary>{report.abstentions.map((a, i) => <p key={i}>{a.stage}: {a.reason}</p>)}</details>}
     <h3>Research questions and limitations</h3><div className="fact-stack">{report.questions.map(q => <div key={q.id}><strong>{q.question}</strong><p>{q.state} — {q.limitation}</p><small>{q.fact_ids.length} supporting fact IDs</small></div>)}</div>
     <h3>Candidate comparison</h3>{report.comparison.map(d => <details key={d.candidate_id}><summary>Universe {d.universe_id} · {d.facts.length} admissible facts · relevance requires review</summary>
       {!!d.omitted_facts && <p>Some saved facts are no longer admissible and were omitted.</p>}
