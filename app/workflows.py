@@ -16,6 +16,7 @@ from .association import (
 )
 from .association.materialize import apply_association
 from .calibration import current_features, load_artifact, score_features
+from . import audit_activity
 from .config import get_settings
 from .connectors import ConnectorError, Connectors, extract_roblox_place_ids
 from .evidence import (
@@ -439,6 +440,7 @@ class ResearchOrchestrator:
         return decision
 
     async def audit(self, candidate_id: str, proposal_id: str | None = None, *, budget=None, gaps=None) -> dict[str, Any]:
+        audit_activity.start(candidate_id)
         with self.session_factory() as db:
             readiness = audit_readiness(db, candidate_id, proposal_id)
             candidate = db.get(Candidate, candidate_id)
@@ -457,15 +459,28 @@ class ResearchOrchestrator:
             "evidence_state": "blocked", "decision": decision,
             "risks": [], "note": "Speculative design audit, not a prediction of game success.",
         }
+        audit_activity.emit(
+            candidate_id, "gates",
+            f"{sum(1 for g in readiness.gates if g.passed)} of {len(readiness.gates)} gates pass",
+        )
         if not readiness.ready:
             result["risks"] = [g.label + ": " + g.detail for g in readiness.gates if g.state in {"fail", "missing"}]
+            for gate in readiness.gates:
+                if gate.state in {"fail", "missing"}:
+                    audit_activity.emit(candidate_id, "gate_blocked", f"{gate.label}: {gate.detail}")
         else:
             try:
+                audit_activity.emit(
+                    candidate_id, "evidence",
+                    f"{len(packet)} verified fact(s) packed"
+                    + (" with a Hunter proposal to critique" if hunter_payload else "; no Hunter proposal, analysing the evidence directly"),
+                )
                 kwargs = {
                     "agent": "Venture Scout", "niche": niche,
                     "sourced_name": "Selected sourced experience",
                     "fact_ids": [p["id"] for p in packet], "evidence": packet,
                     "hunter_proposal": hunter_payload, "gaps": gaps or [], "require_citations": True,
+                    "on_event": lambda stage, detail, **extra: audit_activity.emit(candidate_id, stage, detail, **extra),
                 }
                 if budget:
                     kwargs["before_attempt"] = budget.model_attempt
@@ -482,6 +497,7 @@ class ResearchOrchestrator:
                 result["proposal"] = generated.payload.model_dump()
                 result["risks"] = generated.payload.risks
                 result["evidence_state"] = "source_backed_design_speculative"
+                audit_activity.emit(candidate_id, "proposal_accepted", f"Design accepted from {generated.model}")
             except (LLMUnavailable, TimeoutError) as exc:
                 # Saying "within the budget" for a schema rejection sent every
                 # investigation after the clock instead of the actual cause.
@@ -498,7 +514,17 @@ class ResearchOrchestrator:
                 db, candidate_id, (result["proposal"] or {}).get("supporting_fact_ids", []),
             )
             result["cited_fact_ids"], result["withdrawn_fact_ids"] = cited, withdrawn
+            audit_activity.emit(
+                candidate_id, "citations",
+                f"{len(cited)} citation(s) re-verified, {len(withdrawn)} withdrawn",
+            )
             row = AuditRecord(candidate_id=candidate_id, proposal_id=selected_id, payload=result)
             db.add(row)
             db.commit()
+            audit_activity.finish(
+                candidate_id,
+                "stored" if result["proposal"] else "blocked",
+                f"Audit {row.id} written to the ledger",
+                audit_id=row.id,
+            )
             return {**result, "audit_id": row.id}

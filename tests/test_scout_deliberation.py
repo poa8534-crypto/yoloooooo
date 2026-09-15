@@ -450,3 +450,108 @@ def test_a_stored_audit_is_re_verified_when_it_is_served_back(session_factory, s
 
     assert body["cited_fact_ids"] == [], "a citation that no longer resolves was shown as verified"
     assert body["withdrawn_fact_ids"] == [invented]
+
+
+# --- 9. The audit says what it is doing while it runs ---------------------
+
+
+def test_the_activity_feed_reports_each_pass(session_factory, settings, monkeypatch):
+    """An audit takes minutes and reported nothing until it finished, so a
+    working run and a stuck one were indistinguishable."""
+    import asyncio
+
+    from app import audit_activity
+
+    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    asyncio.run(orchestrator(session_factory, FakeLLM()).audit(candidate_id))
+
+    state = audit_activity.snapshot(candidate_id)
+    stages = [event["stage"] for event in state["events"]]
+    assert stages[0] == "started"
+    for expected in ("gates", "evidence", "proposal_accepted", "citations", "stored"):
+        assert expected in stages, f"{expected} never reported; saw {stages}"
+    assert not state["running"], "the feed never closed"
+    assert [event["sequence"] for event in state["events"]] == list(range(1, len(stages) + 1))
+
+
+def test_a_blocked_audit_reports_the_gate_that_stopped_it(session_factory, settings):
+    """Silence is the failure mode being fixed; a blocked audit must say why."""
+    import asyncio
+
+    from app import audit_activity
+
+    _, candidate_id, *_ = seed(session_factory, age=3)  # stale evidence
+    asyncio.run(orchestrator(session_factory, FakeLLM()).audit(candidate_id))
+
+    state = audit_activity.snapshot(candidate_id)
+    stages = [event["stage"] for event in state["events"]]
+    assert "gate_blocked" in stages, stages
+    assert stages[-1] == "blocked"
+    assert not state["running"]
+    blocked = next(e for e in state["events"] if e["stage"] == "gate_blocked")
+    assert blocked["detail"], "the blocking gate was reported with no reason"
+
+
+def test_a_new_audit_does_not_show_the_previous_run(session_factory, settings):
+    """Positive control: a stale feed would be worse than none."""
+    import asyncio
+
+    from app import audit_activity
+
+    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    asyncio.run(orchestrator(session_factory, FakeLLM()).audit(candidate_id))
+    first = len(audit_activity.snapshot(candidate_id)["events"])
+    assert first
+
+    audit_activity.start(candidate_id)
+    assert [e["stage"] for e in audit_activity.snapshot(candidate_id)["events"]] == ["started"]
+    assert audit_activity.snapshot(candidate_id)["running"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_refused_attempt_reaches_the_feed(settings):
+    """The refusal reason is the most useful thing to watch; it says what the
+    model has to change, and it is what the log used to hide."""
+    seen: list[tuple[str, str]] = []
+    poisoned = _scout(build_steps=["Day 1: match the 339812 visits leader"])
+    client, _ = _client(settings.model_copy(update={"scout_deliberation_passes": 1}), [poisoned])
+    with pytest.raises(LLMUnavailable):
+        await client.generate(
+            agent="Venture Scout", niche="farming", sourced_name="garden", fact_ids=[],
+            on_event=lambda stage, detail, **extra: seen.append((stage, detail)),
+        )
+    refusals = [detail for stage, detail in seen if stage == "attempt_refused"]
+    assert refusals, [stage for stage, _ in seen]
+    assert "build_steps" in refusals[0], refusals[0]
+
+
+def test_the_model_passes_reach_the_drawer(session_factory, settings):
+    """The audit has to hand the model a way to report, or the drawer shows
+    the setup steps and then nothing for the minutes that actually matter."""
+    import asyncio
+
+    from app import audit_activity
+    from app.llm import GeneratedProposal
+    from app.schemas import ProposalPayload
+
+    class ReportingLLM:
+        async def generate(self, **kwargs):
+            report = kwargs.get("on_event")
+            assert report is not None, "the audit gave the model no way to report progress"
+            report("draft_started", "Pass one of 3: reading the evidence and drafting")
+            report("attempt_refused", "model refused: build_steps", model="fake", attempt=1)
+            report("revision_ready", "Revision accepted from fake", model="fake")
+            return GeneratedProposal(ProposalPayload(**_scout()), "fake")
+
+        async def close(self):
+            pass
+
+    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    asyncio.run(orchestrator(session_factory, ReportingLLM()).audit(candidate_id))
+
+    events = audit_activity.snapshot(candidate_id)["events"]
+    stages = [event["stage"] for event in events]
+    for expected in ("draft_started", "attempt_refused", "revision_ready"):
+        assert expected in stages, f"{expected} never reached the feed; saw {stages}"
+    refused = next(event for event in events if event["stage"] == "attempt_refused")
+    assert refused["model"] == "fake" and refused["attempt"] == 1, refused

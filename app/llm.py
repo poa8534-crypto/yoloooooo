@@ -123,6 +123,7 @@ class OllamaProposalClient:
         comparison: list[dict] | None = None,
         before_attempt=None,
         require_citations: bool = False,
+        on_event=None,
     ) -> GeneratedProposal:
         # The niche comes from the operator and the experience label comes from
         # Roblox, where anyone can name a game anything they like. Both are
@@ -203,8 +204,15 @@ class OllamaProposalClient:
             if require_citations and agent == "Venture Scout" and any(not getattr(payload, key) for key in audit_sections):
                 raise ValueError("audit omitted required scope or validation sections")
 
+        def say(stage, detail="", **extra):
+            if on_event:
+                on_event(stage, detail, **extra)
+
+        say("queued", "Waiting for the local model to be free")
         async with self._gpu_gate:
-            draft, model = await self._complete(prompt, schema, ProposalPayload, check, errors, before_attempt)
+            say("draft_started", f"Pass one of {self.settings.scout_deliberation_passes}: reading the evidence and drafting")
+            draft, model = await self._complete(prompt, schema, ProposalPayload, check, errors, before_attempt, say)
+            say("draft_ready", f"Draft accepted from {model}", model=model)
             if agent != "Venture Scout" or self.settings.scout_deliberation_passes < 2:
                 return GeneratedProposal(draft, model)
             # Deliberation. A single shot returns whatever the model produced
@@ -212,27 +220,34 @@ class OllamaProposalClient:
             # what separates an audit from a guess. A pass that cannot produce
             # valid output is skipped rather than downgraded: the draft that
             # already satisfied every check stands.
+            say("critique_started", "Pass two: reading its own draft back for weak scope and unsupported claims")
             try:
                 critique, _ = await self._complete(
                     prompt + CRITIQUE_INSTRUCTION + json.dumps({"draft": draft.model_dump()}, ensure_ascii=False),
-                    AuditCritique.model_json_schema(), AuditCritique, None, errors, before_attempt,
+                    AuditCritique.model_json_schema(), AuditCritique, None, errors, before_attempt, say,
                 )
             except LLMUnavailable:
+                say("critique_skipped", "No usable critique; keeping the draft that already passed every check")
                 return GeneratedProposal(draft, model)
+            say("critique_ready",
+                f"{len(critique.weaknesses)} weakness(es), {len(critique.unsupported_claims)} unsupported claim(s)")
             if self.settings.scout_deliberation_passes < 3:
                 return GeneratedProposal(draft, model)
+            say("revision_started", "Pass three: correcting the draft against its own critique")
             try:
                 revised, revised_model = await self._complete(
                     prompt + REVISION_INSTRUCTION + json.dumps(
                         {"draft": draft.model_dump(), "critique": critique.model_dump()}, ensure_ascii=False,
                     ),
-                    schema, ProposalPayload, check, errors, before_attempt,
+                    schema, ProposalPayload, check, errors, before_attempt, say,
                 )
             except LLMUnavailable:
+                say("revision_skipped", "No usable revision; keeping the draft that already passed every check")
                 return GeneratedProposal(draft, model)
+            say("revision_ready", f"Revision accepted from {revised_model}", model=revised_model)
             return GeneratedProposal(revised, revised_model)
 
-    async def _complete(self, prompt, schema, model_type, check, errors, before_attempt):
+    async def _complete(self, prompt, schema, model_type, check, errors, before_attempt, say=None):
         """One schema-constrained completion, with retry and model fallback.
 
         Reasoning is left on for models that support it: the audit is supposed
@@ -244,6 +259,8 @@ class OllamaProposalClient:
                 try:
                     if before_attempt:
                         before_attempt(model)
+                    if say:
+                        say("attempt", f"Asking {model}", model=model, attempt=attempt + 1)
                     response = await self.client.post(
                         f"{self.settings.ollama_base_url}/api/chat",
                         json={
@@ -274,4 +291,8 @@ class OllamaProposalClient:
                     # in the wrong place. Which field was refused, and why, is
                     # the part worth keeping.
                     errors.append(f"{model}: {type(exc).__name__}: {_reason(exc)}")
+                    if say:
+                        # The refusal reason is the most useful thing an
+                        # onlooker can see: it says what the model must change.
+                        say("attempt_refused", f"{model} refused: {_reason(exc)}", model=model, attempt=attempt + 1)
         raise LLMUnavailable("proposal generation failed closed: " + " | ".join(errors[-4:]))

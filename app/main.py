@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from .association import AssociationService, active_thresholds, is_association_usable
 from .association.materialize import apply_association
 from .association.service import human_confirmation
+from . import audit_activity
 from .calibration import calibration_status, load_artifact
 from .config import ROOT, get_settings
 from .db import SessionLocal, get_db, init_db
@@ -277,6 +278,41 @@ def get_audit(audit_id: str, db: Session = Depends(get_db)):
     if row is None:
         raise HTTPException(404, "audit not found")
     return {**row.payload, "audit_id": row.id}
+
+
+@app.get("/api/candidates/{candidate_id}/audit-activity")
+async def audit_activity_stream(candidate_id: str):
+    """Live feed of what a running audit is doing.
+
+    An audit takes minutes and used to report nothing until it finished, so
+    there was no way to tell a working run from a stuck one. The feed
+    describes the work; it never carries model output, and it is in-process
+    only, so a restart ends it. The stored audit remains the record.
+    """
+    async def stream():
+        sent = 0
+        idle = 0
+        while True:
+            state = audit_activity.snapshot(candidate_id)
+            fresh = state["events"][sent:]
+            for event in fresh:
+                yield f"event: activity\ndata: {json.dumps(event)}\n\n"
+            sent = len(state["events"])
+            if fresh:
+                idle = 0
+            if not state["running"] and sent:
+                yield "event: done\ndata: {}\n\n"
+                return
+            idle += 1
+            # Nothing has ever started for this candidate; do not hold the
+            # connection open indefinitely waiting for something that is not
+            # coming.
+            if idle > 60 and not sent:
+                yield "event: idle\ndata: {}\n\n"
+                return
+            await audit_activity.wait(candidate_id, timeout=2.0)
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 @app.get("/api/candidates/{candidate_id}/audit", response_model=AuditView)

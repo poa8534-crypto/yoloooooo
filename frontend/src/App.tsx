@@ -275,6 +275,63 @@ function CommandCenter({ summary, timeline, sources, runs, health, calibration, 
   </section>
 }
 
+type ActivityEvent = { sequence: number; stage: string; detail: string; at: string; model?: string; attempt?: number }
+
+const STAGE_LABEL: Record<string, string> = {
+  started: 'Audit requested', gates: 'Gates evaluated', gate_blocked: 'Gate blocked',
+  evidence: 'Evidence packed', queued: 'Waiting for the model', draft_started: 'Pass 1 — drafting',
+  attempt: 'Asking the model', attempt_refused: 'Answer refused', draft_ready: 'Draft accepted',
+  critique_started: 'Pass 2 — self-critique', critique_ready: 'Critique accepted',
+  critique_skipped: 'Critique skipped', revision_started: 'Pass 3 — revising',
+  revision_ready: 'Revision accepted', revision_skipped: 'Revision skipped',
+  proposal_accepted: 'Design accepted', citations: 'Citations re-verified',
+  stored: 'Written to the ledger', blocked: 'Blocked',
+}
+
+const STAGE_TONE: Record<string, Tone> = {
+  attempt_refused: 'insufficient', gate_blocked: 'insufficient', blocked: 'insufficient',
+  critique_skipped: 'insufficient', revision_skipped: 'insufficient',
+  draft_ready: 'verified', critique_ready: 'verified', revision_ready: 'verified',
+  proposal_accepted: 'verified', stored: 'verified', citations: 'verified',
+}
+
+// An audit takes minutes and used to show nothing but a spinner, so a working
+// run and a stuck one looked identical. The feed is in-process: it describes
+// work in flight, and the stored audit stays the record of what happened.
+function AuditActivityDrawer({ candidateId, open, onClose }: { candidateId: string; open: boolean; onClose: () => void }) {
+  const [events, setEvents] = useState<ActivityEvent[]>([])
+  const [live, setLive] = useState(false)
+  useEffect(() => {
+    if (!open || !candidateId) return
+    setEvents([]); setLive(true)
+    const source = new EventSource(`/api/candidates/${candidateId}/audit-activity`)
+    source.addEventListener('activity', message => {
+      const event = JSON.parse((message as MessageEvent).data) as ActivityEvent
+      setEvents(current => current.some(item => item.sequence === event.sequence) ? current : [...current, event])
+    })
+    const stop = () => { setLive(false); source.close() }
+    source.addEventListener('done', stop)
+    source.addEventListener('idle', stop)
+    source.onerror = () => setLive(false)
+    return () => { source.close(); setLive(false) }
+  }, [candidateId, open])
+  const started = events.length ? new Date(events[0].at).getTime() : 0
+  return <div className={`drawer-scrim ${open ? 'open' : ''}`} onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
+    <aside className="evidence-drawer" aria-label="Venture Scout activity">
+      <header><div><span>Venture Scout activity</span><strong>{live && events.length ? 'Running now' : live ? 'Listening…' : events.length ? 'Finished' : 'Nothing running'}</strong></div><button aria-label="Close activity" onClick={onClose}>×</button></header>
+      <div className="drawer-body">
+        {events.length ? <section>{events.map(event => <article key={event.sequence}>
+          <span>{STAGE_LABEL[event.stage] || event.stage.replaceAll('_', ' ')}</span>
+          <Badge tone={STAGE_TONE[event.stage] || 'proposal'}>{`+${Math.max(0, Math.round((new Date(event.at).getTime() - started) / 1000))}s`}</Badge>
+          <p>{event.detail}</p>
+          {event.model && <small>{event.model}{event.attempt ? ` · attempt ${event.attempt}` : ''}</small>}
+        </article>)}</section>
+          : <EmptyState title="No audit in flight">Start an audit and this fills in as each pass runs. The feed lives in the running service, so it does not survive a restart.</EmptyState>}
+      </div>
+    </aside>
+  </div>
+}
+
 function IdeasPanel({ runs, selectedId, onSelect, onInspectFact, onAudit, audit, busy }: {
   runs: Run[]; selectedId: string; onSelect: (id: string) => void; onInspectFact: (id: string) => void
   onAudit: (candidate: Candidate) => void; audit: AuditResult | null; busy: boolean
@@ -312,6 +369,7 @@ function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFa
   // An audit costs minutes and is already in the ledger. Without this the
   // brief came back empty after a reload, which reads as the audit never
   // having run.
+  const [activityOpen, setActivityOpen] = useState(false)
   const [stored, setStored] = useState<AuditResult | null>(null)
   useEffect(() => {
     let cancelled = false
@@ -330,8 +388,9 @@ function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFa
     const proposal = shown?.proposal || candidate.proposal
     const citedIds = shown?.proposal ? shown.cited_fact_ids : candidate.cited_fact_ids
     const withdrawnIds = shown?.proposal ? shown.withdrawn_fact_ids : candidate.withdrawn_fact_ids
-    return <section className="workspace analyst-brief"><div className="brief-toolbar"><button className="text-button" onClick={() => onSelect('')}>← Back to ideas</button><div><Badge tone={toneFor(candidate.decision)}>{candidate.decision.replaceAll('_', ' ')}</Badge><Badge tone="verified">{candidate.facts.length} verified facts</Badge></div><button className="primary" disabled={busy || blocking.length > 0} onClick={() => onAudit(candidate)} title={blocking.length ? blocking.map(gate => `${gate.label}: ${gate.detail}`).join(' · ') : 'Scout reads the evidence, drafts, critiques its own draft and revises. This takes several minutes.'}>{busy ? 'Scout is deliberating…' : blocking.length ? 'Audit blocked by gates' : 'Run Venture Scout audit'}</button></div>
-      {busy && <div className="warning-box"><strong>Venture Scout is running</strong><span>Reading the evidence, drafting, critiquing its own draft and revising it. Several minutes on a local model; the page stays usable.</span></div>}
+    return <section className="workspace analyst-brief"><div className="brief-toolbar"><button className="text-button" onClick={() => onSelect('')}>← Back to ideas</button><div><Badge tone={toneFor(candidate.decision)}>{candidate.decision.replaceAll('_', ' ')}</Badge><Badge tone="verified">{candidate.facts.length} verified facts</Badge></div><button className="primary" disabled={busy || blocking.length > 0} onClick={() => onAudit(candidate)} title={blocking.length ? blocking.map(gate => `${gate.label}: ${gate.detail}`).join(' · ') : 'Scout reads the evidence, drafts, critiques its own draft and revises. This takes several minutes.'}>{busy ? 'Scout is deliberating…' : blocking.length ? 'Audit blocked by gates' : 'Run Venture Scout audit'}</button><button className="text-button" onClick={() => setActivityOpen(true)}>Show activity{busy ? ' ●' : ''}</button></div>
+      <AuditActivityDrawer candidateId={candidateId} open={activityOpen} onClose={() => setActivityOpen(false)} />
+      {busy && <div className="warning-box"><strong>Venture Scout is running</strong><span>Reading the evidence, drafting, critiquing its own draft and revising it. Several minutes on a local model. <button className="text-button" onClick={() => setActivityOpen(true)}>Watch it work</button></span></div>}
       {blocking.length > 0 && <div className="warning-box"><strong>Audit cannot run yet</strong>{blocking.map(gate => <p key={gate.label}>{gate.label}: {gate.detail}</p>)}</div>}
       {blockedAudit && blocking.length === 0 && <div className="warning-box"><strong>Last audit was recorded without a proposal</strong>{(blockedAudit.risks || []).map(risk => <p key={risk}>{risk}</p>)}</div>}
       <article className="brief-hero"><span>Research dossier / {run.niche}</span><h2>{proposal?.concept_title || candidate.display_name}</h2><p>{proposal?.core_loop || 'A detailed proposal will appear after the constrained local model completes a schema-valid run.'}</p><div className="metrics-grid compact"><Metric label="Engine decision" value={candidate.decision.replaceAll('_', ' ')} note="Deterministic" /><Metric label="Evidence facts" value={candidate.facts.length} note="Clickable provenance" /><Metric label="Confidence" value={candidate.confidence == null ? '—' : `${candidate.confidence.toFixed(1)}%`} note={candidate.confidence == null ? 'Not computed' : 'Evidence quality'} /><Metric label="Market score" value={candidate.score == null ? 'Locked' : candidate.score.toFixed(1)} note={candidate.score == null ? 'Calibration inactive' : 'Frozen artifact'} /></div></article>
