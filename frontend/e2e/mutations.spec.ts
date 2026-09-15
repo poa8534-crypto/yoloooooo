@@ -91,3 +91,33 @@ test.describe('the ledger the browser tests use', () => {
     }
   })
 })
+
+test.describe('background work', () => {
+  test('a run is startable, watchable and cancellable from the page', async ({ page }) => {
+    test.setTimeout(120_000)
+    await page.goto('/#/scout')
+    await page.getByLabel('Operation').selectOption('analyze_game')
+    await page.getByRole('button', { name: 'Analyze this game' }).click()
+
+    // The drawer opens with the job identified, rather than a bare spinner.
+    const drawer = page.locator('aside[aria-label="Background work"]')
+    await expect(drawer).toBeVisible()
+    await expect(drawer.locator('header')).toContainText(/queued|running/)
+    await expect(drawer.locator('.work-log article').first()).toBeVisible({ timeout: 30_000 })
+
+    // Cancelling is reachable, which the synchronous endpoint never allowed.
+    await drawer.getByRole('button', { name: 'Cancel run' }).click()
+    await expect(drawer.locator('header')).toContainText(/cancelled/i, { timeout: 30_000 })
+    await expect(page.getByRole('button', { name: 'Analyze this game' })).toBeEnabled()
+  })
+
+  test('the drawer is reachable before anything has run', async ({ page }) => {
+    await page.goto('/#/scout')
+    await page.getByRole('button', { name: /See what it is doing/ }).click()
+    const drawer = page.locator('aside[aria-label="Background work"]')
+    await expect(drawer).toBeVisible()
+    await expect(drawer).toContainText(/Nothing running/i)
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.drawer-scrim.open')).toHaveCount(0)
+  })
+})

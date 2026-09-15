@@ -105,6 +105,13 @@ type Tone = 'verified' | 'proposal' | 'inference' | 'override' | 'conflict' | 'i
 // Two distinct operations, matching the job API. Analyze works from
 // evidence alone; Audit critiques one exact Hunter proposal version.
 type ScoutOperation = 'analyze_game' | 'audit_idea'
+type JobEvent = { sequence: number; stage: string; detail: string; at: string; untrusted?: boolean; model?: string }
+type AuditJob = {
+  id: string; candidate_id: string; operation: ScoutOperation; proposal_id: string | null
+  status: string; created_at: string; completed_at: string | null; model_attempts: number
+  audit_id: string | null; error: string | null; remaining_seconds: number; events: JobEvent[]
+}
+const JOB_ACTIVE = ['queued', 'running']
 
 const navigation: Array<{ group: string; items: Array<[PageId, string, string]> }> = [
   { group: 'Intelligence', items: [['home', '⌂', 'Command Center'], ['ideas', '◉', 'Idea Panel'], ['sources', '▦', 'Sources'], ['history', '≡', 'Agent History']] },
@@ -321,6 +328,56 @@ function AuditActivityDrawer({ candidateId, open, onClose }: { candidateId: stri
   </div>
 }
 
+// What the agents are doing, including the model's own reasoning. A `reasoning`
+// event is the one thing here written by the model rather than by the pipeline;
+// it is shown as reasoning, never as evidence, and is folded away by default
+// because it runs to thousands of characters per pass.
+function BackgroundWorkDrawer({ job, events, open, onClose, onCancel }: {
+  job: AuditJob | null; events: JobEvent[]; open: boolean; onClose: () => void; onCancel: () => void
+}) {
+  const panel = useRef<HTMLElement>(null)
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    if (!open) return
+    const previous = document.activeElement as HTMLElement | null
+    panel.current?.focus()
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); close.current() }
+    }
+    document.addEventListener('keydown', keydown)
+    return () => { document.removeEventListener('keydown', keydown); previous?.focus?.() }
+  }, [open])
+
+  const running = job ? JOB_ACTIVE.includes(job.status) : false
+  return <div className={`drawer-scrim ${open ? 'open' : ''}`} onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
+    <aside className="evidence-drawer" ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Background work">
+      <header>
+        <div><span>Background work</span><strong>{job ? `${job.status}${running ? ` · ${Math.round(job.remaining_seconds)}s left` : ''}` : 'Nothing running'}</strong></div>
+        <div className="drawer-header-actions">
+          {running && <button className="text-button" onClick={onCancel}>Cancel run</button>}
+          <button aria-label="Close background work" onClick={onClose}>×</button>
+        </div>
+      </header>
+      <div className="drawer-body">
+        {job && <p className="body-copy">Job <code>{job.id.slice(0, 8)}</code> · {job.operation.replaceAll('_', ' ')} · {job.model_attempts} model attempt(s){job.error ? ` · ${job.error}` : ''}</p>}
+        {events.length ? <section className="work-log">{events.map(event => event.untrusted
+          ? <details key={event.sequence} className="brief-fold reasoning">
+              <summary>Model reasoning{event.model ? ` · ${event.model}` : ''}<span>{event.detail.length} chars</span></summary>
+              <p className="reasoning-text">{event.detail}</p>
+              <small>Written by the model, not by the pipeline. Shown so you can see what it worked through; it is not evidence and nothing downstream reads it.</small>
+            </details>
+          : <article key={event.sequence}>
+              <span>{STAGE_LABEL[event.stage] || event.stage.replaceAll('_', ' ')}</span>
+              <p>{event.detail}</p>
+              {event.model && <small>{event.model}</small>}
+            </article>)}
+        </section> : <EmptyState title="Nothing running">Start an analysis or an audit and every step appears here, including the model's own reasoning.</EmptyState>}
+      </div>
+    </aside>
+  </div>
+}
+
 function IdeasPanel({ runs, selectedId, onSelect, onInspectFact, onAudit, audit, busy }: {
   runs: Run[]; selectedId: string; onSelect: (id: string) => void; onInspectFact: (id: string) => void
   onAudit: (candidate: Candidate) => void; audit: AuditResult | null; busy: boolean
@@ -531,6 +588,9 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
 function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Candidate[]; onAudit: (candidate: Candidate) => void; audit: AuditResult | null; busy: boolean }) {
   const [candidateId, setCandidateId] = useState(candidates[0]?.id || '')
   const [operation, setOperation] = useState<ScoutOperation>('analyze_game')
+  const [job, setJob] = useState<AuditJob | null>(null)
+  const [jobError, setJobError] = useState('')
+  const [workOpen, setWorkOpen] = useState(false)
   const [readiness, setReadiness] = useState<AuditReadiness | null>(null)
   const [readinessError, setReadinessError] = useState('')
   // An audit is written to the ledger, so a reload must bring it back. The Idea
@@ -565,12 +625,52 @@ function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Ca
     return () => { cancelled = true }
   }, [candidateId, audit])
   const shown = audit?.candidate_id === candidateId ? audit : stored
-  return <section className="workspace"><div className="scout-guard"><div><strong>Venture Scout audit guardrail</strong><span>Fail-closed enforced</span></div><p>Scout does two different things. <strong>Analyze game</strong> works from the captured evidence alone and needs no Meta Hunter proposal. <strong>Audit idea</strong> critiques one exact Hunter proposal. Both are scoped to a solo beginner and a three-day MVP, and neither can invent facts or override a deterministic decision.</p></div>
+  const running = Boolean(job && JOB_ACTIVE.includes(job.status))
+
+  // Follow the job rather than holding a request open. Polling, not SSE: this
+  // also recovers a job that was already running when the page loaded, which a
+  // stream opened on submit would miss.
+  useEffect(() => {
+    if (!job || !JOB_ACTIVE.includes(job.status)) return
+    const timer = window.setInterval(async () => {
+      try {
+        const next = await api<AuditJob>(`/api/audit-jobs/${job.id}`)
+        setJob(next)
+        if (!JOB_ACTIVE.includes(next.status)) {
+          // The result lives in the ledger; re-read it rather than trusting
+          // whatever the page happened to be holding.
+          api<AuditResult>(`/api/candidates/${next.candidate_id}/audit`)
+            .then(setStored).catch(() => undefined)
+        }
+      } catch (caught) { setJobError((caught as Error).message) }
+    }, 1200)
+    return () => window.clearInterval(timer)
+  }, [job])
+
+  async function startJob() {
+    if (!candidate) return
+    setJobError(''); setWorkOpen(true)
+    const query = new URLSearchParams({ operation })
+    if (operation === 'audit_idea' && candidate.proposal_id) query.set('proposal_id', candidate.proposal_id)
+    try {
+      setJob(await api<AuditJob>(`/api/candidates/${candidate.id}/audit-jobs?${query}`, { method: 'POST' }))
+    } catch (caught) { setJobError((caught as Error).message) }
+  }
+
+  async function cancelJob() {
+    if (!job) return
+    try { setJob(await api<AuditJob>(`/api/audit-jobs/${job.id}/cancel`, { method: 'POST' })) }
+    catch (caught) { setJobError((caught as Error).message) }
+  }
+  return <section className="workspace">
+    <BackgroundWorkDrawer job={job} events={job?.events || []} open={workOpen}
+      onClose={() => setWorkOpen(false)} onCancel={cancelJob} />
+    <div className="scout-guard"><div><strong>Venture Scout audit guardrail</strong><span>Fail-closed enforced</span></div><p>Scout does two different things. <strong>Analyze game</strong> works from the captured evidence alone and needs no Meta Hunter proposal. <strong>Audit idea</strong> critiques one exact Hunter proposal. Both are scoped to a solo beginner and a three-day MVP, and neither can invent facts or override a deterministic decision.</p></div>
     <div className="agent-columns"><article className="data-panel"><div className="panel-heading"><div><span>Solo MVP configuration</span><h2>Scout operation</h2></div></div>{candidates.length ? <><label>Operation<select value={operation} onChange={event => setOperation(event.target.value as ScoutOperation)}>
       <option value="analyze_game">Analyze game — from captured evidence alone</option>
       <option value="audit_idea">Audit idea — critique this game's Hunter proposal</option>
     </select></label><label>Candidate<select value={candidateId} onChange={event => setCandidateId(event.target.value)}>{candidates.map(item => <option key={item.id} value={item.id}>{item.display_name}{item.proposal_id ? '' : ' — no Hunter proposal'}</option>)}</select></label>
-    {operation === 'audit_idea' && !candidate?.proposal_id && <small className="gate-hint">This game has no Meta Hunter proposal, so there is nothing to audit. Analyze game works from the evidence instead.</small>}<div className="form-grid"><label>Builder experience<input value="Beginner" disabled /></label><label>Team capacity<input value="Solo" disabled /></label><label>MVP scope<input value="72 hours" disabled /></label><label>Monetization<input value="Excluded from MVP" disabled /></label></div><button className="primary" disabled={busy || !candidate || (operation === 'audit_idea' && !candidate?.proposal_id)} onClick={() => candidate && onAudit(candidate)}>{busy ? 'Scout is deliberating…' : operation === 'audit_idea' ? 'Audit this idea' : 'Analyze this game'}</button>{readiness && !readiness.ready && <small className="gate-hint">Some gates are not met. The backend will record a blocked audit without invoking the model.</small>}</> : <EmptyState title="No game captured yet">Start a Meta Hunter research run; Scout analyses what it captures.</EmptyState>}</article>
+    {operation === 'audit_idea' && !candidate?.proposal_id && <small className="gate-hint">This game has no Meta Hunter proposal, so there is nothing to audit. Analyze game works from the evidence instead.</small>}<div className="form-grid"><label>Builder experience<input value="Beginner" disabled /></label><label>Team capacity<input value="Solo" disabled /></label><label>MVP scope<input value="72 hours" disabled /></label><label>Monetization<input value="Excluded from MVP" disabled /></label></div><div className="scout-actions"><button className="primary" disabled={running || !candidate || (operation === 'audit_idea' && !candidate?.proposal_id)} onClick={startJob}>{running ? 'Scout is deliberating…' : operation === 'audit_idea' ? 'Audit this idea' : 'Analyze this game'}</button><button type="button" className="text-button" onClick={() => setWorkOpen(true)}>See what it is doing{running ? ' ●' : ''}</button>{running && <button type="button" className="text-button" onClick={cancelJob}>Cancel</button>}</div>{jobError && <div className="warning-box"><strong>The run could not be started</strong><span>{jobError}</span></div>}{job && !running && job.status !== 'complete' && <div className="warning-box"><strong>Run ended as {job.status}</strong><span>{job.error || 'No completed result was produced. Nothing was written as a finding.'}</span></div>}{readiness && !readiness.ready && <small className="gate-hint">Some gates are not met. The backend will record a blocked audit without invoking the model.</small>}</> : <EmptyState title="No game captured yet">Start a Meta Hunter research run; Scout analyses what it captures.</EmptyState>}</article>
       <article className="data-panel"><div className="panel-heading"><div><span>Measured against the ledger</span><h2>Audit gates</h2></div>{readiness && <Badge tone={readiness.ready ? 'verified' : 'insufficient'}>{readiness.ready ? 'All gates pass' : 'Gates outstanding'}</Badge>}</div>
         {readinessError && <div className="warning-box"><strong>Readiness unavailable</strong><span>{readinessError}</span></div>}
         {!candidateId ? <EmptyState title="No candidate selected">Gate state is computed per candidate; nothing is assumed.</EmptyState>

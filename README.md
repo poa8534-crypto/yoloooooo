@@ -383,3 +383,15 @@ stays disabled until the full validated niche-cluster workflow and acceptance ga
 - Conflicts, stale data, failed parsing, unknown evidence IDs, and invalid model output fail closed.
 
 The system does not guarantee that a publisher is truthful, that research is complete, or that a proposed game will succeed.
+
+### Watching a run
+
+Venture Scout starts a durable job rather than holding the request open, so the
+page can be closed and reopened while it works and the run can be cancelled.
+**See what it is doing** opens the background drawer: every gate, pass and model
+attempt, plus the model's own reasoning for each attempt.
+
+That reasoning is the one thing in the feed written by the model rather than by
+the pipeline. It is redacted, capped, marked as untrusted, and shown so an
+operator can see what the model worked through — it is not evidence, and nothing
+downstream reads it back.

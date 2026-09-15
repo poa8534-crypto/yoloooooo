@@ -24,6 +24,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -54,6 +55,10 @@ STUB_PROPOSAL = {
     "competitive_notes": ["Nearby experiences are single-player."],
 }
 
+# Long enough that a browser test can cancel a run, short enough that the rest
+# of the suite is not slowed to a crawl.
+MODEL_DELAY_SECONDS = float(os.environ.get("E2E_MODEL_DELAY", "1.5"))
+
 STUB_CRITIQUE = {
     "weaknesses": ["Scope assumes art that does not exist yet"],
     "missing_dependencies": [],
@@ -83,6 +88,10 @@ def start_model_stub() -> str:
 
         def do_POST(self):
             raw = self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0)
+            # A real pass takes minutes. Answering instantly would make a job
+            # finish before a test could reach the cancel control, so the
+            # cancellable window is real but short.
+            time.sleep(MODEL_DELAY_SECONDS)
             body = json.loads(raw or b"{}")
             schema = body.get("format") or {}
             properties = schema.get("properties") or {}

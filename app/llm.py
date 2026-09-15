@@ -14,6 +14,9 @@ from .schemas import AuditCritique, ProposalPayload
 from .security import redact
 
 UNTRUSTED_TEXT_LIMIT = 120
+# Reasoning runs to a few thousand characters per pass. Enough to read, bounded
+# so a stuck model cannot fill the feed or the checkpoint.
+REASONING_LIMIT = 6000
 
 
 class LLMUnavailable(RuntimeError):
@@ -297,7 +300,14 @@ class OllamaProposalClient:
                         },
                     )
                     response.raise_for_status()
-                    payload = model_type.model_validate_json(response.json()["message"]["content"])
+                    message = response.json()["message"]
+                    if say and message.get("thinking"):
+                        # The model's own reasoning, not the pipeline describing
+                        # itself. Redacted and capped, reported under a distinct
+                        # stage so nothing downstream can mistake it for
+                        # evidence or for a decision the system made.
+                        say("reasoning", redact(str(message["thinking"]))[:REASONING_LIMIT], model=model)
+                    payload = model_type.model_validate_json(message["content"])
                     if check:
                         check(payload)
                     return payload, model

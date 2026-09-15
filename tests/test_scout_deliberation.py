@@ -956,3 +956,86 @@ def test_a_sequel_numeral_in_another_games_name_is_still_refused():
     assert contains_unsupported_measurement("social roleplay (Toilet World Roleplay 2)")
     assert not contains_unsupported_measurement("social roleplay (Toilet World Roleplay)")
     assert not contains_unsupported_measurement("its sequel focuses on roleplay")
+
+
+# --- 13. The model's own reasoning is reported, and marked as untrusted ----
+
+
+@pytest.mark.asyncio
+async def test_model_reasoning_is_reported_as_its_own_event(settings):
+    """An operator watching a three-minute audit could see stage names but not
+    what the model was working through. Reasoning is real output from the model,
+    so it is reported under its own stage rather than mixed into the pipeline's
+    own progress descriptions.
+    """
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": {
+            "content": json.dumps(_scout()),
+            "thinking": "First I considered the shared boat, then the scope.",
+        }})
+
+    client = OllamaProposalClient(
+        settings=settings.model_copy(update={"scout_deliberation_passes": 1}),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    await client.generate(agent="Venture Scout", niche="farming", sourced_name="garden",
+                          fact_ids=[], on_event=lambda stage, detail, **extra: seen.append((stage, detail)))
+
+    reasoning = [detail for stage, detail in seen if stage == "reasoning"]
+    assert reasoning, [stage for stage, _ in seen]
+    assert "shared boat" in reasoning[0]
+
+
+@pytest.mark.asyncio
+async def test_a_credential_in_the_reasoning_is_redacted(settings):
+    """Reasoning is untrusted text that reaches the browser and the checkpoint."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": {
+            "content": json.dumps(_scout()),
+            "thinking": f"I would call https://api.example.com/v3?key={settings.youtube_api_key} next.",
+        }})
+
+    seen: list[str] = []
+    client = OllamaProposalClient(
+        settings=settings.model_copy(update={"scout_deliberation_passes": 1}),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    await client.generate(agent="Venture Scout", niche="farming", sourced_name="garden",
+                          fact_ids=[], on_event=lambda stage, detail, **extra: seen.append(detail))
+
+    assert not any(settings.youtube_api_key in detail for detail in seen), seen
+
+
+@pytest.mark.asyncio
+async def test_reasoning_is_capped(settings):
+    from app.llm import REASONING_LIMIT
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": {
+            "content": json.dumps(_scout()), "thinking": "x" * (REASONING_LIMIT * 3)}})
+
+    seen: list[tuple[str, str]] = []
+    client = OllamaProposalClient(
+        settings=settings.model_copy(update={"scout_deliberation_passes": 1}),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    await client.generate(agent="Venture Scout", niche="farming", sourced_name="garden",
+                          fact_ids=[], on_event=lambda stage, detail, **extra: seen.append((stage, detail)))
+    reasoning = next(detail for stage, detail in seen if stage == "reasoning")
+    assert len(reasoning) == REASONING_LIMIT
+
+
+def test_the_feed_marks_which_events_the_model_wrote(session_factory, settings):
+    """Everything else in the feed is written by the pipeline. The page has to
+    be able to tell them apart to label one as reasoning and not as fact."""
+    from app import audit_activity
+
+    audit_activity.start("candidate-1")
+    audit_activity.emit("candidate-1", "draft_started", "Pass one of 3")
+    audit_activity.emit("candidate-1", "reasoning", "I weighed the scope against three days.")
+
+    events = {event["stage"]: event for event in audit_activity.snapshot("candidate-1")["events"]}
+    assert events["draft_started"]["untrusted"] is False
+    assert events["reasoning"]["untrusted"] is True

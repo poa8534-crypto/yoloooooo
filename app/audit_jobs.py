@@ -67,7 +67,10 @@ class AuditJobs:
     def event(self, job_id, stage, detail="", **extra):
         job = self.get(job_id)
         events = job["events"]
-        events.append({"sequence": len(events) + 1, "stage": stage, "detail": redact(detail), "at": datetime.now(UTC).isoformat()})
+        events.append({"sequence": len(events) + 1, "stage": stage,
+                       # Written by the model, not by this pipeline.
+                       "untrusted": stage == "reasoning",
+                       "detail": redact(detail), "at": datetime.now(UTC).isoformat()})
         changes = {"events": events}
         if stage == "draft_started":
             changes["status"] = "running"

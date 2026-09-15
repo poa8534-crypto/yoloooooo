@@ -111,11 +111,19 @@ def start(candidate_id: str, session_factory: Callable[[], Session] | None = Non
     emit(candidate_id, "started", "Venture Scout audit requested")
 
 
+# The one stage whose detail is written by the model rather than by this
+# pipeline. It is displayed as reasoning and never read back as evidence.
+UNTRUSTED_STAGE = "reasoning"
+
+
 def emit(candidate_id: str, stage: str, detail: str = "", **extra) -> None:
     """Record one thing the audit just did.
 
-    Callers pass plain description, never model output: the feed is a progress
-    report, not a channel for untrusted text.
+    Details are written by the pipeline, with one deliberate exception: a
+    `reasoning` event carries the model's own thinking so an operator can read
+    what it was working through. That text is untrusted -- it is redacted
+    before it arrives, marked with its stage, and nothing downstream reads it
+    back as evidence or lets it influence a decision.
     """
     feed = _feed(candidate_id)
     feed.sequence += 1
@@ -123,6 +131,7 @@ def emit(candidate_id: str, stage: str, detail: str = "", **extra) -> None:
     feed.events.append({
         "sequence": feed.sequence,
         "stage": stage,
+        "untrusted": stage == UNTRUSTED_STAGE,
         "detail": detail,
         "at": now.isoformat(),
         **extra,

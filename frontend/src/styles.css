@@ -1126,3 +1126,22 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
 
 /* An audit that could not answer its own critique is not a finished one. */
 .audit-result-banner.incomplete { border-color: var(--amber); background: var(--amber-soft); }
+
+/* Scout actions and the background-work drawer. */
+.scout-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 4px; }
+.drawer-header-actions { display: flex; align-items: center; gap: 12px; }
+.work-log { display: flex; flex-direction: column; gap: 8px; }
+.work-log > article { padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-surface); }
+.work-log > article > span { display: block; color: var(--text-muted); font: 600 10.5px var(--mono); text-transform: uppercase; }
+.work-log > article > p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12.5px; overflow-wrap: anywhere; }
+.work-log > article > small { color: var(--text-muted); font-size: 11px; }
+/* The model's own words are visually separated from the pipeline's. */
+.brief-fold.reasoning { border-style: dashed; border-color: var(--badge-proposal-b); background: var(--badge-proposal-bg); }
+.brief-fold.reasoning > summary { color: var(--badge-proposal-c); }
+.reasoning-text {
+  margin: 0 0 8px; padding: 10px 12px; max-height: 340px; overflow-y: auto;
+  border-radius: 6px; background: var(--bg-surface);
+  color: var(--text-secondary); font-size: 12.5px; line-height: 1.65;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.brief-fold.reasoning > small { display: block; padding: 0 14px 10px; color: var(--text-muted); font-size: 11px; }

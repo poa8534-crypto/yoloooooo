@@ -9,9 +9,9 @@ Automated coverage behind this table:
 
 | Suite | Count | What it exercises |
 | --- | --- | --- |
-| `pytest` | 406 | API behaviour, evidence rules, agent guarantees |
+| `pytest` | 410 | API behaviour, evidence rules, agent guarantees |
 | `vitest` | 8 | Routing helpers, run phases and the evidence drawer component |
-| `playwright` | 162 | Real browser, three viewports, including actions that change data |
+| `playwright` | 168 | Real browser, three viewports, including actions that change data |
 
 Browser tests run against an isolated ledger created by
 `scripts/e2e_fixture.py`: a temporary database and artifact directory, a stub
@@ -112,9 +112,10 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 | --- | --- | --- | --- |
 | Operation selector | Offers both operations | passed | `interactions.spec.ts` |
 | Audit idea without a proposal | Disabled, with the reason | passed | `interactions.spec.ts` |
-| Run an audit | Runs, stores, restores after reload | passed | `mutations.spec.ts` |
+| Run an audit | Starts a durable job, stores, restores after reload | passed | `mutations.spec.ts` |
 | Double submission | Cannot submit twice; records one run | passed | `mutations.spec.ts` |
-| Activity drawer | Streams each pass | not tested (browser) | backend covered |
+| Background work drawer | Shows each pass and the model's own reasoning | passed | `mutations.spec.ts` |
+| Cancel a running audit | Reaches a cancelled terminal state | passed | `mutations.spec.ts`, `test_audit_jobs*.py` |
 | Readiness gates | Computed server-side per candidate | passed | `interactions.spec.ts` |
 
 ## Collection & Calibration
