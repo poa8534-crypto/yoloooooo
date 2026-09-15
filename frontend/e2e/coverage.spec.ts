@@ -598,3 +598,69 @@ test.describe('the opportunity score', () => {
     await expect(probability).toContainText('not a forecast')
   })
 })
+
+// Three complaints, reported by the user against the live app: source links
+// returned raw JSON, text was cut off and ran together, and buttons were dead
+// with no stated reason. Each is now a check rather than a memory.
+const ALL_PAGES = ['home', 'ideas', 'sources', 'market', 'matching', 'meta',
+                   'scout', 'calibration', 'history', 'health'] as const
+
+test.describe('the interface reads as English, not as data', () => {
+  for (const page of ALL_PAGES) {
+    test(`${page} sends nobody to raw JSON`, async ({ page: browser }) => {
+      await browser.goto(`/#/${page}`)
+      await browser.locator('main').waitFor()
+      await browser.waitForTimeout(700)
+      // The canonical source URL in the evidence drawer is a real external
+      // link and is allowed; an in-app link into our own /api/ is not.
+      const raw = await browser.locator('main a[href^="/api/"]').count()
+      expect(raw, 'an in-app link opens raw JSON').toBe(0)
+    })
+
+    test(`${page} does not chop its own captions`, async ({ page: browser }) => {
+      await browser.goto(`/#/${page}`)
+      await browser.locator('main').waitFor()
+      await browser.waitForTimeout(700)
+      const clipped = await browser.evaluate(() => {
+        const bad: string[] = []
+        for (const el of document.querySelectorAll('main *')) {
+          if (el.children.length) continue
+          const text = (el.textContent || '').trim()
+          if (!text) continue
+          const style = getComputedStyle(el)
+          if (style.overflow === 'auto' || style.overflowX === 'auto') continue
+          if (el.scrollWidth > el.clientWidth + 2 && style.overflowX !== 'visible') {
+            bad.push(text.slice(0, 40))
+          }
+        }
+        return bad
+      })
+      expect(clipped, 'text is cut off by its own container').toEqual([])
+    })
+  }
+
+  test('a disabled review button says what it is waiting for', async ({ page }) => {
+    await page.goto('/#/matching')
+    await page.locator('main').waitFor()
+    await page.waitForTimeout(900)
+    const approve = page.getByRole('button', { name: 'Approve' })
+    if (!(await approve.count())) test.skip(true, 'no association is in review')
+    if (await approve.isDisabled()) {
+      await expect(approve).toHaveAttribute('title', /Needs /)
+      await expect(page.locator('.gate-hint')).toContainText(/characters|candidate/)
+    }
+  })
+
+  test('the reason field says how much more is needed', async ({ page }) => {
+    await page.goto('/#/matching')
+    await page.locator('main').waitFor()
+    await page.waitForTimeout(900)
+    const reason = page.locator('main textarea')
+    if (!(await reason.count())) test.skip(true, 'no association is in review')
+    await expect(page.locator('main label', { hasText: 'Required reason' }))
+      .toContainText('more character(s) needed')
+    await reason.fill('This is a long enough explanation.')
+    await expect(page.locator('main label', { hasText: 'Required reason' }))
+      .toContainText('Long enough')
+  })
+})

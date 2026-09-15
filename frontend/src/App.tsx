@@ -131,6 +131,8 @@ type AuditJob = {
   audit_id: string | null; error: string | null; remaining_seconds: number; events: JobEvent[]
 }
 const JOB_ACTIVE = ['queued', 'running']
+// The backend refuses a shorter reason; the form now says so before you try.
+const REVIEW_REASON_MIN = 10
 
 const navigation: Array<{ group: string; items: Array<[PageId, string, string]> }> = [
   { group: 'Intelligence', items: [['home', '⌂', 'Command Center'], ['ideas', '◉', 'Idea Panel'], ['sources', '▦', 'Sources'], ['market', '◬', 'Market Pulse'], ['history', '≡', 'Agent History']] },
@@ -467,7 +469,7 @@ function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFa
         onClose={() => setWorkOpen(false)} onCancel={cancel} onResume={resume} />
       {!running && shown?.proposal && <div className={`audit-result-banner${shown.unresolved_concerns?.length ? ' incomplete' : ''}`}>
         <div><strong>{shown.unresolved_concerns?.length ? 'Venture Scout audit incomplete' : 'Venture Scout audit complete'}</strong><span>{shown.proposal.concept_title} · {(shown.cited_fact_ids || []).length} cited fact(s){shown.withdrawn_fact_ids?.length ? `, ${shown.withdrawn_fact_ids.length} withdrawn` : ''}</span></div>
-        <div><a href="#brief-1" onClick={event => { event.preventDefault(); document.getElementById("brief-1")?.scrollIntoView() }}>Read the brief</a>{shown.audit_id && <a href={`/api/audits/${shown.audit_id}`} target="_blank" rel="noreferrer">Audit record</a>}<button type="button" className="text-button" onClick={() => setWorkOpen(true)}>How it ran</button></div>
+        <div><a href="#brief-1" onClick={event => { event.preventDefault(); document.getElementById("brief-1")?.scrollIntoView() }}>Read the brief</a>{shown.audit_id && <small>Audit record <code>{shown.audit_id.slice(0, 8)}</code></small>}<button type="button" className="text-button" onClick={() => setWorkOpen(true)}>How it ran</button></div>
       </div>}
       {running && <div className="warning-box"><strong>Venture Scout is running</strong><span>Reading the evidence, drafting, critiquing its own draft and revising it. Several minutes on a local model. <button className="text-button" onClick={() => setWorkOpen(true)}>Watch it work</button></span></div>}
       {blocking.length > 0 && <div className="warning-box"><strong>Audit cannot run yet</strong>{blocking.map(gate => <p key={gate.label}>{gate.label}: {gate.detail}</p>)}</div>}
@@ -686,7 +688,7 @@ function SourcesPage({ onSource }: { sources: Source[]; onSource: (source: Sourc
   const showing = items.length ? `${page!.offset + 1}–${page!.offset + items.length} of ${page!.total}` : `0 of ${page?.total ?? 0}`
   return <section className="workspace"><div className="section-intro"><div><span>Immutable provenance</span><h2>Sources and evidence library</h2><p>Inspect exactly where every trusted observation came from.</p></div><input className="search-input" value={query} onChange={event => setQuery(event.target.value)} aria-label="Filter sources" placeholder="Search every captured artifact" /></div>
     <div className="history-toolbar"><span>{showing}{term ? ` matching “${term}”` : ''}</span>
-      <button className="text-button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - SOURCE_PAGE))}>← Previous</button>
+      <button className="text-button" title={offset === 0 ? "You are on the first page" : ""} disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - SOURCE_PAGE))}>← Previous</button>
       <button className="text-button" disabled={!page?.next_offset} onClick={() => setOffset(page!.next_offset!)}>Next →</button></div>
     {error && <div className="warning-box"><strong>Sources unavailable</strong><span>{error}</span></div>}
     <article className="data-panel">{!page ? <div className="drawer-loading">Reading the evidence library…</div> : items.length ? <div className="table-scroll"><table><thead><tr><th>Publisher / resource</th><th>Tier</th><th>Captured</th><th>Type</th><th>Yield</th><th>Size</th><th>SHA256</th><th /></tr></thead><tbody>{items.map(source => <tr key={source.id}><td><strong>{source.publisher_owner}</strong><small>{source.retrieval_method.replaceAll('_', ' ')}</small></td><td><Badge tone={source.is_discovery_only ? 'insufficient' : 'verified'}>{source.source_tier}</Badge></td><td>{formatDate(source.captured_at)}</td><td>{source.content_type}</td><td className="numeric">{source.observation_count}</td><td className="numeric">{formatBytes(source.raw_size)}</td><td><code>{source.sha256.slice(0, 12)}…</code></td><td><button className="text-button" onClick={() => onSource(source)}>Inspect →</button></td></tr>)}</tbody></table></div> : <EmptyState title="No matching sources">{term ? 'Nothing in the whole library matches that search.' : 'Run research to capture evidence.'}</EmptyState>}</article>
@@ -708,12 +710,40 @@ function MatchingEnginePage({ status, reviews, selectedId, onSelect, onReload, o
     <div className="review-layout"><article className="data-panel review-queue"><div className="panel-heading"><div><span>Human decisions</span><h2>Association outcomes</h2></div><Badge tone="inference">{reviews.length} items</Badge></div>{reviews.length ? reviews.map(item => <button className={review?.association_id === item.association_id ? 'active' : ''} key={item.association_id} onClick={() => onSelect(item.association_id)}><strong>{item.subject_title || 'Untitled captured source'}</strong><span>{item.candidate?.display_name || 'No candidate'} · margin {item.margin.toFixed(3)}</span><Badge tone={toneFor(item.outcome)}>{item.outcome.replaceAll('_', ' ')}</Badge></button>) : <EmptyState title="Review queue is empty">Ambiguous or conflicting associations will appear here instead of being guessed.</EmptyState>}</article>
       <div className="review-detail">{review ? <><article className="data-panel"><div className="panel-heading"><div><span>Captured source · {review.subject_type.replaceAll('_', ' ')}</span><h2>{review.subject_title || 'Untitled source'}</h2></div><Badge tone={toneFor(review.outcome)}>{review.outcome.replaceAll('_', ' ')}</Badge></div><p className="captured-copy">{review.subject_description || 'No description was captured.'}</p><div className="meta-line"><span>{review.subject_creator || 'Unknown creator'}</span><code>{review.subject_external_id || 'No external ID'}</code></div>{review.conflict_warnings.length ? <div className="warning-box"><strong>Contradiction guards</strong>{review.conflict_warnings.map(item => <span key={item}>{item.replaceAll('_', ' ')}</span>)}</div> : null}</article>
         <article className="data-panel"><div className="candidate-compare"><div><span>Top candidate</span><strong>{review.candidate?.display_name || 'None'}</strong><b>{review.top_score.toFixed(4)}</b></div><div><span>Runner-up</span><strong>{review.runner_up?.display_name || 'None'}</strong><b>{review.runner_up_score.toFixed(4)}</b></div><div><span>Margin</span><strong>{review.margin.toFixed(4)}</strong><b>{(review.required_coverage * 100).toFixed(0)}% coverage</b></div></div>{Object.keys(review.features).length ? <div className="feature-bars">{(review.feature_order.length ? review.feature_order : Object.keys(review.features)).map(name => <div key={name}><span>{name.replaceAll('_', ' ')}</span><div><i style={{ width: `${Math.max(0, Math.min(100, (review.features[name] || 0) * 100))}%` }} /></div><code>{(review.features[name] || 0).toFixed(4)}</code></div>)}</div> : <EmptyState title="No features were computed">A hard rule stopped this source before any candidate was scored, so there is nothing to weigh. The candidates below are still listed so you can choose one by hand.</EmptyState>}</article>
-        <article className="data-panel"><div className="panel-heading"><div><span>Append-only annotation</span><h2>Reviewer decision</h2></div></div><label>Candidate<select value={candidateId} onChange={event => setCandidateId(event.target.value)}><option value="">No candidate</option>{review.alternatives.map(item => <option key={item.candidate_id} value={item.candidate_id}>{item.display_name} — {item.score.toFixed(4)}</option>)}</select></label><label>Required reason<textarea value={reason} onChange={event => setReason(event.target.value)} placeholder="Explain why the evidence supports or rejects this association" /></label><div className="button-row"><button className="primary" disabled={busy || reason.trim().length < 10 || !candidateId} onClick={() => onReview(review, 'approved', reason, candidateId)}>Approve</button><button className="danger" disabled={busy || reason.trim().length < 10} onClick={() => onReview(review, 'rejected', reason, null)}>Reject</button><button className="secondary" disabled={busy || reason.trim().length < 10 || !candidateId || candidateId === review.candidate?.candidate_id} onClick={() => onReview(review, 'reassigned', reason, candidateId)}>Reassign</button></div></article></> : <EmptyState title="No association selected">Run research or wait for an ambiguous match to enter review.</EmptyState>}</div>
+        <article className="data-panel"><div className="panel-heading"><div><span>Append-only annotation</span><h2>Reviewer decision</h2></div></div><label>Candidate<select value={candidateId} onChange={event => setCandidateId(event.target.value)}><option value="">No candidate</option>{review.alternatives.map(item => <option key={item.candidate_id} value={item.candidate_id}>{item.display_name} — {item.score.toFixed(4)}</option>)}</select></label><label>Required reason<textarea value={reason} onChange={event => setReason(event.target.value)} placeholder="Explain why the evidence supports or rejects this association" /><small>{reason.trim().length < REVIEW_REASON_MIN ? `${REVIEW_REASON_MIN - reason.trim().length} more character(s) needed` : 'Long enough. This is written to the ledger and cannot be edited afterwards.'}</small></label>{(() => {
+          // Three buttons were disabled by conditions nothing on the page
+          // stated: a reason of at least ten characters, and a selected
+          // candidate. A dead button with an invisible precondition leaves
+          // the reviewer guessing which of the two is missing.
+          const shortReason = reason.trim().length < REVIEW_REASON_MIN
+          const blockers = (extra: string[]) => [
+            ...(shortReason ? [`a reason of at least ${REVIEW_REASON_MIN} characters`] : []),
+            ...extra,
+          ]
+          const why = (extra: string[]) => {
+            const missing = blockers(extra)
+            return missing.length ? `Needs ${missing.join(' and ')}.` : ''
+          }
+          const approve = why(candidateId ? [] : ['a candidate chosen above'])
+          const reject = why([])
+          const reassign = why([
+            ...(candidateId ? [] : ['a candidate chosen above']),
+            ...(candidateId && candidateId === review.candidate?.candidate_id
+              ? ['a different candidate from the current one'] : []),
+          ])
+          return <><div className="button-row">
+            <button className="primary" title={approve} disabled={busy || !!approve} onClick={() => onReview(review, 'approved', reason, candidateId)}>Approve</button>
+            <button className="danger" title={reject} disabled={busy || !!reject} onClick={() => onReview(review, 'rejected', reason, null)}>Reject</button>
+            <button className="secondary" title={reassign} disabled={busy || !!reassign} onClick={() => onReview(review, 'reassigned', reason, candidateId)}>Reassign</button>
+          </div>
+          {(approve || reject || reassign) && <small className="gate-hint">
+            {reject ? reject : `Approve: ${approve || 'ready'} · Reassign: ${reassign || 'ready'}`}</small>}</>
+        })()}</article></> : <EmptyState title="No association selected">Run research or wait for an ambiguous match to enter review.</EmptyState>}</div>
     </div>
   </section>
 }
 
-function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: Health | null; onStart: (niche: string) => void; busy: boolean }) {
+function MetaHunterPage({ runs, health, onStart, busy, onInspectFact }: { onInspectFact: (id: string) => void; runs: Run[]; health: Health | null; onStart: (niche: string) => void; busy: boolean }) {
   const [niche, setNiche] = useState('')
   const active = runs.find(run => ['queued', 'running'].includes(run.status))
   function submit(event: FormEvent) { event.preventDefault(); onStart(niche) }
@@ -765,7 +795,7 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
         <p>Written from your niche by the query planner, then reused every round.</p>
         <ul>{latest.progress!.search_queries!.map(q => <li key={q}><code>{q}</code></li>)}</ul></details>}
     </article>}
-    {latest && <><label>Inspect research run<select value={latest.id} onChange={e => setReportId(e.target.value)}>{runs.map(r => <option key={r.id} value={r.id}>{r.niche} — {r.status}</option>)}</select></label>{latest.progress && <article className="data-panel"><h3>{latest.progress.stage}</h3><p>{Math.round(latest.progress.elapsed_seconds)}s elapsed · {Math.round(latest.progress.remaining_seconds)}s {["queued", "running"].includes(latest.status) ? "remaining" : "unused budget"}</p><div className="metrics-grid compact">{Object.entries(latest.progress.usage).map(([key, value]) => <Metric key={key} label={key.replaceAll("_", " ")} value={value} note="Reserved attempts / captured entities" />)}</div>{latest.progress.questions.map(q => <p key={q.id}>{q.question} — {q.state}</p>)}</article>}<ResearchReport runId={latest.id} status={latest.status} /></>}
+    {latest && <><label>Inspect research run<select value={latest.id} onChange={e => setReportId(e.target.value)}>{runs.map(r => <option key={r.id} value={r.id}>{r.niche} — {r.status}</option>)}</select></label>{latest.progress && <article className="data-panel"><h3>{latest.progress.stage}</h3><p>{Math.round(latest.progress.elapsed_seconds)}s elapsed · {Math.round(latest.progress.remaining_seconds)}s {["queued", "running"].includes(latest.status) ? "remaining" : "unused budget"}</p><div className="metrics-grid compact">{Object.entries(latest.progress.usage).map(([key, value]) => <Metric key={key} label={key.replaceAll("_", " ")} value={value} note="Reserved attempts / captured entities" />)}</div>{latest.progress.questions.map(q => <p key={q.id}>{q.question} — {q.state}</p>)}</article>}<ResearchReport runId={latest.id} status={latest.status} onInspectFact={onInspectFact} /></>}
     <div className="api-readiness"><span>Tavily <b>{health?.connectors.tavily_configured ? 'Configured — not a live authentication check' : 'Missing key'}</b></span><span>YouTube <b>{health?.connectors.youtube_configured ? 'Configured — not a live authentication check' : 'Missing key'}</b></span><span>Roblox <b>Public interface</b></span><span>Qwen <b>{health?.ollama.primary_present ? '14B ready' : 'Unavailable'}</b></span></div>
   </section>
 }
@@ -918,7 +948,7 @@ function ResultDetail({ card, onClose }: { card: ResultCard; onClose: () => void
           <dl><dt>Universe</dt><dd><code>{card.universe_id}</code></dd>
             <dt>Audited</dt><dd>{formatDate(card.created_at)}</dd>
             <dt>Audit record</dt><dd><code>{card.audit_id}</code></dd></dl>
-          <p><a href={`/api/audits/${card.audit_id}`} target="_blank" rel="noreferrer">Persistent audit record</a></p>
+
         </>}
       </div></aside></div>
 }
@@ -1140,7 +1170,7 @@ function AgentHistoryPage({ onInspectFact, onOpenCandidate }: { onInspectFact: (
       <input aria-label="Filter agent history" placeholder="Filter by concept, experience or niche" value={query} onChange={event => setQuery(event.target.value)} />
       <button className="text-button" onClick={reload}>Refresh</button>
       {runs && <span>{runs.length ? `${offset + 1}–${offset + runs.length}` : '0'} of {total} run(s){term ? ` · ${shown.length} shown` : ''}</span>}
-      <button className="text-button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - HISTORY_PAGE))}>← Previous</button>
+      <button className="text-button" title={offset === 0 ? "You are on the first page" : ""} disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - HISTORY_PAGE))}>← Previous</button>
       <button className="text-button" disabled={nextOffset === null} onClick={() => setOffset(nextOffset!)}>Next →</button>
     </div>
     {error && <div className="warning-box"><strong>History unavailable</strong><span>{error}</span></div>}
@@ -1163,7 +1193,7 @@ function AgentHistoryPage({ onInspectFact, onOpenCandidate }: { onInspectFact: (
           {!!run.withdrawn_fact_ids.length && <div className="warning-box"><strong>Citations withdrawn since this ran</strong><span>Cited at the time; they no longer resolve to admissible evidence.</span>{run.withdrawn_fact_ids.map(id => <p key={id}><code>{id}</code></p>)}</div>}
           <div className="history-actions">
             <button className="text-button" onClick={() => onOpenCandidate(run.candidate_id)}>Open the full brief</button>
-            {run.kind === 'venture_scout' && <a href={`/api/audits/${run.id}`} target="_blank" rel="noreferrer">Stored audit record</a>}
+            {run.kind === 'venture_scout' && <small>Audit record <code>{run.id.slice(0, 8)}</code></small>}
             {run.model_name && <span>{run.model_name}</span>}
           </div>
         </div>}
@@ -1421,7 +1451,7 @@ export default function App() {
         {page === 'history' && <AgentHistoryPage onInspectFact={inspectFact} onOpenCandidate={id => setSelectedIdea(id)} />}
         {page === 'matching' && <MatchingEnginePage status={matchingStatus} reviews={matchingReviews} selectedId={selectedMatch} onSelect={setSelectedMatch} onReload={loadMatching} onReview={reviewMatch} busy={busy} />}
         {page === 'market' && <MarketPulsePage />}
-        {page === 'meta' && <MetaHunterPage runs={runs} health={health} onStart={startResearch} busy={busy} />}
+        {page === 'meta' && <MetaHunterPage runs={runs} health={health} onStart={startResearch} busy={busy} onInspectFact={inspectFact} />}
         {page === 'scout' && <VentureScoutPage candidates={candidates} />}
         {page === 'calibration' && <CalibrationPage calibration={calibration} summary={summary} />}
         {page === 'health' && <HealthPage health={health} summary={summary} matching={matchingStatus} />}

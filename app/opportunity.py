@@ -89,17 +89,21 @@ def _headroom(value: float) -> float:
     return _clamp(1.0 - value)
 
 
-# key -> (pillar key, weight, transform, what a high value means)
-COMPONENTS: tuple[tuple[str, str, float, object, str], ...] = (
-    ("demand", "demand", 0.30, _demand,
+# key -> (pillar key, label, weight, transform, what a high value means)
+#
+# The label is the component's own, not the pillar's. `headroom` inverts
+# `saturation`, so borrowing the pillar's label printed "Genre saturation 60%"
+# beside a bar meaning 60% room -- the exact opposite of what it showed.
+COMPONENTS: tuple[tuple[str, str, str, float, object, str], ...] = (
+    ("demand", "demand", "Demand", 0.30, _demand,
      "how many people are playing this kind of game right now"),
-    ("momentum", "momentum", 0.25, _momentum,
+    ("momentum", "momentum", "Momentum", 0.25, _momentum,
      "whether that audience is growing or draining"),
-    ("acceleration", "acceleration", 0.10, _acceleration,
+    ("acceleration", "acceleration", "Acceleration", 0.10, _acceleration,
      "whether the growth itself is steepening"),
-    ("reception", "reception", 0.20, _reception,
+    ("reception", "reception", "Reception", 0.20, _reception,
      "how the audience rates what already exists"),
-    ("headroom", "saturation", 0.15, _headroom,
+    ("headroom", "saturation", "Genre headroom", 0.15, _headroom,
      "how much room the genre still has on Roblox's shelves"),
 )
 
@@ -148,9 +152,8 @@ def score_from_pillars(reading: dict) -> Opportunity:
     weighted = 0.0
     available = 0.0
 
-    for key, pillar_key, weight, transform, meaning in COMPONENTS:
+    for key, pillar_key, label, weight, transform, meaning in COMPONENTS:
         pillar = by_key.get(pillar_key) or {}
-        label = pillar.get("label", pillar_key.title())
         if pillar.get("state") != pillars_module.MEASURED or pillar.get("value") is None:
             missing.append(key)
             components.append(Component(key, label, weight, False, None, None, None,

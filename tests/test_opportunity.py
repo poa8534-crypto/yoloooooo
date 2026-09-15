@@ -134,7 +134,18 @@ def test_the_score_carries_the_version_of_the_weights_that_made_it():
 
 
 def test_the_weights_sum_to_one_so_a_full_score_is_reachable():
-    assert sum(weight for _, _, weight, _, _ in opportunity.COMPONENTS) == pytest.approx(1.0)
+    assert sum(weight for *_, weight, _, _ in opportunity.COMPONENTS) == pytest.approx(1.0)
+
+
+def test_a_component_that_inverts_its_pillar_is_not_labelled_as_that_pillar():
+    """`headroom` is `1 - saturation`. Printing "Genre saturation 60%" beside a
+    bar that means 60% *room* states the opposite of what it shows."""
+    result = opportunity.score_from_pillars(
+        reading(demand=20_000, momentum=0, reception=0.9, saturation=0.4))
+
+    entry = next(c for c in result.components if c["key"] == "headroom")
+    assert entry["label"] == "Genre headroom"
+    assert entry["normalised"] == pytest.approx(0.6), "the bar shows room, not crowding"
 
 
 def test_ranking_is_total_and_deterministic():

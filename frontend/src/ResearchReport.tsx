@@ -29,7 +29,7 @@ export function DesignDetails({ design, facts, onInspect }: { design: Design; fa
   return <div className="classified proposal"><span className="evidence-badge proposal">Speculative design · human validation required</span>
     {!!design.supporting_fact_ids?.length && <details className="brief-fold"><summary>Cited evidence<span>{design.supporting_fact_ids.length}</span></summary><p>Citations identify inputs; they do not verify the model's interpretation.</p><ul className="cited-list">{design.supporting_fact_ids.map(id => <li key={id}>{onInspect
       ? <button type="button" className="text-button" onClick={() => onInspect(id)}>{textFor(id) || `Fact ${id.slice(0, 8)}`}</button>
-      : <a href={`/api/evidence/${id}`} target="_blank" rel="noreferrer">{textFor(id) || `Fact ${id.slice(0, 8)}`}</a>}</li>)}</ul></details>}
+      : <span>{textFor(id) || `Fact ${id.slice(0, 8)}`}</span>}</li>)}</ul></details>}
     {([['Essential features', design.essential_features], ['Excluded features', design.excluded_features], ['Dependencies', design.dependencies], ['Validation tasks', design.validation_tasks], ['Counterevidence / challenges to investigate', design.counterevidence], ['Unanswered questions', design.questions]] as const).map(([label, values]) => values?.length ? <details className="brief-fold" key={label} open={values.length <= 4}><summary>{label}<span>{values.length}</span></summary><ul>{values.map((value, i) => <li key={i}>{value}</li>)}</ul></details> : null)}
     {!!design.design_assumptions?.length && <details className="brief-fold"><summary>Unverified design quantities<span>{design.design_assumptions.length}</span></summary><ul>{design.design_assumptions.map((a, i) => <li key={i}>{a.kind.replaceAll('_', ' ')}: {a.value} {a.unit} — {a.basis.replaceAll('_', ' ')}</li>)}</ul></details>}
   </div>
@@ -70,7 +70,9 @@ export function CandidateHistory({ candidateId }: { candidateId: string }) {
   return data ? <HistoryTable data={data} /> : <p>{error || 'Loading captured history…'}</p>
 }
 
-export function ResearchReport({ runId, status }: { runId: string; status: string }) {
+export function ResearchReport({ runId, status, onInspectFact }: {
+  runId: string; status: string; onInspectFact?: (id: string) => void
+}) {
   const [report, setReport] = useState<Report | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
@@ -99,11 +101,13 @@ export function ResearchReport({ runId, status }: { runId: string; status: strin
     <h3>Research questions and limitations</h3><div className="fact-stack">{report.questions.map(q => <div key={q.id}><strong>{q.question}</strong><p>{q.state} — {q.limitation}</p><small>{q.fact_ids.length} supporting fact IDs</small></div>)}</div>
     <h3>Candidate comparison</h3>{report.comparison.map(d => <details key={d.candidate_id}><summary>Universe {d.universe_id} · {d.facts.length} admissible facts · relevance requires review</summary>
       {!!d.omitted_facts && <p>Some saved facts are no longer admissible and were omitted.</p>}
-      <ul>{d.facts.map(f => <li key={f.id}>{f.text} <small>({f.freshness})</small> <a href={`/api/evidence/${f.id}`} target="_blank" rel="noreferrer">Inspect provenance</a></li>)}</ul><HistoryTable data={d.history} /></details>)}
+      <ul>{d.facts.map(f => <li key={f.id}>{f.text} <small>({f.freshness})</small> {onInspectFact
+        ? <button type="button" className="text-button" onClick={() => onInspectFact(f.id)}>Inspect provenance</button>
+        : null}</li>)}</ul><HistoryTable data={d.history} /></details>)}
     <h3>Research concepts and bound audits</h3>{report.concepts.length ? report.concepts.map(c => {
       const audit = report.audits.find(a => a.proposal_id === c.id && a.candidate_id === c.candidate_id)
       return <details key={c.id}><summary>{c.payload.concept_title} · speculative research concept</summary><p>{c.payload.core_loop}</p><p>{c.payload.differentiator}</p><DesignDetails design={c.payload} />
-        {audit ? <div><h3>Venture Scout — {audit.evidence_state.replaceAll('_', ' ')}</h3><a href={`/api/audits/${audit.audit_id}`} target="_blank" rel="noreferrer">Persistent audit record</a>{audit.proposal && <><p>{audit.proposal.core_loop}</p><ol>{audit.proposal.build_steps.map((s, i) => <li key={i}>{s}</li>)}</ol><DesignDetails design={audit.proposal} /></>}<ul>{audit.risks.map((risk, i) => <li key={i}>{risk}</li>)}</ul></div> : <p>Not audited yet. A run drafts concepts and stops; the Venture Scout runs them from its audit queue when you choose to.</p>}
+        {audit ? <div><h3>Venture Scout — {audit.evidence_state.replaceAll('_', ' ')}</h3><small>Audit record <code>{audit.audit_id}</code></small>{audit.proposal && <><p>{audit.proposal.core_loop}</p><ol>{audit.proposal.build_steps.map((s, i) => <li key={i}>{s}</li>)}</ol><DesignDetails design={audit.proposal} onInspect={onInspectFact} /></>}<ul>{audit.risks.map((risk, i) => <li key={i}>{risk}</li>)}</ul></div> : <p>Not audited yet. A run drafts concepts and stops; the Venture Scout runs them from its audit queue when you choose to.</p>}
       </details>
     }) : (() => {
       // Drafting nothing is now a decision with a stated reason, not just an

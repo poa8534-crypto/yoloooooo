@@ -279,3 +279,21 @@ label { text-transform: none; letter-spacing: 0; font-size: 14px; }
 .opportunity-probability small { color: #5f6368; font-size: 12px; line-height: 1.5; }
 .opportunity-note { display: block; margin-top: 12px; color: #5f6368; font-size: 11px; line-height: 1.5; }
 @media (max-width: 760px) { .opp-row { grid-template-columns: 1fr; gap: 4px; } .opp-row > b { text-align: left; } }
+
+/* Captions must wrap, not be chopped.
+   `.metric-cell`'s label, value and caption were all `nowrap` with an ellipsis.
+   In a four-column grid each cell is about 150px wide, so a caption like
+   "Reserved attempts / captured entities" lost half its words and read as text
+   running into the edge of the tile. Everything here wraps instead. */
+.metric-cell > span, .metric-cell > small, .metric-cell > strong {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.metric-cell > strong { line-height: 1.15; }
+/* Activity lines are sentences; truncating one to a single clipped line hid
+   what actually happened. */
+.activity-list p { overflow: visible; text-overflow: clip; white-space: normal; }
+/* A header that cannot wrap forces its whole table wider than the container. */
+th { white-space: normal; }

@@ -117,7 +117,8 @@ def seed(database_url: str, artifact_dir: Path) -> None:
     from app.migrations import install_append_only_triggers
     from sqlalchemy import select
 
-    from app.models import Candidate, MarketSample, Proposal, ResearchRun
+    from app.models import (AssociationRecord, Candidate, MarketSample, MatchCandidate,
+                            MatchSubject, Proposal, ResearchRun)
 
     Base.metadata.create_all(engine)
     install_append_only_triggers(engine)
@@ -209,6 +210,40 @@ def seed(database_url: str, artifact_dir: Path) -> None:
                     player_count=entry["counts"][step], up_votes=entry["up"],
                     down_votes=entry["down"], genre=entry["genre"]))
                 rank += 1
+        db.commit()
+
+        # One association awaiting a human decision, so the reviewer controls
+        # are actually exercised. Without it the review tests skip, and a
+        # skipped guard guards nothing.
+        subject = MatchSubject(
+            subject_type="youtube_video", external_kind="video_id", external_id="vid-review",
+            raw_title="Lantern Bay Fishing - full walkthrough", niche="cooperative fishing",
+            normalization_version="norm-v2")
+        db.add(subject)
+        db.flush()
+        options = []
+        for index, candidate in enumerate(candidates[:2]):
+            option = MatchCandidate(candidate_row_id=candidate.id,
+                                    universe_id=candidate.external_id,
+                                    raw_name=f"Candidate {index + 1}",
+                                    normalization_version="norm-v2")
+            db.add(option)
+            db.flush()
+            options.append(option)
+        db.add(AssociationRecord(
+            subject_id=subject.id,
+            candidate_id=options[0].id if options else None,
+            runner_up_candidate_id=options[1].id if len(options) > 1 else None,
+            outcome="review_required",
+            rationale_codes=["fuzzy_title_only"],
+            features={"title_similarity": 0.62}, feature_availability={"title_similarity": True},
+            feature_order=["title_similarity"],
+            candidate_scoreboard=[{"candidate_id": option.id, "display_name": option.raw_name,
+                                   "score": 0.62 - position * 0.2}
+                                  for position, option in enumerate(options)],
+            top_score=0.62, matcher_version="assoc-v1",
+            feature_schema_version="features-v1", normalization_version="norm-v2",
+            threshold_version="thresholds-v1", shadow_mode=True))
         db.commit()
 
 
