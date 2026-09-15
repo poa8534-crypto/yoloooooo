@@ -117,7 +117,7 @@ def seed(database_url: str, artifact_dir: Path) -> None:
     from app.migrations import install_append_only_triggers
     from sqlalchemy import select
 
-    from app.models import Candidate, Proposal, ResearchRun
+    from app.models import Candidate, MarketSample, Proposal, ResearchRun
 
     Base.metadata.create_all(engine)
     install_append_only_triggers(engine)
@@ -178,6 +178,37 @@ def seed(database_url: str, artifact_dir: Path) -> None:
                         pointer=f"/data/{index}/{field}", unit=unit, observed_at=when,
                     )
                     create_fact(db, template_id=metric, slots={"value": observation})
+
+        # Two censuses two hours apart, so Market Pulse renders both a measured
+        # rate and an abstention rather than only the empty state. Universe 303
+        # appears once on purpose: a game with a single observation is the case
+        # that must show "insufficient evidence" instead of a zero.
+        census = [
+            {"universe_id": "101", "name": "Lantern Bay Fishing", "genre": "Simulation",
+             "counts": [4_000, 6_000], "up": 9_000, "down": 300},
+            {"universe_id": "202", "name": "Deep Harbour Crew", "genre": "Adventure",
+             "counts": [2_000, 1_400], "up": 400, "down": 400},
+            {"universe_id": "303", "name": "Tidewatch", "genre": "Simulation",
+             "counts": [1_200], "up": 0, "down": 0},
+        ]
+        for step in (0, 1):
+            when = captured + timedelta(hours=2 * step)
+            artifact = record_artifact(
+                db, url="https://apis.roblox.com/explore-api/v1/get-sorts",
+                retrieval_method="scheduled_market_sample", content_type="application/json",
+                payload={"sorts": [{"sortId": "up-and-coming", "step": step}]},
+                source_tier="primary", owner="roblox.com", captured_at=when,
+            )
+            rank = 0
+            for entry in census:
+                if step >= len(entry["counts"]):
+                    continue
+                db.add(MarketSample(
+                    artifact_id=artifact.id, captured_at=when, sort_id="up-and-coming",
+                    rank=rank, universe_id=entry["universe_id"], name=entry["name"],
+                    player_count=entry["counts"][step], up_votes=entry["up"],
+                    down_votes=entry["down"], genre=entry["genre"]))
+                rank += 1
         db.commit()
 
 

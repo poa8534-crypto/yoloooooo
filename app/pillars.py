@@ -156,7 +156,7 @@ def reception(points: list[MarketSample]) -> Pillar:
                   observations=len(points), basis=[latest.id])
 
 
-def saturation(db, genre: str, at: datetime | None = None) -> Pillar:
+def saturation(db, genre: str) -> Pillar:
     """Share of the most recent census that this game's genre already holds.
 
     High saturation is not automatically bad and this does not say it is: it

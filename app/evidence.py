@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import math
@@ -47,12 +48,42 @@ def _canonical_json(payload: Any) -> bytes:
 
 
 def _store_bytes(raw: bytes, content_type: str) -> tuple[str, str]:
+    """Store the captured bytes, compressed, addressed by their own hash.
+
+    The market census writes 136 KB of near-identical JSON every half hour,
+    which is 2.4 GB a year into a folder that happens to be synchronised to
+    OneDrive. Captured payloads compress about six-fold, so they are stored
+    that way.
+
+    The digest is still taken over the *original* bytes: the hash in the
+    ledger identifies what the source said, not how it happens to be stored.
+    `mtime=0` keeps the compressed form byte-identical for identical input, so
+    content addressing still holds.
+    """
     digest = hashlib.sha256(raw).hexdigest()
     ext = ".json" if "json" in content_type else ".txt"
-    path = get_settings().artifact_dir / f"{digest}{ext}"
+    path = get_settings().artifact_dir / f"{digest}{ext}.gz"
     if not path.exists():
-        path.write_bytes(raw)
+        path.write_bytes(gzip.compress(raw, compresslevel=6, mtime=0))
     return digest, str(path)
+
+
+def _read_stored(path: Path) -> bytes:
+    """The captured bytes, whatever form they were stored in.
+
+    Artifacts recorded before compression keep their own uncompressed paths,
+    so both forms stay readable and no migration is needed.
+    """
+    stored = path.read_bytes()
+    if path.suffix != ".gz":
+        return stored
+    try:
+        return gzip.decompress(stored)
+    except (OSError, EOFError) as exc:
+        # A stored file that will not decompress no longer holds what was
+        # captured. That is the same failure as a hash mismatch and has to be
+        # reported as one rather than escaping as a gzip error.
+        raise EvidenceError("artifact hash mismatch: stored bytes are unreadable") from exc
 
 
 def record_artifact(
@@ -87,7 +118,7 @@ def record_artifact(
 
 
 def _load_artifact(artifact: SourceArtifact) -> Any:
-    raw = Path(artifact.raw_path).read_bytes()
+    raw = _read_stored(Path(artifact.raw_path))
     if hashlib.sha256(raw).hexdigest() != artifact.sha256:
         raise EvidenceError("artifact hash mismatch")
     if "json" in artifact.content_type:

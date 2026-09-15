@@ -4,7 +4,7 @@ import { expect, test, type Page } from '@playwright/test'
 // desktop, tablet and narrow screens plus browser zoom, and for keyboard-only
 // operation across navigation, filters, dialogs and disclosures.
 
-const PAGES = ['home', 'ideas', 'sources', 'history', 'matching', 'meta', 'scout', 'calibration', 'health']
+const PAGES = ['home', 'ideas', 'sources', 'history', 'market', 'matching', 'meta', 'scout', 'calibration', 'health']
 
 async function horizontalOverflow(page: Page) {
   return page.evaluate(() => {

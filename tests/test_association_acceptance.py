@@ -295,5 +295,9 @@ async def test_every_downstream_metric_resolves_to_a_hashed_artifact(research):
             artifact = db.get(SourceArtifact, observation.artifact_id)
             assert artifact is not None
             assert artifact.sha256 in association.source_artifact_hashes
-            raw = Path(artifact.raw_path).read_bytes()
+            # Read through the accessor rather than off the disk: payloads are
+            # stored compressed, and the recorded digest is over what the
+            # source sent, not over whatever encoding it is kept in.
+            from app.evidence import _read_stored
+            raw = _read_stored(Path(artifact.raw_path))
             assert hashlib.sha256(raw).hexdigest() == artifact.sha256

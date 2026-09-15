@@ -660,7 +660,12 @@ def get_evidence(fact_id: str, db: Session = Depends(get_db)):
 
 
 def _artifact_size(artifact: SourceArtifact) -> int:
-    try:
+    """The size of what the source sent, which the UI labels "raw captured
+    bytes". Stored payloads are compressed, so the file on disk is roughly a
+    sixth of that and reporting it here would understate every capture."""
+    if artifact.raw_size:
+        return artifact.raw_size
+    try:  # captures that predate size recording
         return Path(artifact.raw_path).stat().st_size
     except OSError:
         return 0
@@ -1299,6 +1304,26 @@ async def health(db: Session = Depends(get_db)):
     seen = dependency_health.observations(db)
     # A local instance costs nothing to ask, so its state is observed rather
     # than inferred from whenever a run last happened to use it.
+    # A census older than several sampling intervals means the scheduler is
+    # not running, whatever the last sample said when it landed.
+    census_at = db.scalar(select(MarketSample.captured_at)
+                          .order_by(MarketSample.captured_at.desc()).limit(1))
+    market_census = None
+    if settings.roblox_charts_enabled:
+        if census_at is None:
+            market_census = {"state": "never_sampled",
+                             "detail": "No market census has been recorded yet."}
+        else:
+            age = (datetime.now(UTC) - budget_utc(census_at)).total_seconds()
+            # Three intervals tolerates one missed sample and a slow one
+            # without crying wolf.
+            allowed = settings.market_sample_minutes * 60 * 3
+            market_census = {
+                "state": "last_request_succeeded" if age <= allowed else "stale",
+                "detail": f"Last census {int(age // 60)} minutes ago; the sampler "
+                          f"runs every {settings.market_sample_minutes} minutes.",
+                "at": budget_utc(census_at).isoformat(),
+            }
     searxng_reachable = None
     if settings.searxng_enabled:
         try:
@@ -1341,6 +1366,14 @@ async def health(db: Session = Depends(get_db)):
                                        reachable=searxng_reachable),
             dependency_health.describe("Roblox search", configured=settings.roblox_search_enabled,
                                        observed=seen.get("roblox_search")),
+            # The sampler failing is silent by construction: it swallows its
+            # own errors so one bad census cannot stop the next, and an
+            # interval job that never fires logs nothing at all. Without a row
+            # here, a stopped sampler looks exactly like a working one until
+            # somebody notices the rates have gone quiet.
+            dependency_health.describe("Market census sampler",
+                                       configured=settings.roblox_charts_enabled,
+                                       observed=market_census),
             dependency_health.describe("Tavily search", configured=bool(settings.tavily_api_key),
                                        observed=seen.get("tavily")),
             dependency_health.describe("YouTube Data API", configured=bool(settings.youtube_api_key),

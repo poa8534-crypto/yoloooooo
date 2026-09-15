@@ -10,6 +10,7 @@ const PAGES = [
   ['Ideas and game dossiers', 'ideas'],
   ['Sources', 'sources'],
   ['Agent History', 'history'],
+  ['Market Pulse', 'market'],
   ['Matching Engine', 'matching'],
   ['Meta Hunter', 'meta'],
   ['Venture Scout', 'scout'],

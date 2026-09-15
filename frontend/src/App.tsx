@@ -546,9 +546,9 @@ const SHELF_NAMES: Record<string, string> = {
 
 // A rate is only as good as the interval it was measured over, so the reading's
 // age is shown with the same weight as the reading itself.
-function ageOf(iso: string | null) {
+function ageOf(iso: string | null, now: number = Date.now()) {
   if (!iso) return null
-  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
+  const minutes = Math.round((now - new Date(iso).getTime()) / 60000)
   if (minutes < 60) return { text: minutes + ' min ago', stale: false }
   const hours = minutes / 60
   return { text: hours.toFixed(1) + ' h ago', stale: hours > 2 }
@@ -596,15 +596,25 @@ function RisingGame({ game }: { game: MarketPulse['rising'][number] }) {
 function MarketPulsePage() {
   const [pulse, setPulse] = useState<MarketPulse | null>(null)
   const [error, setError] = useState('')
+  // A freshness badge computed once at mount freezes at whatever it said when
+  // the page opened, so a census that goes stale while the tab is open still
+  // reads as new. Re-read the clock, and re-fetch often enough to notice a
+  // census landing.
+  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     let cancelled = false
-    api<MarketPulse>('/api/market/pulse')
-      .then(result => { if (!cancelled) setPulse(result) })
+    const load = () => api<MarketPulse>('/api/market/pulse')
+      .then(result => { if (!cancelled) { setPulse(result); setError('') } })
       .catch(caught => { if (!cancelled) setError((caught as Error).message) })
-    return () => { cancelled = true }
+    load()
+    const tick = window.setInterval(() => setNow(Date.now()), 30_000)
+    const refresh = window.setInterval(load, 120_000)
+    return () => { cancelled = true; window.clearInterval(tick); window.clearInterval(refresh) }
   }, [])
-  const age = ageOf(pulse?.captured_at || null)
-  return <section className="page-grid">
+  const age = ageOf(pulse?.captured_at || null, now)
+  // `workspace` is the shell every other page renders inside; a bare grid sits
+  // outside the page's own width constraints and scrolls sideways.
+  return <section className="workspace">
     <article className="data-panel"><div className="panel-heading"><div>
       <span>Roblox's own front page, sampled on a schedule</span><h2>Market census</h2></div>
       {age && <Badge tone={age.stale ? 'insufficient' : 'verified'}>{age.text}</Badge>}</div>
