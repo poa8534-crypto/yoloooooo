@@ -27,12 +27,15 @@ from .config import ROOT, get_settings
 from .db import SessionLocal, get_db, init_db
 from .evidence import fact_freshness, render_fact
 from .matching import DEFAULT_EMBEDDING_MODEL
+from . import pillars as pillars_module
+from .research_budget import utc as budget_utc
 from .models import (
     AssociationRecord,
     AuditActivityEvent,
     AuditRecord,
     Candidate,
     ConfidenceRecord,
+    MarketSample,
     DecisionOverride,
     DecisionRecord,
     Fact,
@@ -808,6 +811,63 @@ def dashboard_timeline(db: Session = Depends(get_db)):
             point[name] = cumulative[name]
         points.append(point)
     return {"points": points}
+
+
+@app.get("/api/market/pulse")
+def market_pulse_view(db: Session = Depends(get_db)):
+    """The latest census of Roblox's own front page.
+
+    Reports when it was taken as well as what it said. A census read without
+    its age is worse than no census: shelves turn over within a day, and a
+    stale sample presented as current is exactly the kind of confident wrong
+    number the pillars exist to avoid.
+    """
+    latest = db.scalar(select(MarketSample.captured_at)
+                       .order_by(MarketSample.captured_at.desc()).limit(1))
+    if latest is None:
+        return {"captured_at": None, "samples": 0, "rows": 0, "shelves": [],
+                "genres": [], "rising": [],
+                "note": "No census has been sampled yet. The sampler runs on a "
+                        "schedule; the first reading appears after it fires."}
+    rows = list(db.scalars(select(MarketSample).where(MarketSample.captured_at == latest)))
+    captures = db.scalar(select(func.count(func.distinct(MarketSample.captured_at)))) or 0
+    genres: dict[str, set[str]] = {}
+    for row in rows:
+        genres.setdefault(row.genre or "unreported", set()).add(row.universe_id)
+    universes = {row.universe_id for row in rows}
+    shelves: dict[str, int] = {}
+    for row in rows:
+        shelves[row.sort_id] = shelves.get(row.sort_id, 0) + 1
+    # Up-and-Coming is Roblox's own answer to "what grew in the last day",
+    # which is the single hardest signal to reconstruct from anywhere else.
+    rising = [row for row in rows if row.sort_id == "up-and-coming"]
+    return {
+        # SQLite hands back a naive datetime even for a timezone-aware column,
+        # and a browser reads a naive ISO string as local time. Sent bare, a
+        # census taken seventeen minutes ago would be rendered as hours stale
+        # wherever the machine is not on UTC.
+        "captured_at": budget_utc(latest).isoformat(),
+        "samples": captures,
+        "rows": len(rows),
+        "universes": len(universes),
+        "shelves": [{"sort_id": key, "games": value} for key, value in sorted(shelves.items())],
+        "genres": sorted(({"genre": key, "games": len(value),
+                           "share": len(value) / len(universes)} for key, value in genres.items()),
+                         key=lambda entry: -entry["games"]),
+        "rising": [{"universe_id": row.universe_id, "name": row.name, "rank": row.rank,
+                    "player_count": row.player_count, "genre": row.genre,
+                    "up_votes": row.up_votes, "down_votes": row.down_votes}
+                   for row in sorted(rising, key=lambda row: row.rank)],
+        "pillars_version": pillars_module.PILLARS_VERSION,
+        "note": "A census of what Roblox ranks, not a recommendation. Placement "
+                "on a shelf is Roblox's judgement, not this system's.",
+    }
+
+
+@app.get("/api/market/game/{universe_id}")
+def market_game_pillars(universe_id: str, db: Session = Depends(get_db)):
+    """Measured dimensions for one game. Never a combined score."""
+    return pillars_module.pillars_for(db, universe_id)
 
 
 @app.get("/api/sources")

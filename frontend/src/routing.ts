@@ -1,5 +1,5 @@
-export type PageId = 'home' | 'ideas' | 'sources' | 'history' | 'matching' | 'meta' | 'scout' | 'calibration' | 'health'
-const pages = new Set(['home', 'ideas', 'sources', 'history', 'matching', 'meta', 'scout', 'calibration', 'health'])
+export type PageId = 'home' | 'ideas' | 'sources' | 'history' | 'market' | 'matching' | 'meta' | 'scout' | 'calibration' | 'health'
+const pages = new Set(['home', 'ideas', 'sources', 'history', 'market', 'matching', 'meta', 'scout', 'calibration', 'health'])
 export type Route = { page: PageId; candidate: string; proposal: string; audit: string; run: string }
 export function readRoute(hash = window.location.hash): Route {
   const [path, search = ''] = hash.replace(/^#\/?/, '').split('?')

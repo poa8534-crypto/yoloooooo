@@ -138,6 +138,12 @@ def start_scheduler() -> AsyncIOScheduler:
             sample_market,
             trigger="interval",
             minutes=settings.market_sample_minutes,
+            # An interval job's first run is one whole interval after start, so
+            # every restart pushed the next census back and a service restarted
+            # often enough would never take one. Sample on startup instead: the
+            # census is then fresh immediately after a restart, which is when
+            # somebody is most likely to be looking at it.
+            next_run_time=datetime.now(settings.tz),
             id="market_pulse_sample",
             replace_existing=True,
             coalesce=True,

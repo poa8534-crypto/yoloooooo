@@ -133,14 +133,14 @@ type AuditJob = {
 const JOB_ACTIVE = ['queued', 'running']
 
 const navigation: Array<{ group: string; items: Array<[PageId, string, string]> }> = [
-  { group: 'Intelligence', items: [['home', '⌂', 'Command Center'], ['ideas', '◉', 'Idea Panel'], ['sources', '▦', 'Sources'], ['history', '≡', 'Agent History']] },
+  { group: 'Intelligence', items: [['home', '⌂', 'Command Center'], ['ideas', '◉', 'Idea Panel'], ['sources', '▦', 'Sources'], ['market', '◬', 'Market Pulse'], ['history', '≡', 'Agent History']] },
   { group: 'Engine', items: [['matching', '⌘', 'Matching Engine'], ['meta', '◎', 'Meta Hunter'], ['scout', '◈', 'Venture Scout']] },
   { group: 'System', items: [['calibration', '☷', 'Collection & Calibration'], ['health', '⌁', 'System Health']] },
 ]
 
 const pageNames: Record<PageId, string> = {
   home: 'Home', ideas: 'Ideas and game dossiers', sources: 'Sources', matching: 'Matching Engine',
-  meta: 'Meta Hunter', scout: 'Venture Scout', history: 'Agent History', calibration: 'Collection & Calibration', health: 'System Health',
+  meta: 'Meta Hunter', scout: 'Venture Scout', history: 'Agent History', market: 'Market Pulse', calibration: 'Collection & Calibration', health: 'System Health',
 }
 
 function describeError(detail: unknown, status: number): string {
@@ -525,6 +525,135 @@ const SOURCE_PAGE = 50
 // search reported nothing for every record past the first hundred. Both the
 // filter and the paging happen in the database now, and the page says how many
 // records the filter actually matched.
+type PillarReading = { key: string; label: string; unit: string; value: number | null
+  state: string; detail: string; observations: number; basis: string[] }
+type GamePillars = { version: string; universe_id: string; genre: string; observations: number
+  shelves: string[]; pillars: PillarReading[]; measured: number; note: string }
+type MarketPulse = {
+  captured_at: string | null; samples: number; rows: number; universes?: number
+  shelves: Array<{ sort_id: string; games: number }>
+  genres: Array<{ genre: string; games: number; share: number }>
+  rising: Array<{ universe_id: string; name: string; rank: number; player_count: number
+    genre: string; up_votes: number; down_votes: number }>
+  pillars_version?: string; note: string
+}
+
+const SHELF_NAMES: Record<string, string> = {
+  'up-and-coming': 'Up-and-Coming', 'top-trending': 'Top Trending',
+  'top-playing-now': 'Top Playing Now', 'fun-with-friends': 'Fun with Friends',
+  'top-revisited': 'Top Revisited', 'top-earning': 'Top Earning',
+}
+
+// A rate is only as good as the interval it was measured over, so the reading's
+// age is shown with the same weight as the reading itself.
+function ageOf(iso: string | null) {
+  if (!iso) return null
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
+  if (minutes < 60) return { text: minutes + ' min ago', stale: false }
+  const hours = minutes / 60
+  return { text: hours.toFixed(1) + ' h ago', stale: hours > 2 }
+}
+
+function formatPillar(reading: PillarReading) {
+  if (reading.value === null) return '—'
+  if (reading.unit === 'approval' || reading.unit === 'share of ranked games') {
+    return (reading.value * 100).toFixed(1) + '%'
+  }
+  const rounded = Math.abs(reading.value) >= 100 ? reading.value.toFixed(0) : reading.value.toFixed(1)
+  return reading.unit.includes('/') && reading.value > 0 ? '+' + rounded : rounded
+}
+
+function PillarGrid({ reading }: { reading: GamePillars }) {
+  return <div className="pillar-grid">
+    {reading.pillars.map(entry => <div key={entry.key}
+      className={entry.state === 'measured' ? 'pillar' : 'pillar unmeasured'}>
+      <span>{entry.label}</span>
+      <strong>{formatPillar(entry)}</strong>
+      <small>{entry.state === 'measured' ? entry.detail + ' · ' + entry.unit : entry.detail}</small>
+    </div>)}
+  </div>
+}
+
+function RisingGame({ game }: { game: MarketPulse['rising'][number] }) {
+  const [reading, setReading] = useState<GamePillars | null>(null)
+  const [error, setError] = useState('')
+  const votes = game.up_votes + game.down_votes
+  const approval = votes ? (game.up_votes / votes * 100).toFixed(1) + '%' : 'no votes'
+  return <details className="brief-fold" onToggle={event => {
+    if (!(event.currentTarget as HTMLDetailsElement).open || reading) return
+    api<GamePillars>('/api/market/game/' + encodeURIComponent(game.universe_id))
+      .then(setReading).catch(caught => setError((caught as Error).message))
+  }}>
+    <summary>{game.name || 'Universe ' + game.universe_id}
+      <span>{game.player_count.toLocaleString()} playing · {approval} approve</span></summary>
+    {error && <div className="warning-box"><p>{error}</p></div>}
+    {reading ? <><PillarGrid reading={reading} />
+      <small>{reading.note} Rules version <code>{reading.version}</code>, from {reading.observations} observation(s).</small></>
+      : !error && <p>Reading the measurements…</p>}
+  </details>
+}
+
+function MarketPulsePage() {
+  const [pulse, setPulse] = useState<MarketPulse | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    api<MarketPulse>('/api/market/pulse')
+      .then(result => { if (!cancelled) setPulse(result) })
+      .catch(caught => { if (!cancelled) setError((caught as Error).message) })
+    return () => { cancelled = true }
+  }, [])
+  const age = ageOf(pulse?.captured_at || null)
+  return <section className="page-grid">
+    <article className="data-panel"><div className="panel-heading"><div>
+      <span>Roblox's own front page, sampled on a schedule</span><h2>Market census</h2></div>
+      {age && <Badge tone={age.stale ? 'insufficient' : 'verified'}>{age.text}</Badge>}</div>
+      {error && <div className="warning-box"><strong>Could not read the census</strong><p>{error}</p></div>}
+      {pulse && !pulse.captured_at && <EmptyState title="No census sampled yet">{pulse.note}</EmptyState>}
+      {pulse?.captured_at && <>
+        <p className="body-copy">{pulse.note}</p>
+        <div className="metrics-grid compact">
+          <Metric label="games ranked" value={pulse.universes ?? 0} note="Distinct games in the latest census" />
+          <Metric label="placements" value={pulse.rows} note="A game on three shelves counts three times" />
+          <Metric label="censuses taken" value={pulse.samples} note="Two are needed before any rate can be measured" />
+        </div>
+        {pulse.samples < 2 && <div className="warning-box"><strong>Rates are not measurable yet</strong>
+          <p>Momentum and acceleration are derivatives: they need the same game observed
+            at two different times. {pulse.samples} census has been taken so far. Until
+            the next one lands they report insufficient evidence rather than zero.</p></div>}
+      </>}
+    </article>
+
+    {!!pulse?.shelves.length && <article className="data-panel">
+      <div className="panel-heading"><div><span>Where Roblox is placing games</span><h2>Shelves</h2></div></div>
+      <div className="table-scroll"><table><thead><tr><th>Shelf</th><th>Games</th></tr></thead><tbody>
+        {pulse.shelves.map(shelf => <tr key={shelf.sort_id}>
+          <td>{SHELF_NAMES[shelf.sort_id] || shelf.sort_id}</td>
+          <td className="numeric">{shelf.games}</td></tr>)}
+      </tbody></table></div></article>}
+
+    {!!pulse?.genres.length && <article className="data-panel">
+      <div className="panel-heading"><div><span>How crowded the shelf space is</span><h2>Genre saturation</h2></div></div>
+      <p className="body-copy">Share of ranked games in each genre. A crowded genre is not
+        automatically a bad one — it is proven demand and a wall of incumbents at the same
+        time. This measures the crowding, not the verdict.</p>
+      <div className="table-scroll"><table><thead><tr><th>Genre</th><th>Games</th><th>Share</th></tr></thead><tbody>
+        {pulse.genres.slice(0, 10).map(entry => <tr key={entry.genre}>
+          <td>{entry.genre}</td><td className="numeric">{entry.games}</td>
+          <td className="numeric">{(entry.share * 100).toFixed(1)}%</td></tr>)}
+      </tbody></table></div></article>}
+
+    {!!pulse?.rising.length && <article className="data-panel">
+      <div className="panel-heading"><div><span>Roblox's own answer to what grew today</span>
+        <h2>Up-and-Coming</h2></div><Badge>{pulse.rising.length}</Badge></div>
+      <p className="body-copy">Placement here is Roblox's judgement, not this system's. Open a
+        game to see its measured pillars. Pillars are never combined into a single score;
+        that requires calibration, which is locked.</p>
+      {pulse.rising.map(game => <RisingGame key={game.universe_id} game={game} />)}
+    </article>}
+  </section>
+}
+
 function SourcesPage({ onSource }: { sources: Source[]; onSource: (source: Source) => void }) {
   const [query, setQuery] = useState('')
   const [term, setTerm] = useState('')
@@ -1009,6 +1138,7 @@ export default function App() {
         {page === 'sources' && <SourcesPage sources={sources} onSource={openSource} />}
         {page === 'history' && <AgentHistoryPage onInspectFact={inspectFact} onOpenCandidate={id => setSelectedIdea(id)} />}
         {page === 'matching' && <MatchingEnginePage status={matchingStatus} reviews={matchingReviews} selectedId={selectedMatch} onSelect={setSelectedMatch} onReload={loadMatching} onReview={reviewMatch} busy={busy} />}
+        {page === 'market' && <MarketPulsePage />}
         {page === 'meta' && <MetaHunterPage runs={runs} health={health} onStart={startResearch} busy={busy} />}
         {page === 'scout' && <VentureScoutPage candidates={candidates} />}
         {page === 'calibration' && <CalibrationPage calibration={calibration} summary={summary} />}
