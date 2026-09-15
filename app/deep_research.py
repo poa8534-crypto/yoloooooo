@@ -76,6 +76,63 @@ def restates_discovered_game(concept_title, discovered_names, minimum_tokens=2):
     return None
 
 
+# What each unanswered question actually needs captured. Discovery only widens
+# the pool, so it answers the questions about coverage rather than any specific
+# game; `mvp` has no capture that could answer it, and saying so is better than
+# spending a round pretending otherwise.
+QUESTION_ACTIONS = {
+    "creators": "youtube",
+    "mechanics": "capture_page",
+    "demand": "capture_page",
+    "history": "capture_page",
+    "relevance": "discover",
+    "counterevidence": "discover",
+    "mvp": None,
+}
+
+# Coverage gaps first: a round spent widening discovery is wasted while a
+# captured game still has no creator or page evidence at all.
+QUESTION_PRIORITY = ("creators", "mechanics", "demand", "history", "relevance", "counterevidence")
+
+
+def plan_round(questions, contexts, queries, round_index, per_round=3):
+    """Choose this round's captures from what is still unanswered.
+
+    Rounds used to execute a precomputed slice of searches and only then ask
+    what remained open, so the answers never influenced the next round and the
+    run did the same work whatever it had already found.
+
+    Returns a list of actions and the question each one is meant to answer, so
+    the choice is auditable afterwards rather than implicit in a slice index.
+    """
+    unanswered = {q["id"] for q in questions if q.get("state") != "answered"}
+    ordered = [key for key in QUESTION_PRIORITY if key in unanswered]
+    actions: list[dict] = []
+    # Round-robin over the games with the least evidence, so one game does not
+    # absorb every capture while others stay bare.
+    ranked = sorted(contexts, key=lambda c: (len(getattr(c, "video_ids", []) or []), c.display_name))
+    for key in ordered:
+        kind = QUESTION_ACTIONS.get(key)
+        if kind is None:
+            continue
+        if kind == "discover":
+            index = len([a for a in actions if a["kind"] == "discover"]) + round_index * 2
+            if index < len(queries):
+                actions.append({"kind": "discover", "query": queries[index], "question": key})
+        elif ranked:
+            target = ranked[len([a for a in actions if a["kind"] == kind]) % len(ranked)]
+            actions.append({"kind": kind, "candidate_id": target.candidate_id,
+                            "display_name": target.display_name, "question": key})
+    if not actions:
+        # Nothing outstanding is capturable; widen the pool rather than repeat.
+        start = round_index * per_round
+        actions = [{"kind": "discover", "query": query, "question": "relevance"}
+                   for query in queries[start:start + per_round]]
+    # One cap, at the end: enough work to matter, not enough to fill a round
+    # with follow-ups for a single question.
+    return actions[:per_round]
+
+
 class DeepResearch:
     def __init__(self, orchestrator, run_id):
         self.o, self.factory, self.run_id = orchestrator, orchestrator.session_factory, run_id
@@ -227,34 +284,42 @@ class DeepResearch:
         queries = discovery_queries(self.niche)
         stagnant = self.b.state.get("stagnant_rounds", 0)
         prior = self.b.state.get("last_evidence_count", 0)
+        questions = self.b.state.get("questions") or self.questions(self.dossiers())
         for round_index in range(self.b.state.get("round", 0), self.b.state["limits"]["rounds"]):
             if self.b.remaining <= 180:
                 return "finalization_reserve"
-            self.b.save(stage=f"Investigating round {round_index + 1}")
-            for query in queries[round_index * 3:round_index * 3 + 3]:
+            # Every capture this round exists to answer something still open.
+            plan = plan_round(questions, self.contexts, queries, round_index)
+            if not plan:
+                return "all_questions_answered"
+            self.b.save(stage=f"Investigating round {round_index + 1}", plan=plan)
+            for action in plan:
                 if self.b.remaining <= 180:
                     return "finalization_reserve"
+                budget = max(.01, self.b.remaining - 180)
                 try:
-                    await asyncio.wait_for(self.discover(query), max(.01, self.b.remaining - 180))
+                    if action["kind"] == "discover":
+                        await asyncio.wait_for(self.discover(action["query"]), budget)
+                    elif action["kind"] == "youtube":
+                        # Names are captured primary metadata, never model-authored.
+                        query = f'Roblox "{action["display_name"][:100]}" gameplay'
+                        await asyncio.wait_for(self.o._attach_youtube(
+                            self.niche, self.contexts, budget=self.b, query=query), budget)
+                    else:
+                        target = next((c for c in self.contexts
+                                       if c.candidate_id == action["candidate_id"]), None)
+                        if target is not None:
+                            await asyncio.wait_for(self.capture_primary(target), budget)
                 except Exception as exc:
-                    self.b.error("discovery", exc)
-            # Names are captured primary metadata, not model-created identities.
-            targets = self.contexts[round_index * 3:round_index * 3 + 3] or self.contexts[:3]
-            for context in targets:
-                if self.b.remaining <= 180:
-                    return "finalization_reserve"
-                try:
-                    query = f'Roblox "{context.display_name[:100]}" ' + ("gameplay" if round_index % 2 == 0 else "update")
-                    await asyncio.wait_for(self.o._attach_youtube(self.niche, self.contexts, budget=self.b, query=query), max(.01, self.b.remaining - 180))
-                    await asyncio.wait_for(self.capture_primary(context), max(.01, self.b.remaining - 180))
-                except Exception as exc:
-                    self.b.error("creator_or_primary_capture", exc)
+                    self.b.error(action["kind"], exc)
             dossiers = self.dossiers()
-            self.questions(dossiers)
+            questions = self.questions(dossiers)
             count = sum(len(d["facts"]) for d in dossiers)
             stagnant = stagnant + 1 if count <= prior else 0
             prior = count
             self.b.save(round=round_index + 1, stagnant_rounds=stagnant, last_evidence_count=count)
+            if all(q.get("state") == "answered" for q in questions):
+                return "all_questions_answered"
             if stagnant >= 2:
                 return "no_new_admissible_evidence_two_rounds"
         return "round_limit"
