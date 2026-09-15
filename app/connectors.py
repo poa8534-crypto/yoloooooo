@@ -11,6 +11,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .config import Settings, get_settings
+from . import dependency_health
 from .security import sanitize_url
 
 ROBLOX_PLACE_RE = re.compile(r"roblox\.com/(?:[a-z]{2}/)?games/(\d+)", re.IGNORECASE)
@@ -80,6 +81,9 @@ class Connectors:
         )
         self._owns_client = client is None
         self.quota_meter = quota_meter
+        # Reuses the meter's session factory: anything metering quota already
+        # has one, and nothing else needs to grow a parameter for this.
+        self.health_factory = getattr(quota_meter, "factory", None)
 
     async def close(self) -> None:
         if self._owns_client:
@@ -98,9 +102,15 @@ class Connectors:
         try:
             response = await self.client.request(method, url, **kwargs)
             response.raise_for_status()
-            return ConnectorResult(sanitize_url(str(response.url)), response.json())
+            result = ConnectorResult(sanitize_url(str(response.url)), response.json())
         except (httpx.HTTPError, ValueError) as exc:
+            # What the dependency was last observed to do, rather than whether
+            # a key happens to be configured.
+            dependency_health.record(self.health_factory, url, ok=False,
+                                     detail=f"{type(exc).__name__} on the last request")
             raise ConnectorError(f"request failed for {sanitize_url(url)}: {type(exc).__name__}") from None
+        dependency_health.record(self.health_factory, url, ok=True)
+        return result
 
     async def tavily_search(self, query: str) -> ConnectorResult:
         if not self.settings.tavily_api_key:

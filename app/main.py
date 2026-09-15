@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from .association import AssociationService, active_thresholds, is_association_usable
 from .association.materialize import apply_association
 from .association.service import human_confirmation
-from . import audit_activity
+from . import audit_activity, dependency_health
 from .audit_jobs import AuditJobs, JobConflict, ACTIVE as ACTIVE_AUDIT_STATES
 from .calibration import calibration_status, load_artifact
 from .config import ROOT, get_settings
@@ -410,6 +410,21 @@ def _candidate_labels(db: Session, candidate_ids: set[str]) -> dict[str, tuple[s
     return labels
 
 
+@app.get("/api/agent-runs/count")
+def count_agent_runs(kind: str = "all", db: Session = Depends(get_db)):
+    """How many runs exist behind the page being shown.
+
+    The history page said "47 of 47" because it only ever knew about the rows
+    it had been handed, which is not the same claim.
+    """
+    audits = db.scalar(select(func.count(AuditRecord.id))) or 0
+    concepts = db.scalar(
+        select(func.count(Proposal.id)).where(Proposal.agent == "meta_hunter")
+    ) or 0
+    total = {"venture_scout": audits, "meta_hunter": concepts}.get(kind, audits + concepts)
+    return {"total": total, "venture_scout": audits, "meta_hunter": concepts}
+
+
 @app.get("/api/agent-runs", response_model=list[AgentRunView])
 def list_agent_runs(limit: int = 100, kind: str = "all", db: Session = Depends(get_db)):
     """Every Meta Hunter concept and Venture Scout audit, newest first."""
@@ -773,12 +788,34 @@ def dashboard_timeline(db: Session = Depends(get_db)):
 
 
 @app.get("/api/sources")
-def list_sources(limit: int = 100, db: Session = Depends(get_db)):
+def list_sources(limit: int = 100, offset: int = 0, q: str = "", paged: bool = False,
+                 db: Session = Depends(get_db)):
+    """One page of captured artifacts, with the total behind it.
+
+    The list returned a capped slice with no total and no way to reach the rest,
+    so a search box filtered whatever happened to be in the first hundred rows
+    and quietly reported nothing for everything past them. Filtering happens in
+    the database now, and the caller is told how many records the filter
+    actually matched.
+
+    `paged=false` keeps the original bare-array shape for existing callers.
+    """
     safe_limit = max(1, min(limit, 500))
+    safe_offset = max(0, offset)
+    query = select(SourceArtifact)
+    term = q.strip()
+    if term:
+        like = f"%{term}%"
+        query = query.where(
+            SourceArtifact.url.ilike(like)
+            | SourceArtifact.publisher_owner.ilike(like)
+            | SourceArtifact.retrieval_method.ilike(like)
+        )
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     rows = list(
         db.scalars(
-            select(SourceArtifact)
-            .order_by(SourceArtifact.captured_at.desc())
+            query.order_by(SourceArtifact.captured_at.desc())
+            .offset(safe_offset)
             .limit(safe_limit)
         )
     )
@@ -788,7 +825,7 @@ def list_sources(limit: int = 100, db: Session = Depends(get_db)):
             .group_by(Observation.artifact_id)
         ).all()
     )
-    return [{
+    items = [{
         "id": item.id,
         "url": item.url,
         "publisher_owner": item.publisher_owner,
@@ -801,6 +838,10 @@ def list_sources(limit: int = 100, db: Session = Depends(get_db)):
         "raw_size": _artifact_size(item),
         "observation_count": observation_counts.get(item.id, 0),
     } for item in rows]
+    if not paged:
+        return items
+    return {"items": items, "total": total, "offset": safe_offset, "limit": safe_limit,
+            "next_offset": safe_offset + len(items) if safe_offset + len(items) < total else None}
 
 
 @app.get("/api/sources/{source_id}")
@@ -1025,13 +1066,30 @@ def matching_status(db: Session = Depends(get_db)):
     )
 
 
+@app.get("/api/matching/reviews/count")
+def count_matching_reviews(include_resolved: bool = False, db: Session = Depends(get_db)):
+    """How many associations sit behind the capped list being shown.
+
+    The queue rendered whatever fitted in one request, so a reviewer had no way
+    to tell fifty outstanding from five hundred.
+    """
+    total = db.scalar(select(func.count(AssociationRecord.id))) or 0
+    pending = db.scalar(
+        select(func.count(AssociationRecord.id))
+        .where(AssociationRecord.outcome.in_(("review_required", "blocked_conflict")))
+    ) or 0
+    return {"total": total if include_resolved else pending,
+            "all_associations": total, "pending": pending}
+
+
 @app.get("/api/matching/reviews", response_model=list[MatchingReviewView])
 def list_matching_reviews(
-    limit: int = 50, include_resolved: bool = False, db: Session = Depends(get_db)
+    limit: int = 50, offset: int = 0, include_resolved: bool = False, db: Session = Depends(get_db)
 ):
     if include_resolved:
         records = list(db.scalars(
-            select(AssociationRecord).order_by(AssociationRecord.created_at.desc()).limit(limit)
+            select(AssociationRecord).order_by(AssociationRecord.created_at.desc())
+            .offset(max(0, offset)).limit(limit)
         ))
     else:
         records = association_service().pending_reviews(db, limit=limit)
@@ -1081,6 +1139,52 @@ def submit_matching_review(
     )
 
 
+@app.get("/api/collection/continuity")
+def collection_continuity(db: Session = Depends(get_db)):
+    """What has actually been captured, day by day.
+
+    The calibration page rendered a "dataset readiness" bar driven by
+    complete_clusters / required_clusters. Niche-cluster calibration is not
+    implemented, so that number was always zero out of two hundred: a progress
+    bar for a pipeline that does not exist. This is the measurement that does
+    exist -- snapshots of tracked entities, and whether they are consecutive.
+    """
+    rows = db.execute(
+        select(
+            func.date(Observation.observed_at).label("day"),
+            func.count(func.distinct(Observation.candidate_id)).label("entities"),
+            func.count(Observation.id).label("observations"),
+        )
+        .where(Observation.metric == "roblox_playing")
+        .group_by(func.date(Observation.observed_at))
+        .order_by(func.date(Observation.observed_at))
+    ).all()
+    days = [{"day": str(row.day), "entities": row.entities, "observations": row.observations}
+            for row in rows]
+
+    # A gap breaks a streak: days are counted as consecutive calendar dates,
+    # never interpolated across a day with no capture.
+    longest = streak = 0
+    previous: date | None = None
+    for entry in days:
+        current = date.fromisoformat(entry["day"])
+        streak = streak + 1 if previous is not None and (current - previous).days == 1 else 1
+        longest = max(longest, streak)
+        previous = current
+
+    tracked = db.scalar(select(func.count(func.distinct(Candidate.external_id)))) or 0
+    return {
+        "days": days,
+        "captured_days": len(days),
+        "longest_consecutive_days": longest,
+        "entities_tracked": tracked,
+        "first_capture": days[0]["day"] if days else None,
+        "last_capture": days[-1]["day"] if days else None,
+        # Stated rather than implied: nothing here is niche-cluster calibration.
+        "niche_cluster_calibration": "not_implemented",
+    }
+
+
 @app.get("/api/calibration/status", response_model=CalibrationStatus)
 def get_calibration_status(db: Session = Depends(get_db)):
     return calibration_status(db)
@@ -1109,6 +1213,7 @@ async def health(db: Session = Depends(get_db)):
     latest_association = db.scalar(
         select(AssociationRecord).order_by(AssociationRecord.created_at.desc()).limit(1)
     )
+    seen = dependency_health.observations(db)
     return {
         "status": "ok",
         "database": "connected",
@@ -1125,6 +1230,28 @@ async def health(db: Session = Depends(get_db)):
             "tavily_configured": bool(settings.tavily_api_key),
             "youtube_configured": bool(settings.youtube_api_key),
         },
+        # Configuration and observation, kept apart. "Configured" never
+        # implies working, and a dependency nothing has called is unknown
+        # rather than healthy.
+        "dependencies": [
+            dependency_health.describe("Local model server (Ollama)", configured=True,
+                                       observed=None, reachable=ollama["available"]),
+            dependency_health.describe("Roblox public API", configured=True,
+                                       observed=seen.get("roblox")),
+            dependency_health.describe("Tavily search", configured=bool(settings.tavily_api_key),
+                                       observed=seen.get("tavily")),
+            dependency_health.describe("YouTube Data API", configured=bool(settings.youtube_api_key),
+                                       observed=seen.get("youtube")),
+            dependency_health.describe(
+                "Embedding model", configured=importlib.util.find_spec("fastembed") is not None,
+                observed={"state": "last_request_succeeded" if latest_association is not None
+                          and latest_association.embedding_available else "unknown",
+                          "at": latest_association.created_at.isoformat() if latest_association else None,
+                          "detail": "The most recent association used dense retrieval."
+                          if latest_association is not None and latest_association.embedding_available
+                          else "Installed, but no association has used dense retrieval yet."}
+                if latest_association is not None else None),
+        ],
         "scheduler": {
             "timezone": settings.timezone,
             "daily_at": f"{settings.snapshot_hour:02d}:{settings.snapshot_minute:02d}",

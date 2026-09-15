@@ -30,6 +30,7 @@ type Calibration = {
   phase: string; complete_clusters: number; required_clusters: number; scoring_active: boolean
   model_version: string | null; heldout_precision: number | null; heldout_recommendations: number | null; reason: string
 }
+type DependencyReport = { name: string; configured: boolean; state: string; detail: string; checked_at: string | null }
 type Health = {
   status: string; database: string
   ollama: { available: boolean; primary_present: boolean; fallback_present: boolean; base_url: string }
@@ -37,6 +38,7 @@ type Health = {
   connectors: { tavily_configured: boolean; youtube_configured: boolean }
   scheduler: { timezone: string; daily_at: string; last_snapshot: null | { completed_at?: string; counts?: Record<string, number> } }
   calibration: Calibration
+  dependencies?: DependencyReport[]
 }
 type DashboardSummary = {
   service_started_at: string; uptime_seconds: number; collection_started_at: string | null
@@ -100,6 +102,9 @@ type MatchingStatus = {
 }
 
 type Tone = 'verified' | 'proposal' | 'inference' | 'override' | 'conflict' | 'insufficient'
+// Two distinct operations, matching the job API. Analyze works from
+// evidence alone; Audit critiques one exact Hunter proposal version.
+type ScoutOperation = 'analyze_game' | 'audit_idea'
 
 const navigation: Array<{ group: string; items: Array<[PageId, string, string]> }> = [
   { group: 'Intelligence', items: [['home', '⌂', 'Command Center'], ['ideas', '◉', 'Idea Panel'], ['sources', '▦', 'Sources'], ['history', '≡', 'Agent History']] },
@@ -427,12 +432,40 @@ function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFa
   </section>
 }
 
-function SourcesPage({ sources, onSource }: { sources: Source[]; onSource: (source: Source) => void }) {
+type SourcePage = { items: Source[]; total: number; offset: number; limit: number; next_offset: number | null }
+
+const SOURCE_PAGE = 50
+
+// The filter used to run over whichever rows the dashboard already held, so a
+// search reported nothing for every record past the first hundred. Both the
+// filter and the paging happen in the database now, and the page says how many
+// records the filter actually matched.
+function SourcesPage({ onSource }: { sources: Source[]; onSource: (source: Source) => void }) {
   const [query, setQuery] = useState('')
-  const filtered = sources.filter(source => `${source.publisher_owner} ${source.retrieval_method} ${source.url}`.toLowerCase().includes(query.toLowerCase()))
-  return <section className="workspace"><div className="section-intro"><div><span>Immutable provenance</span><h2>Sources and evidence library</h2><p>Inspect exactly where every trusted observation came from.</p></div><input className="search-input" value={query} onChange={event => setQuery(event.target.value)} aria-label="Filter sources" placeholder="Filter publisher, endpoint or URL" /></div>
-    <div className="metrics-grid compact"><Metric label="Captured artifacts" value={sources.length} note="Current result set" /><Metric label="Primary" value={sources.filter(item => item.source_tier === 'primary').length} note="Authoritative APIs" tone="positive" /><Metric label="Discovery only" value={sources.filter(item => item.is_discovery_only).length} note="Cannot create facts" /><Metric label="Stored bytes" value={formatBytes(sources.reduce((sum, item) => sum + item.raw_size, 0))} note="Hashed raw payloads" /></div>
-    <article className="data-panel">{filtered.length ? <div className="table-scroll"><table><thead><tr><th>Publisher / resource</th><th>Tier</th><th>Captured</th><th>Type</th><th>Yield</th><th>Size</th><th>SHA256</th><th /></tr></thead><tbody>{filtered.map(source => <tr key={source.id}><td><strong>{source.publisher_owner}</strong><small>{source.retrieval_method.replaceAll('_', ' ')}</small></td><td><Badge tone={source.is_discovery_only ? 'insufficient' : 'verified'}>{source.source_tier}</Badge></td><td>{formatDate(source.captured_at)}</td><td>{source.content_type}</td><td className="numeric">{source.observation_count}</td><td className="numeric">{formatBytes(source.raw_size)}</td><td><code>{source.sha256.slice(0, 12)}…</code></td><td><button className="text-button" onClick={() => onSource(source)}>Inspect →</button></td></tr>)}</tbody></table></div> : <EmptyState title="No matching sources">Try another filter or run research to capture evidence.</EmptyState>}</article>
+  const [term, setTerm] = useState('')
+  const [page, setPage] = useState<SourcePage | null>(null)
+  const [offset, setOffset] = useState(0)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    const timer = window.setTimeout(() => { setTerm(query.trim()); setOffset(0) }, 250)
+    return () => window.clearTimeout(timer)
+  }, [query])
+  useEffect(() => {
+    let cancelled = false
+    setError('')
+    api<SourcePage>(`/api/sources?paged=true&limit=${SOURCE_PAGE}&offset=${offset}&q=${encodeURIComponent(term)}`)
+      .then(result => { if (!cancelled) setPage(result) })
+      .catch(caught => { if (!cancelled) setError((caught as Error).message) })
+    return () => { cancelled = true }
+  }, [term, offset])
+  const items = page?.items || []
+  const showing = items.length ? `${page!.offset + 1}–${page!.offset + items.length} of ${page!.total}` : `0 of ${page?.total ?? 0}`
+  return <section className="workspace"><div className="section-intro"><div><span>Immutable provenance</span><h2>Sources and evidence library</h2><p>Inspect exactly where every trusted observation came from.</p></div><input className="search-input" value={query} onChange={event => setQuery(event.target.value)} aria-label="Filter sources" placeholder="Search every captured artifact" /></div>
+    <div className="history-toolbar"><span>{showing}{term ? ` matching “${term}”` : ''}</span>
+      <button className="text-button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - SOURCE_PAGE))}>← Previous</button>
+      <button className="text-button" disabled={!page?.next_offset} onClick={() => setOffset(page!.next_offset!)}>Next →</button></div>
+    {error && <div className="warning-box"><strong>Sources unavailable</strong><span>{error}</span></div>}
+    <article className="data-panel">{!page ? <div className="drawer-loading">Reading the evidence library…</div> : items.length ? <div className="table-scroll"><table><thead><tr><th>Publisher / resource</th><th>Tier</th><th>Captured</th><th>Type</th><th>Yield</th><th>Size</th><th>SHA256</th><th /></tr></thead><tbody>{items.map(source => <tr key={source.id}><td><strong>{source.publisher_owner}</strong><small>{source.retrieval_method.replaceAll('_', ' ')}</small></td><td><Badge tone={source.is_discovery_only ? 'insufficient' : 'verified'}>{source.source_tier}</Badge></td><td>{formatDate(source.captured_at)}</td><td>{source.content_type}</td><td className="numeric">{source.observation_count}</td><td className="numeric">{formatBytes(source.raw_size)}</td><td><code>{source.sha256.slice(0, 12)}…</code></td><td><button className="text-button" onClick={() => onSource(source)}>Inspect →</button></td></tr>)}</tbody></table></div> : <EmptyState title="No matching sources">{term ? 'Nothing in the whole library matches that search.' : 'Run research to capture evidence.'}</EmptyState>}</article>
   </section>
 }
 
@@ -481,6 +514,7 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
 
 function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Candidate[]; onAudit: (candidate: Candidate) => void; audit: AuditResult | null; busy: boolean }) {
   const [candidateId, setCandidateId] = useState(candidates[0]?.id || '')
+  const [operation, setOperation] = useState<ScoutOperation>('analyze_game')
   const [readiness, setReadiness] = useState<AuditReadiness | null>(null)
   const [readinessError, setReadinessError] = useState('')
   // Only a candidate carrying a selected Meta Hunter proposal can be audited;
@@ -500,15 +534,19 @@ function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Ca
       .catch(caught => { if (!cancelled) setReadinessError((caught as Error).message) })
     return () => { cancelled = true }
   }, [candidateId])
-  return <section className="workspace"><div className="scout-guard"><div><strong>Venture Scout audit guardrail</strong><span>Fail-closed enforced</span></div><p>Audits are scoped to a solo beginner and a 72-hour Roblox MVP. The model cannot invent facts or override deterministic decisions.</p></div>
-    <div className="agent-columns"><article className="data-panel"><div className="panel-heading"><div><span>Solo MVP configuration</span><h2>Candidate audit</h2></div></div>{candidates.length ? <><label>Candidate<select value={candidateId} onChange={event => setCandidateId(event.target.value)}>{candidates.map(item => <option key={item.id} value={item.id}>{item.display_name}{item.proposal_id ? '' : ' — no Hunter proposal'}</option>)}</select></label><div className="form-grid"><label>Builder experience<input value="Beginner" disabled /></label><label>Team capacity<input value="Solo" disabled /></label><label>MVP scope<input value="72 hours" disabled /></label><label>Monetization<input value="Excluded from MVP" disabled /></label></div><button className="primary" disabled={busy || !candidate} onClick={() => candidate && onAudit(candidate)}>{busy ? 'Auditing…' : 'Run Venture Scout audit'}</button>{readiness && !readiness.ready && <small className="gate-hint">Some gates are not met. The backend will record a blocked audit without invoking the model.</small>}</> : <EmptyState title="No candidate available">Run Meta Hunter and approve required matches first.</EmptyState>}</article>
+  return <section className="workspace"><div className="scout-guard"><div><strong>Venture Scout audit guardrail</strong><span>Fail-closed enforced</span></div><p>Scout does two different things. <strong>Analyze game</strong> works from the captured evidence alone and needs no Meta Hunter proposal. <strong>Audit idea</strong> critiques one exact Hunter proposal. Both are scoped to a solo beginner and a three-day MVP, and neither can invent facts or override a deterministic decision.</p></div>
+    <div className="agent-columns"><article className="data-panel"><div className="panel-heading"><div><span>Solo MVP configuration</span><h2>Scout operation</h2></div></div>{candidates.length ? <><label>Operation<select value={operation} onChange={event => setOperation(event.target.value as ScoutOperation)}>
+      <option value="analyze_game">Analyze game — from captured evidence alone</option>
+      <option value="audit_idea">Audit idea — critique this game's Hunter proposal</option>
+    </select></label><label>Candidate<select value={candidateId} onChange={event => setCandidateId(event.target.value)}>{candidates.map(item => <option key={item.id} value={item.id}>{item.display_name}{item.proposal_id ? '' : ' — no Hunter proposal'}</option>)}</select></label>
+    {operation === 'audit_idea' && !candidate?.proposal_id && <small className="gate-hint">This game has no Meta Hunter proposal, so there is nothing to audit. Analyze game works from the evidence instead.</small>}<div className="form-grid"><label>Builder experience<input value="Beginner" disabled /></label><label>Team capacity<input value="Solo" disabled /></label><label>MVP scope<input value="72 hours" disabled /></label><label>Monetization<input value="Excluded from MVP" disabled /></label></div><button className="primary" disabled={busy || !candidate || (operation === 'audit_idea' && !candidate?.proposal_id)} onClick={() => candidate && onAudit(candidate)}>{busy ? 'Scout is deliberating…' : operation === 'audit_idea' ? 'Audit this idea' : 'Analyze this game'}</button>{readiness && !readiness.ready && <small className="gate-hint">Some gates are not met. The backend will record a blocked audit without invoking the model.</small>}</> : <EmptyState title="No game captured yet">Start a Meta Hunter research run; Scout analyses what it captures.</EmptyState>}</article>
       <article className="data-panel"><div className="panel-heading"><div><span>Measured against the ledger</span><h2>Audit gates</h2></div>{readiness && <Badge tone={readiness.ready ? 'verified' : 'insufficient'}>{readiness.ready ? 'All gates pass' : 'Gates outstanding'}</Badge>}</div>
         {readinessError && <div className="warning-box"><strong>Readiness unavailable</strong><span>{readinessError}</span></div>}
         {!candidateId ? <EmptyState title="No candidate selected">Gate state is computed per candidate; nothing is assumed.</EmptyState>
           : readiness ? <><div className="audit-gates">{readiness.gates.map(gate => <div key={gate.label}><i />{gate.label}<small>{gate.detail}</small><Badge tone={gate.passed ? 'verified' : 'insufficient'}>{gate.state.replaceAll('_', ' ')}</Badge></div>)}</div>
             <div className="invariant-note"><span>Always-on pipeline invariants</span>{readiness.invariants.map(item => <div key={item.label}><b>{item.label}</b><small>{item.detail}</small></div>)}</div></>
           : <div className="drawer-loading">Checking gates…</div>}</article></div>
-    {audit?.candidate_id === candidateId && audit.proposal_id === candidate?.proposal_id && audit.proposal ? <div className="audit-output"><article className="data-panel"><div className="section-number">01</div><h2>{audit.proposal.concept_title}</h2><div className="classified proposal"><Badge tone="proposal">Model proposal</Badge><p>{audit.proposal.core_loop}</p></div><div className="classified inference"><Badge tone="inference">Differentiator</Badge><p>{audit.proposal.differentiator}</p></div></article><article className="data-panel"><div className="section-number">02</div><h2>72-hour milestone plan</h2><div className="milestone-grid">{audit.proposal.build_steps.map((step, index) => <div key={step}><span>Milestone {index + 1}</span><strong>{step}</strong><small>Human scope confirmation required</small></div>)}</div></article><article className="data-panel"><div className="section-number">03</div><h2>Risk and mitigation ledger</h2><div className="risk-list">{audit.proposal.risks.map(risk => <div key={risk}><Badge tone="proposal">Proposed risk</Badge><p>{risk}</p><span>Not a measured probability</span></div>)}</div></article></div> : audit?.candidate_id === candidateId ? <article className="data-panel"><div className="panel-heading"><div><span>Audit recorded without a model proposal</span><h2>Audit blocked</h2></div><Badge tone="insufficient">fail closed</Badge></div><p>The audit ran and was written to the ledger; the model was not asked for a design because the reasons below were not cleared.</p><div className="risk-list">{(audit.risks || []).map(risk => <div key={risk}><Badge tone="insufficient">Blocking reason</Badge><p>{risk}</p></div>)}</div></article> : <article className="data-panel"><EmptyState title="No Venture Scout audit loaded">Select a candidate that carries a Meta Hunter proposal and run the audit. Invalid model output will fail closed.</EmptyState></article>}
+    {audit?.candidate_id === candidateId && audit.proposal_id === candidate?.proposal_id && audit.proposal ? <div className="audit-output"><article className="data-panel"><div className="section-number">01</div><h2>{audit.proposal.concept_title}</h2><div className="classified proposal"><Badge tone="proposal">Model proposal</Badge><p>{audit.proposal.core_loop}</p></div><div className="classified inference"><Badge tone="inference">Differentiator</Badge><p>{audit.proposal.differentiator}</p></div></article><article className="data-panel"><div className="section-number">02</div><h2>72-hour milestone plan</h2><div className="milestone-grid">{audit.proposal.build_steps.map((step, index) => <div key={step}><span>Milestone {index + 1}</span><strong>{step}</strong><small>Human scope confirmation required</small></div>)}</div></article><article className="data-panel"><div className="section-number">03</div><h2>Risk and mitigation ledger</h2><div className="risk-list">{audit.proposal.risks.map(risk => <div key={risk}><Badge tone="proposal">Proposed risk</Badge><p>{risk}</p><span>Not a measured probability</span></div>)}</div></article></div> : audit?.candidate_id === candidateId ? <article className="data-panel"><div className="panel-heading"><div><span>Audit recorded without a model proposal</span><h2>Audit blocked</h2></div><Badge tone="insufficient">fail closed</Badge></div><p>The audit ran and was written to the ledger; the model was not asked for a design because the reasons below were not cleared.</p><div className="risk-list">{(audit.risks || []).map(risk => <div key={risk}><Badge tone="insufficient">Blocking reason</Badge><p>{risk}</p></div>)}</div></article> : <article className="data-panel"><EmptyState title="No Venture Scout result loaded">Pick an operation and a game, then run it. Analyze game needs only captured evidence; Audit idea needs that game's Hunter proposal. Invalid model output fails closed either way.</EmptyState></article>}
   </section>
 }
 
@@ -584,18 +622,60 @@ function AgentHistoryPage({ onInspectFact, onOpenCandidate }: { onInspectFact: (
   </section>
 }
 
+type Continuity = {
+  days: Array<{ day: string; entities: number; observations: number }>
+  captured_days: number; longest_consecutive_days: number; entities_tracked: number
+  first_capture: string | null; last_capture: string | null; niche_cluster_calibration: string
+}
+
 function CalibrationPage({ calibration, summary }: { calibration: Calibration | null; summary: DashboardSummary | null }) {
-  const progress = calibration ? Math.min(100, calibration.complete_clusters / calibration.required_clusters * 100) : 0
+  // The readiness bar was complete_clusters / required_clusters. Niche-cluster
+  // calibration is not implemented, so it was always zero out of two hundred:
+  // a progress indicator for a pipeline that does not exist. What is shown now
+  // is what has actually been captured.
+  const [continuity, setContinuity] = useState<Continuity | null>(null)
+  const [continuityError, setContinuityError] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    api<Continuity>('/api/collection/continuity')
+      .then(result => { if (!cancelled) setContinuity(result) })
+      .catch(caught => { if (!cancelled) setContinuityError((caught as Error).message) })
+    return () => { cancelled = true }
+  }, [])
   const gates = [
     ['Complete 30-day windows', Boolean(calibration && calibration.complete_clusters >= calibration.required_clusters), `${calibration?.complete_clusters || 0} / ${calibration?.required_clusters || 200}`],
     ['Held-out precision ≥ 95%', Boolean(calibration?.heldout_precision && calibration.heldout_precision >= .95), calibration?.heldout_precision == null ? 'Pending' : `${(calibration.heldout_precision * 100).toFixed(2)}%`],
     ['At least ten held-out recommendations', Boolean(calibration?.heldout_recommendations && calibration.heldout_recommendations >= 10), calibration?.heldout_recommendations == null ? 'Pending' : String(calibration.heldout_recommendations)],
     ['Frozen artifact activated', Boolean(calibration?.scoring_active), calibration?.model_version || 'Not active'],
   ] as const
-  return <section className="workspace"><div className={`calibration-warning ${calibration?.scoring_active ? 'active' : ''}`}><Badge tone={calibration?.scoring_active ? 'verified' : 'conflict'}>{calibration?.scoring_active ? 'Scoring active' : 'Scoring locked'}</Badge><div><strong>{calibration?.scoring_active ? 'Market-growth scoring is active' : 'Market-growth scoring remains disabled'}</strong><p>{calibration?.reason}</p></div></div><div className="metrics-grid compact"><Metric label="Candidate clusters" value={summary?.counts.candidate_clusters || 0} note="Tracked" /><Metric label="Complete windows" value={calibration?.complete_clusters || 0} note={`of ${calibration?.required_clusters || 200}`} /><Metric label="Dataset readiness" value={`${progress.toFixed(1)}%`} note="Window gate" /><Metric label="Held-out precision" value={calibration?.heldout_precision == null ? '—' : `${(calibration.heldout_precision * 100).toFixed(2)}%`} note="Untouched test set" /></div><div className="calibration-grid"><article className="data-panel"><div className="panel-heading"><div><span>30-day snapshot continuity</span><h2>Collection matrix</h2></div></div><div className="large-progress"><i style={{ width: `${progress}%` }} /><span>{progress.toFixed(1)}%</span></div><EmptyState title="Niche-cluster matrix is not implemented">Entity snapshots are available in each game dossier. They do not constitute validated niche-cluster windows.</EmptyState></article><article className="data-panel"><div className="panel-heading"><div><span>Activation policy</span><h2>Decision gates</h2></div></div><div className="gate-stack">{gates.map(([label, pass, result]) => <div key={label}><i className={pass ? 'pass' : ''}>{pass ? '✓' : '×'}</i><span><strong>{label}</strong><small>{result}</small></span><Badge tone={pass ? 'verified' : 'insufficient'}>{pass ? 'Pass' : 'Locked'}</Badge></div>)}</div></article></div></section>
+  return <section className="workspace"><div className={`calibration-warning ${calibration?.scoring_active ? 'active' : ''}`}><Badge tone={calibration?.scoring_active ? 'verified' : 'conflict'}>{calibration?.scoring_active ? 'Scoring active' : 'Scoring locked'}</Badge><div><strong>{calibration?.scoring_active ? 'Market-growth scoring is active' : 'Market-growth scoring remains disabled'}</strong><p>{calibration?.reason}</p></div></div><div className="metrics-grid compact"><Metric label="Entities tracked" value={continuity?.entities_tracked ?? '—'} note="Distinct Roblox universes" /><Metric label="Days with captures" value={continuity?.captured_days ?? '—'} note="Actual snapshot days" /><Metric label="Longest unbroken run" value={continuity ? `${continuity.longest_consecutive_days} day${continuity.longest_consecutive_days === 1 ? '' : 's'}` : '—'} note="Gaps are never interpolated" /><Metric label="Held-out precision" value={calibration?.heldout_precision == null ? '—' : `${(calibration.heldout_precision * 100).toFixed(2)}%`} note="Untouched test set" /></div><div className="calibration-grid"><article className="data-panel"><div className="panel-heading"><div><span>What has actually been captured</span><h2>Snapshot continuity</h2></div></div>
+      {continuityError && <div className="warning-box"><strong>Continuity unavailable</strong><span>{continuityError}</span></div>}
+      {continuity ? (continuity.days.length ? <><p className="body-copy">Captures run from {continuity.first_capture} to {continuity.last_capture}. A day with no capture breaks the run; nothing is interpolated across it.</p>
+        <div className="table-scroll"><table><thead><tr><th>UTC day</th><th>Entities measured</th><th>Observations</th></tr></thead>
+          <tbody>{continuity.days.map(entry => <tr key={entry.day}><td>{entry.day}</td><td>{entry.entities.toLocaleString()}</td><td>{entry.observations.toLocaleString()}</td></tr>)}</tbody></table></div></>
+        : <EmptyState title="Nothing captured yet">The first daily snapshot will start this table.</EmptyState>)
+        : <div className="drawer-loading">Reading captured history…</div>}
+      <div className="invariant-note"><span>Not included above</span><div><b>Niche-cluster calibration</b><small>Not implemented. Snapshot days are entity measurements; they are not validated niche-cluster windows, and no amount of them activates scoring on their own.</small></div></div></article><article className="data-panel"><div className="panel-heading"><div><span>Activation policy</span><h2>Decision gates</h2></div></div><div className="gate-stack">{gates.map(([label, pass, result]) => <div key={label}><i className={pass ? 'pass' : ''}>{pass ? '✓' : '×'}</i><span><strong>{label}</strong><small>{result}</small></span><Badge tone={pass ? 'verified' : 'insufficient'}>{pass ? 'Pass' : 'Locked'}</Badge></div>)}</div></article></div></section>
+}
+
+const DEPENDENCY_TONE: Record<string, Tone> = {
+  reachable: 'verified', last_request_succeeded: 'verified',
+  unreachable: 'conflict', last_request_failed: 'conflict',
+  not_configured: 'insufficient', unknown: 'insufficient',
+}
+
+const DEPENDENCY_LABEL: Record<string, string> = {
+  reachable: 'Reachable', last_request_succeeded: 'Last request succeeded',
+  unreachable: 'Unreachable', last_request_failed: 'Last request failed',
+  not_configured: 'Not configured', unknown: 'Never observed',
 }
 
 function HealthPage({ health, summary, matching }: { health: Health | null; summary: DashboardSummary | null; matching: MatchingStatus | null }) {
+  // Configuration is not health. A present key, an expired key and a provider
+  // that has been down all morning used to render identically as
+  // "Authenticated", so observation is shown first and separately.
+  const dependencies = health?.dependencies || []
+  const failing = dependencies.filter(item => item.state === 'unreachable' || item.state === 'last_request_failed')
   const modules = [
     ['FastAPI core service', health?.status === 'ok', `Uptime ${summary ? formatDuration(summary.uptime_seconds) : '—'}`],
     ['SQLite WAL evidence ledger', health?.database === 'connected', `${summary?.counts.source_artifacts || 0} artifacts`],
@@ -603,12 +683,22 @@ function HealthPage({ health, summary, matching }: { health: Health | null; summ
     ['Qwen3 14B primary', health?.ollama.primary_present, health?.ollama.primary_present ? 'Installed' : 'Missing'],
     ['Qwen3 8B fallback', health?.ollama.fallback_present, health?.ollama.fallback_present ? 'Installed' : 'Missing'],
     ['Matching engine', Boolean(matching), matching?.matcher_version || 'Unavailable'],
-    ['Tavily search API', health?.connectors.tavily_configured, health?.connectors.tavily_configured ? 'Configured' : 'Key missing'],
-    ['YouTube Data API', health?.connectors.youtube_configured, health?.connectors.youtube_configured ? 'Configured' : 'Key missing'],
     ['Daily snapshot scheduler', Boolean(health?.scheduler.daily_at), health ? `${health.scheduler.daily_at} ${health.scheduler.timezone}` : 'Checking'],
     ['Local embedding model', health?.embeddings.package_installed, health?.embeddings.package_installed ? `${health.embeddings.model_name}${health.embeddings.last_association_used_embeddings === false ? ' · last run used lexical fallback' : ''}` : 'fastembed not installed · lexical retrieval only'],
   ] as const
-  return <section className="workspace"><div className="keyring-banner"><strong>▣ Local secret boundary engaged</strong><p>API keys stay in the ignored local environment file and are never returned to the dashboard.</p><Badge tone="verified">Credentials redacted by policy</Badge></div><div className="module-grid">{modules.map(([name, ok, detail]) => <article className="data-panel" key={name}><div><span className={`module-dot ${ok ? 'online' : ''}`} /><Badge tone={ok ? 'verified' : 'conflict'}>{ok ? (name.includes('API') ? 'Configured' : name.includes('Qwen') || name.includes('embedding') ? 'Installed' : name.includes('scheduler') ? 'Scheduled' : 'Reachable') : 'Unavailable or unchecked'}</Badge></div><h2>{name}</h2><p>{detail}</p></article>)}</div><div className="health-bottom"><article className="data-panel"><div className="panel-heading"><div><span>External connectors</span><h2>API readiness</h2></div></div><div className="quota-list"><div><span>Tavily</span><b>{health?.connectors.tavily_configured ? 'Configured — not a live authentication check' : 'Not configured'}</b></div><div><span>YouTube Data API v3</span><b>{health?.connectors.youtube_configured ? 'Configured — not a live authentication check' : 'Not configured'}</b></div><div><span>Roblox public interfaces</span><b>Read-only</b></div></div></article><article className="data-panel"><div className="panel-heading"><div><span>Deterministic capture</span><h2>Snapshot ledger</h2></div></div><Metric label="Last snapshot" value={formatDate(health?.scheduler.last_snapshot?.completed_at)} note={health?.scheduler.last_snapshot ? JSON.stringify(health.scheduler.last_snapshot.counts || {}) : 'No snapshot recorded'} /></article></div></section>
+  return <section className="workspace">
+    {!!failing.length && <div className="warning-box"><strong>{failing.length} dependency check{failing.length > 1 ? 's are' : ' is'} failing</strong>{failing.map(item => <p key={item.name}>{item.name}: {item.detail}{item.checked_at ? ` (observed ${formatDate(item.checked_at)})` : ''}</p>)}</div>}
+    <article className="data-panel"><div className="panel-heading"><div><span>Observed, not configured</span><h2>Dependency status</h2></div></div>
+      <p className="body-copy">A configured credential is not evidence that a dependency works. Each row below is the last thing actually observed, with when it was observed. Metered APIs are not probed, because a probe would spend quota.</p>
+      <div className="table-scroll"><table><thead><tr><th>Dependency</th><th>Configured</th><th>Observed</th><th>When</th><th>Detail</th></tr></thead>
+        <tbody>{dependencies.length ? dependencies.map(item => <tr key={item.name}>
+          <td>{item.name}</td>
+          <td>{item.configured ? 'Yes' : 'No'}</td>
+          <td><Badge tone={DEPENDENCY_TONE[item.state] || 'insufficient'}>{DEPENDENCY_LABEL[item.state] || item.state}</Badge></td>
+          <td>{item.checked_at ? formatDate(item.checked_at) : '—'}</td>
+          <td>{item.detail}</td>
+        </tr>) : <tr><td colSpan={5}>Health has not been read yet.</td></tr>}</tbody></table></div></article>
+    <div className="keyring-banner"><strong>▣ Local secret boundary engaged</strong><p>API keys stay in the ignored local environment file and are never returned to the dashboard.</p><Badge tone="verified">Credentials redacted by policy</Badge></div><div className="module-grid">{modules.map(([name, ok, detail]) => <article className="data-panel" key={name}><div><span className={`module-dot ${ok ? 'online' : ''}`} /><Badge tone={ok ? 'verified' : 'conflict'}>{ok ? (name.includes('API') ? 'Configured' : name.includes('Qwen') || name.includes('embedding') ? 'Installed' : name.includes('scheduler') ? 'Scheduled' : 'Reachable') : 'Unavailable or unchecked'}</Badge></div><h2>{name}</h2><p>{detail}</p></article>)}</div><div className="health-bottom"><article className="data-panel"><div className="panel-heading"><div><span>External connectors</span><h2>API readiness</h2></div></div><div className="quota-list"><div><span>Tavily</span><b>{health?.connectors.tavily_configured ? 'Credential present — see observed status above' : 'Not configured'}</b></div><div><span>YouTube Data API v3</span><b>{health?.connectors.youtube_configured ? 'Credential present — see observed status above' : 'Not configured'}</b></div><div><span>Roblox public interfaces</span><b>Read-only</b></div></div></article><article className="data-panel"><div className="panel-heading"><div><span>Deterministic capture</span><h2>Snapshot ledger</h2></div></div><Metric label="Last snapshot" value={formatDate(health?.scheduler.last_snapshot?.completed_at)} note={health?.scheduler.last_snapshot ? JSON.stringify(health.scheduler.last_snapshot.counts || {}) : 'No snapshot recorded'} /></article></div></section>
 }
 
 export function EvidenceDrawer({ detail, loading, onClose, onFact }: { detail: SourceDetail | null; loading: boolean; onClose: () => void; onFact: (id: string) => void }) {
