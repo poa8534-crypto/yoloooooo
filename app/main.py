@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from .association import AssociationService, active_thresholds, is_association_usable
 from .association.materialize import apply_association
 from .association.service import human_confirmation
-from . import audit_activity, dependency_health
+from . import access, audit_activity, dependency_health
 from .build_identity import build_identity
 from .audit_jobs import AuditJobs, JobConflict, ACTIVE as ACTIVE_AUDIT_STATES
 from .calibration import calibration_status, load_artifact
@@ -88,23 +88,17 @@ from .workflows import ResearchOrchestrator
 
 TASKS: set[asyncio.Task] = set()
 
-LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+LOOPBACK_HOSTS = access.LOOPBACK_HOSTS
 
 
 def assert_local_only(host: str) -> None:
-    """Refuse to serve this API on a non-loopback interface.
+    """Refuse a wider bind unless a token is configured.
 
-    There is no authentication on any endpoint: the ledger, the review
-    queue and the override controls are all open to whoever can reach the
-    port. That is acceptable bound to loopback and not acceptable anywhere
-    else, so binding wider fails loudly instead of quietly exposing it.
+    Kept under its original name because callers and tests use it. The rule
+    itself moved to `app.access`: loopback needs nothing, anything wider needs
+    `DASHBOARD_TOKEN`.
     """
-    if host not in LOOPBACK_HOSTS:
-        raise RuntimeError(
-            f"refusing to bind {host}: this service has no authentication and "
-            "must stay on loopback. Put it behind an authenticating proxy if "
-            "you need remote access."
-        )
+    access.assert_bindable(host, get_settings().dashboard_token)
 
 
 SERVICE_STARTED_AT = datetime.now(UTC)
@@ -164,6 +158,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Roblox Venture Agents", version="0.1.0", lifespan=lifespan)
 install_log_redaction()
 app.add_middleware(RedactedResponses)
+
+
+@app.middleware("http")
+async def require_token(request, call_next):
+    """Every request, including the static frontend.
+
+    Gating only `/api` would serve the application shell to anyone and leave
+    the credential as the only thing between them and a running agent.
+    """
+    try:
+        access.check(request, get_settings().dashboard_token)
+    except HTTPException as exc:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    return await call_next(request)
+
+
+@app.get("/api/health/live")
+def liveness():
+    """Unauthenticated on purpose: a platform health probe holds no token."""
+    return {"status": "ok"}
 
 
 def _audited_candidate_ids(db: Session) -> set[str]:

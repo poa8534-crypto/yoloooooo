@@ -1,0 +1,44 @@
+# Render service definition.
+#
+# This file is not sufficient to run the system. It configures the web service
+# and nothing else, and three things still block a working deployment:
+#
+#   1. The agents call Ollama on 127.0.0.1. A Render container cannot reach a
+#      model running on your desktop. A hosted model has to replace it.
+#   2. The ledger is SQLite on local disk, and Render's disk is ephemeral. It
+#      would be wiped on every deploy. The append-only triggers are SQLite
+#      syntax and need porting to Postgres.
+#   3. Captured artifacts are files on that same disk.
+#
+# See docs/REMOTE_ACCESS.md. A tunnel to the machine that already has the
+# model, the ledger and the search instance is the route that works today.
+
+services:
+  - type: web
+    name: roblox-venture-agents
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt && cd frontend && npm ci && npm run build
+    startCommand: python -m app.main
+    healthCheckPath: /api/health/live
+    envVars:
+      # Required. The service refuses a non-loopback bind without it, and a
+      # value under 24 characters is refused as not being a credential.
+      - key: DASHBOARD_TOKEN
+        generateValue: true
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        fromService:
+          type: web
+          name: roblox-venture-agents
+          property: port
+      # The sampler writes a census every 30 minutes. Running it here as well
+      # as on the local machine produces two divergent ledgers, so it is off
+      # by default and the local instance stays the one that samples.
+      - key: ROBLOX_CHARTS_ENABLED
+        value: "false"
+      # No local instance in a container; discovery falls back to the other
+      # sources rather than recording a failure every round.
+      - key: SEARXNG_ENABLED
+        value: "false"

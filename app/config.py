@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # Roblox's own search. First-party, no key, and it returns universe IDs
     # directly, so a resolution call per result is not needed.
     roblox_search_enabled: bool = True
+    # Required before the service will bind anything but loopback. See
+    # app/access.py; there is no other way to unlock a wider interface.
+    dashboard_token: str = ""
     # Roblox's own front page, sampled on a schedule. Every rate-of-change
     # measurement in the system is a derivative, and a derivative needs two
     # observations of the same game; this is what produces the second one.

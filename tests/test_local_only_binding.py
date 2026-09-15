@@ -7,6 +7,16 @@ import pytest
 from app.main import LOOPBACK_HOSTS, assert_local_only
 
 
+@pytest.fixture(autouse=True)
+def no_token(monkeypatch):
+    """No credential configured: the state this module is about."""
+    from types import SimpleNamespace
+
+    from app import main as main_module
+    monkeypatch.setattr(main_module, "get_settings",
+                        lambda: SimpleNamespace(dashboard_token=""))
+
+
 @pytest.mark.parametrize("host", sorted(LOOPBACK_HOSTS))
 def test_loopback_hosts_are_allowed(host):
     assert assert_local_only(host) is None
@@ -20,12 +30,13 @@ def test_every_other_host_is_refused(host):
         assert_local_only(host)
 
 
-def test_the_refusal_explains_the_alternative():
+def test_the_refusal_explains_both_ways_out():
     with pytest.raises(RuntimeError) as caught:
         assert_local_only("0.0.0.0")
     message = str(caught.value)
     assert "loopback" in message
-    assert "proxy" in message
+    assert "DASHBOARD_TOKEN" in message
+    assert "tunnel" in message
 
 
 def test_startup_refuses_a_wide_bind(monkeypatch):
@@ -35,7 +46,8 @@ def test_startup_refuses_a_wide_bind(monkeypatch):
     from app import main as main_module
 
     monkeypatch.setattr(
-        main_module, "get_settings", lambda: SimpleNamespace(host="0.0.0.0", port=8742)
+        main_module, "get_settings",
+        lambda: SimpleNamespace(host="0.0.0.0", port=8742, dashboard_token="")
     )
     with pytest.raises(RuntimeError, match="refusing to bind"):
         main_module.run()
