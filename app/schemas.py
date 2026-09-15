@@ -6,40 +6,50 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-# Words that turn a number into a claim about the world rather than an ordinal.
-_METRIC_UNIT = (
-    r"(?:players?|visits?|views?|users?|concurrent|ccu|favou?rites?|subscribers?"
-    r"|downloads?|installs?|retention|conversion|robux|usd|dollars?|revenue|sales|percent"
-    # Design quantities belong in `design_assumptions`, where they are typed and
-    # labelled as unverified, not loose in prose where they read as findings.
-    r"|seconds?|minutes?|hours?|days?|weeks?|months?|features?|levels?|rounds?|maps?|stages?)"
-)
-
-# The firewall keeps measured-sounding claims out of model prose, where they
-# would read as findings rather than as design.
+# Prose may carry a digit in exactly two shapes, and nothing else.
 #
-# It used to refuse every digit, which also refused "Day 1" in a milestone plan
-# and "72-hour MVP" in a summary. Once the brief got long enough to be useful a
-# collision was certain, and every audit failed closed on `build_steps` with no
-# way for the model to comply. What is refused now is anything shaped like a
-# measurement: links, numbers large enough to be counts, percentages, prices,
-# magnitudes, dates, and any number sitting beside a metric word. A bare
-# ordinal passes.
-FORBIDDEN_PROPOSAL_TEXT = re.compile(
-    r"""
-      https?://
-    | www\.
-    | \b[\w-]+\.(?:com|org|net|io)\b
-    | \d[\d,]{2,}
-    | \d+\s*[%$\u00a3\u20ac]
-    | [%$\u00a3\u20ac]\s*\d
-    | \b\d+(?:\.\d+)?\s*(?:k|m|bn|b)\b
-    | \b\d[\d,.]*\s*(?:-\s*)?""" + _METRIC_UNIT + r"""\b
-    | \b""" + _METRIC_UNIT + r"""\s*[:=]\s*\d
-    | \b\d{1,4}[/-]\d{1,2}[/-]\d{1,4}\b
-    """,
-    re.IGNORECASE | re.VERBOSE,
+# A milestone label: "Day 1", "Step 2", "Phase 3".
+_ORDINAL_LABEL = re.compile(
+    r"\b(?:day|days|step|steps|phase|phases|milestone|milestones|part|parts|week|weeks)\s*#?\s*\d{1,2}\b",
+    re.IGNORECASE,
 )
+# A genre token where the digit is part of the word, not a quantity.
+_GENRE_TOKEN = re.compile(r"\b(?:[23]-?d|\dv\d|f2p|p2w)\b", re.IGNORECASE)
+
+_LINK = re.compile(
+    r"https?://|www\.|\b[\w-]+\.(?:com|org|net|io|gg|dev|xyz|co)\b",
+    re.IGNORECASE,
+)
+_DIGIT = re.compile(r"\d")
+
+
+def contains_unsupported_measurement(value: str) -> bool:
+    """Is there a link, or a number that is not a milestone label or genre token?
+
+    This used to be a blacklist of metric words, which could not win. It passed
+    "The game has 80 daily sessions." because "sessions" was not on the list,
+    and every fix invited the next uncovered noun.
+
+    The rule is inverted now: prose may contain a digit only in a shape that
+    cannot be a measurement. Everything else has to be written in words, or put
+    in `design_assumptions`, where a quantity is typed and labelled as
+    unverified rather than reading as a finding.
+    """
+    if _LINK.search(value):
+        return True
+    remaining = _GENRE_TOKEN.sub(" ", _ORDINAL_LABEL.sub(" ", value))
+    return bool(_DIGIT.search(remaining))
+
+
+class _Firewall:
+    """Adapter so existing callers can keep using `.search(...)`."""
+
+    @staticmethod
+    def search(value: str):
+        return contains_unsupported_measurement(value) or None
+
+
+FORBIDDEN_PROPOSAL_TEXT = _Firewall
 
 
 class StrictModel(BaseModel):

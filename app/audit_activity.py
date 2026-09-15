@@ -1,15 +1,17 @@
 """Live activity for a running Venture Scout audit.
 
-An audit takes minutes and, until now, reported nothing at all while it ran:
-the button said "Auditing…" and the next visible thing was either a brief or a
-one-line failure. Every question about what it was doing -- which pass, which
-model, why an attempt was refused -- could only be answered from the service
-log afterwards.
+An audit takes minutes and reports intermediate progress while it runs:
+every question about what it is doing -- which pass, which model, which
+validation gate failed -- is emitted as a structured milestone.
 
-This is a deliberately small in-process broker. Audits run in the same process
-that serves the dashboard, so nothing needs a queue or a table. It is *not*
-durable: a restart loses the feed, which is why the audit record in the ledger
-stays the source of truth and this only describes work in flight.
+The feed is backed by a dual-write architecture:
+1. An in-memory queue and asyncio.Event for zero-latency live SSE streaming.
+2. A durable SQLite write-through ledger (scout_audit_runs and audit_activity_events)
+   so that a service restart or page reload never loses the chronological record of
+   what happened. On startup, interrupted runs are automatically reconciled.
+
+It carries descriptions of the work, never model output -- so nothing untrusted
+reaches the page through this channel.
 """
 
 from __future__ import annotations
@@ -18,10 +20,35 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any, Callable
+
+from sqlalchemy import desc, func, select
+from sqlalchemy.orm import Session
 
 # Enough to hold a long audit's chatter without letting a stuck one grow
 # without bound.
 MAX_EVENTS = 200
+
+_session_factory: Callable[[], Session] | None = None
+
+
+def set_session_factory(factory: Callable[[], Session] | None) -> None:
+    global _session_factory
+    _session_factory = factory
+
+
+def _get_session(feed: _Feed | None = None) -> Session | None:
+    factory = (feed.session_factory if feed else None) or _session_factory
+    if factory is not None:
+        try:
+            return factory()
+        except Exception:
+            pass
+    try:
+        from .db import SessionLocal
+        return SessionLocal()
+    except Exception:
+        return None
 
 
 @dataclass
@@ -30,6 +57,8 @@ class _Feed:
     updated: asyncio.Event = field(default_factory=asyncio.Event)
     running: bool = False
     sequence: int = 0
+    run_id: str | None = None
+    session_factory: Callable[[], Session] | None = None
 
 
 _feeds: dict[str, _Feed] = {}
@@ -39,13 +68,46 @@ def _feed(candidate_id: str) -> _Feed:
     return _feeds.setdefault(candidate_id, _Feed())
 
 
-def start(candidate_id: str) -> None:
-    """Begin a new audit's feed, discarding whatever the last one left."""
+def reset(candidate_id: str | None = None) -> None:
+    """Clear in-memory feed state, simulating a service restart."""
+    if candidate_id:
+        _feeds.pop(candidate_id, None)
+    else:
+        _feeds.clear()
+
+
+def start(candidate_id: str, session_factory: Callable[[], Session] | None = None) -> None:
+    """Begin a new audit's feed, discarding whatever the last in-memory run left."""
+    if session_factory is not None:
+        set_session_factory(session_factory)
     feed = _feed(candidate_id)
     feed.events.clear()
     feed.running = True
     feed.sequence = 0
+    if session_factory is not None:
+        feed.session_factory = session_factory
+
+    from .models import Candidate, ScoutAuditRun, uid
+    feed.run_id = uid()
     feed.updated.set()
+
+    session = _get_session(feed)
+    if session is not None:
+        try:
+            with session:
+                if session.get(Candidate, candidate_id) is not None:
+                    scout_run = ScoutAuditRun(
+                        id=feed.run_id,
+                        candidate_id=candidate_id,
+                        status="running",
+                        message="Venture Scout audit requested",
+                        created_at=datetime.now(UTC),
+                    )
+                    session.add(scout_run)
+                    session.commit()
+        except Exception:
+            pass
+
     emit(candidate_id, "started", "Venture Scout audit requested")
 
 
@@ -57,14 +119,36 @@ def emit(candidate_id: str, stage: str, detail: str = "", **extra) -> None:
     """
     feed = _feed(candidate_id)
     feed.sequence += 1
+    now = datetime.now(UTC)
     feed.events.append({
         "sequence": feed.sequence,
         "stage": stage,
         "detail": detail,
-        "at": datetime.now(UTC).isoformat(),
+        "at": now.isoformat(),
         **extra,
     })
     feed.updated.set()
+
+    if feed.run_id:
+        session = _get_session(feed)
+        if session is not None:
+            try:
+                with session:
+                    from .models import AuditActivityEvent, Candidate
+                    if session.get(Candidate, candidate_id) is not None:
+                        row = AuditActivityEvent(
+                            candidate_id=candidate_id,
+                            run_id=feed.run_id,
+                            sequence=feed.sequence,
+                            stage=stage,
+                            detail=detail,
+                            extra_json=dict(extra),
+                            created_at=now,
+                        )
+                        session.add(row)
+                        session.commit()
+            except Exception:
+                pass
 
 
 def finish(candidate_id: str, stage: str, detail: str = "", **extra) -> None:
@@ -73,9 +157,67 @@ def finish(candidate_id: str, stage: str, detail: str = "", **extra) -> None:
     feed.running = False
     feed.updated.set()
 
+    if feed.run_id:
+        session = _get_session(feed)
+        if session is not None:
+            try:
+                with session:
+                    from .models import ScoutAuditRun
+                    scout_run = session.get(ScoutAuditRun, feed.run_id)
+                    if scout_run is not None:
+                        scout_run.status = "complete" if stage == "stored" else stage
+                        scout_run.completed_at = datetime.now(UTC)
+                        session.commit()
+            except Exception:
+                pass
 
-def snapshot(candidate_id: str) -> dict:
+
+def snapshot(candidate_id: str, session_factory: Callable[[], Session] | None = None) -> dict:
+    if session_factory is not None:
+        set_session_factory(session_factory)
     feed = _feed(candidate_id)
+    if session_factory is not None:
+        feed.session_factory = session_factory
+    if feed.events or feed.running:
+        return {"running": feed.running, "events": list(feed.events)}
+
+    # If in-memory feed is empty (e.g. following a restart or fresh request),
+    # rehydrate from the durable SQLite ledger.
+    session = _get_session(feed)
+    if session is not None:
+        try:
+            with session:
+                from .models import AuditActivityEvent, ScoutAuditRun
+                latest_run = session.scalar(
+                    select(ScoutAuditRun)
+                    .where(ScoutAuditRun.candidate_id == candidate_id)
+                    .order_by(desc(ScoutAuditRun.created_at))
+                )
+                if latest_run is not None:
+                    event_rows = list(session.scalars(
+                        select(AuditActivityEvent)
+                        .where(AuditActivityEvent.run_id == latest_run.id)
+                        .order_by(AuditActivityEvent.sequence)
+                    ))
+                    replayed = [
+                        {
+                            "sequence": row.sequence,
+                            "stage": row.stage,
+                            "detail": row.detail,
+                            "at": row.created_at.isoformat(),
+                            **(row.extra_json or {}),
+                        }
+                        for row in event_rows
+                    ]
+                    feed.run_id = latest_run.id
+                    feed.running = (latest_run.status == "running")
+                    feed.sequence = replayed[-1]["sequence"] if replayed else 0
+                    feed.events.clear()
+                    feed.events.extend(replayed[-MAX_EVENTS:])
+                    return {"running": feed.running, "events": list(feed.events)}
+        except Exception:
+            pass
+
     return {"running": feed.running, "events": list(feed.events)}
 
 

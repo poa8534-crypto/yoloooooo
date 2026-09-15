@@ -1,5 +1,6 @@
 import { ResearchReport, CandidateHistory, DesignDetails } from './ResearchReport'
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { readRoute, routeHash, matchesDecision, type PageId } from './routing'
 
 type Fact = { id: string; text: string; source_ids: string[]; freshness: string; verification_state: string }
 type Proposal = {
@@ -56,6 +57,7 @@ type Source = {
   raw_size: number; observation_count: number
 }
 type SourceDetail = {
+  focusedFact?: string
   artifact: Source
   observations: Array<{
     id: string; candidate_id: string | null; metric: string; value: unknown; unit: string | null
@@ -96,7 +98,6 @@ type MatchingStatus = {
   outcome_counts: Record<string, number>
 }
 
-type PageId = 'home' | 'ideas' | 'sources' | 'history' | 'matching' | 'meta' | 'scout' | 'calibration' | 'health'
 type Tone = 'verified' | 'proposal' | 'inference' | 'override' | 'conflict' | 'insufficient'
 
 const navigation: Array<{ group: string; items: Array<[PageId, string, string]> }> = [
@@ -106,7 +107,7 @@ const navigation: Array<{ group: string; items: Array<[PageId, string, string]> 
 ]
 
 const pageNames: Record<PageId, string> = {
-  home: 'Command Center', ideas: 'Idea Panel', sources: 'Sources', matching: 'Matching Engine',
+  home: 'Home', ideas: 'Ideas and game dossiers', sources: 'Sources', matching: 'Matching Engine',
   meta: 'Meta Hunter', scout: 'Venture Scout', history: 'Agent History', calibration: 'Collection & Calibration', health: 'System Health',
 }
 
@@ -205,41 +206,21 @@ function AppSidebar({ page, onNavigate, health, metaRunning, scoutReady }: { pag
   return <aside className="app-sidebar">
     <div className="brand"><span className="brand-symbol">V</span><div><strong>Venture Agents</strong><small>Analyst workstation</small></div></div>
     <div className="node-status"><span>Node instance</span><strong>LOCAL NODE · {health?.status === 'ok' ? 'ONLINE' : 'CHECKING'}</strong><i className={health?.status === 'ok' ? 'online' : ''} /></div>
-    <nav>{navigation.map(section => <div className="nav-group" key={section.group}><span>{section.group}</span>{section.items.map(([id, icon, label]) => <button key={id} className={page === id ? 'active' : ''} onClick={() => onNavigate(id)}><b>{icon}</b>{label}{id === 'meta' && <em>{metaRunning ? 'Running' : 'Idle'}</em>}{id === 'scout' && <em>{scoutReady ? 'Ready' : 'Waiting'}</em>}</button>)}</div>)}</nav>
-    <div className="sidebar-footer"><div><span>SQLite WAL</span><i className={health?.database === 'connected' ? 'online' : ''} /></div><div>{health ? (health.embeddings.package_installed ? (health.embeddings.last_association_used_embeddings === false ? 'Embeddings installed · last run fell back' : 'Embeddings installed') : 'Embeddings unavailable') : 'Embeddings unknown'}</div><button disabled>▣ Collapse pane</button></div>
+    <nav aria-label="Main navigation">{navigation.map(section => <div className="nav-group" key={section.group}><span>{section.group}</span>{section.items.map(([id]) => <button key={id} aria-current={page === id ? 'page' : undefined} className={page === id ? 'active' : ''} onClick={() => onNavigate(id)}>{pageNames[id]}{id === 'meta' && metaRunning && <em>Running</em>}</button>)}</div>)}</nav>
+    <div className="sidebar-footer"><span>Local to this PC</span><small>{health?.database === 'connected' ? 'Evidence database connected' : 'Checking database'}</small></div>
   </aside>
 }
 
-function TopBar({ page, health, calibration, refreshing, onRefresh, metaRunning, scoutReady, theme, onToggleTheme, zoom, onZoomChange }: {
-  page: PageId; health: Health | null; calibration: Calibration | null; refreshing: boolean; onRefresh: () => void; metaRunning: boolean; scoutReady: boolean
-  theme: 'dark' | 'light'; onToggleTheme: () => void; zoom: number; onZoomChange: (newZoom: number) => void
-}) {
-  return <><header className="topbar">
-    <div className="phase-block"><span>Phase</span><strong>{calibration?.phase.replaceAll('_', ' ') || 'Loading'}</strong></div>
-    <button className="topbar-action" onClick={onRefresh} disabled={refreshing}>↻ <span>{refreshing ? 'Refreshing' : 'Refresh data'}</span></button>
-    <div className="agent-chip"><span>Meta Hunter</span><b>{metaRunning ? 'Running' : 'Idle'}</b></div>
-    <div className="agent-chip blue"><span>Scout</span><b>{scoutReady ? 'Ready' : 'Waiting'}</b></div>
-    <div className="telemetry"><span>System</span><b>{health?.status === 'ok' ? 'Healthy' : 'Checking'}</b></div>
-    <div className="zoom-widget" title="Adjust layout zoom / scale">
-      <button onClick={() => onZoomChange(Math.max(0.9, Number((zoom - 0.1).toFixed(2))))} disabled={zoom <= 0.9} title="Zoom out">−</button>
-      <span>{Math.round(zoom * 100)}%</span>
-      <button onClick={() => onZoomChange(Math.min(1.5, Number((zoom + 0.1).toFixed(2))))} disabled={zoom >= 1.5} title="Zoom in">+</button>
-    </div>
-    <button className="theme-switch-btn" onClick={onToggleTheme} title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode`}>
-      <i>{theme === 'dark' ? '☀️' : '🌙'}</i>
-      <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
-    </button>
-    <button className="primary compact" onClick={() => document.getElementById('primary-workspace')?.scrollIntoView()}>▶ Open workspace</button>
-  </header>
-  <div className="firewall-strip"><span>Evidence firewall:</span><Badge tone="verified">[VF] Verified Fact</Badge><Badge tone="proposal">[MP] Model Proposal</Badge><Badge tone="inference">[AI] Analyst Inference</Badge><Badge tone="override">[HO] Human Override</Badge><Badge tone="conflict">[EC] Conflict</Badge><Badge tone="insufficient">[IE] Insufficient</Badge><strong>Firewall active</strong></div>
-  <div className="page-title"><div><span>Local research system / {pageNames[page]}</span><h1>{pageNames[page]}</h1></div><Badge tone={calibration?.scoring_active ? 'verified' : 'insufficient'}>{calibration?.scoring_active ? 'Scoring active' : 'Collection mode'}</Badge></div></>
+function TopBar({ page, calibration, refreshing, onRefresh }: { page: PageId; calibration: Calibration | null; refreshing: boolean; onRefresh: () => void }) {
+  return <><header className="topbar"><span>Roblox research · local workspace</span><button className="secondary" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh data'}</button></header>
+  <div className="page-title"><h1>{pageNames[page]}</h1><Badge>{calibration?.scoring_active ? 'Scoring active' : 'Research only'}</Badge></div></>
 }
 
 type TimelineRange = '7' | '30' | 'all'
 
-function CommandCenter({ summary, timeline, sources, runs, health, calibration, onSource, onNavigate }: {
+function CommandCenter({ summary, timeline, sources, runs, health, calibration, onSource, onNavigate, onCandidate }: {
   summary: DashboardSummary | null; timeline: TimelinePoint[]; sources: Source[]; runs: Run[]; health: Health | null
-  calibration: Calibration | null; onSource: (source: Source) => void; onNavigate: (page: PageId) => void
+  calibration: Calibration | null; onSource: (source: Source) => void; onNavigate: (page: PageId) => void; onCandidate: (id: string) => void
 }) {
   const counts = summary?.counts
   const [range, setRange] = useState<TimelineRange>('30')
@@ -266,12 +247,12 @@ function CommandCenter({ summary, timeline, sources, runs, health, calibration, 
       <article className="data-panel activity-panel"><div className="panel-heading"><div><span>Append-only events</span><h2>Live system activity</h2></div></div>{summary?.activity.length ? <div className="activity-list">{summary.activity.map(item => <div key={`${item.kind}-${item.target_id}-${item.at}`}><time>{formatDate(item.at)}</time><strong>[{item.actor}]</strong><p>{item.message}</p><Badge tone={toneFor(item.status)}>{item.status.replaceAll('_', ' ')}</Badge></div>)}</div> : <EmptyState title="No activity recorded">Research, captures, matches and agent events will appear here.</EmptyState>}</article>
     </div>
     <article className="data-panel"><div className="panel-heading"><div><span>Candidate intelligence</span><h2>Tracked market niches</h2></div><button className="secondary" onClick={() => onNavigate('ideas')}>Open Idea Panel</button></div>
-      {candidates.length ? <div className="table-scroll"><table><thead><tr><th>Candidate / niche</th><th>State</th><th>Facts</th><th>Confidence</th><th>Score</th><th>Action</th></tr></thead><tbody>{candidates.slice(0, 12).map(item => <tr key={item.id}><td><strong>{item.display_name}</strong><small>{item.niche} · ID {item.external_id}</small></td><td><Badge tone={toneFor(item.decision)}>{item.decision.replaceAll('_', ' ')}</Badge></td><td className="numeric">{item.facts.length}</td><td className="numeric">{item.confidence == null ? '—' : `${item.confidence.toFixed(1)}%`}</td><td className="numeric">{item.score == null ? 'Locked' : item.score.toFixed(1)}</td><td><button className="text-button" onClick={() => onNavigate('ideas')}>Inspect →</button></td></tr>)}</tbody></table></div> : <EmptyState title="No tracked market data yet">The first successful Meta Hunter run will populate candidates here. No preview records are shown as real evidence.</EmptyState>}
+      {candidates.length ? <div className="table-scroll"><table><thead><tr><th>Candidate / niche</th><th>State</th><th>Facts</th><th>Confidence</th><th>Score</th><th>Action</th></tr></thead><tbody>{candidates.slice(0, 12).map(item => <tr key={item.id}><td><strong>{item.display_name}</strong><small>{item.niche} · ID {item.external_id}</small></td><td><Badge tone={toneFor(item.decision)}>{item.decision.replaceAll('_', ' ')}</Badge></td><td className="numeric">{item.facts.length}</td><td className="numeric">{item.confidence == null ? '—' : `${item.confidence.toFixed(1)}%`}</td><td className="numeric">{item.score == null ? 'Locked' : item.score.toFixed(1)}</td><td><button className="text-button" onClick={() => onCandidate(item.id)}>Inspect →</button></td></tr>)}</tbody></table></div> : <EmptyState title="No tracked market data yet">The first successful Meta Hunter run will populate candidates here. No preview records are shown as real evidence.</EmptyState>}
     </article>
     <article className="data-panel"><div className="panel-heading"><div><span>Recent captures</span><h2>Evidence ingestion stream</h2></div><button className="secondary" onClick={() => onNavigate('sources')}>View all sources</button></div>
       {sources.length ? <div className="table-scroll"><table><thead><tr><th>Publisher / endpoint</th><th>Tier</th><th>Captured</th><th>Yield</th><th>SHA256</th><th /></tr></thead><tbody>{sources.slice(0, 8).map(source => <tr key={source.id}><td><strong>{source.publisher_owner}</strong><small>{source.retrieval_method.replaceAll('_', ' ')}</small></td><td><Badge tone={source.is_discovery_only ? 'insufficient' : 'verified'}>{source.source_tier}</Badge></td><td>{formatDate(source.captured_at)}</td><td className="numeric">{source.observation_count} obs</td><td><code>{source.sha256.slice(0, 10)}…{source.sha256.slice(-6)}</code></td><td><button className="text-button" onClick={() => onSource(source)}>Inspect</button></td></tr>)}</tbody></table></div> : <EmptyState title="Evidence library is ready">Sources will appear after research captures the first API response.</EmptyState>}
     </article>
-    {!counts?.source_artifacts && <div className="setup-state"><div><span>01</span><strong>{health?.connectors.tavily_configured && health?.connectors.youtube_configured ? 'Connectors authenticated' : 'Connector setup incomplete'}</strong><small>{health?.connectors.tavily_configured && health?.connectors.youtube_configured ? 'Tavily and YouTube keys are loaded locally.' : 'Check System Health before starting a run.'}</small></div><div><span>02</span><strong>Matching in shadow mode</strong><small>Unvalidated fuzzy matches cannot reach scoring.</small></div><div><span>03</span><strong>Start first research run</strong><small>Choose a niche in the Meta Hunter workspace.</small><button className="primary" onClick={() => onNavigate('meta')}>Open Meta Hunter</button></div><div><span>04</span><strong>Calibration remains locked</strong><small>{calibration?.reason || 'Awaiting complete evidence windows.'}</small></div></div>}
+    {!counts?.source_artifacts && <div className="setup-state"><div><span>01</span><strong>{health?.connectors.tavily_configured && health?.connectors.youtube_configured ? 'Connectors configured' : 'Connector setup incomplete'}</strong><small>{health?.connectors.tavily_configured && health?.connectors.youtube_configured ? 'Tavily and YouTube keys are loaded locally.' : 'Check System Health before starting a run.'}</small></div><div><span>02</span><strong>Matching in shadow mode</strong><small>Unvalidated fuzzy matches cannot reach scoring.</small></div><div><span>03</span><strong>Start first research run</strong><small>Choose a niche in the Meta Hunter workspace.</small><button className="primary" onClick={() => onNavigate('meta')}>Open Meta Hunter</button></div><div><span>04</span><strong>Calibration remains locked</strong><small>{calibration?.reason || 'Awaiting complete evidence windows.'}</small></div></div>}
   </section>
 }
 
@@ -286,18 +267,19 @@ const STAGE_LABEL: Record<string, string> = {
   revision_ready: 'Revision accepted', revision_skipped: 'Revision skipped',
   proposal_accepted: 'Design accepted', citations: 'Citations re-verified',
   stored: 'Written to the ledger', blocked: 'Blocked',
+  interrupted: 'Interrupted by restart',
 }
 
 const STAGE_TONE: Record<string, Tone> = {
   attempt_refused: 'insufficient', gate_blocked: 'insufficient', blocked: 'insufficient',
-  critique_skipped: 'insufficient', revision_skipped: 'insufficient',
+  critique_skipped: 'insufficient', revision_skipped: 'insufficient', interrupted: 'insufficient',
   draft_ready: 'verified', critique_ready: 'verified', revision_ready: 'verified',
   proposal_accepted: 'verified', stored: 'verified', citations: 'verified',
 }
 
 // An audit takes minutes and used to show nothing but a spinner, so a working
-// run and a stuck one looked identical. The feed is in-process: it describes
-// work in flight, and the stored audit stays the record of what happened.
+// run and a stuck one looked identical. The feed is backed by a durable
+// SQLite ledger and in-memory broker, so progress survives service restarts.
 function AuditActivityDrawer({ candidateId, open, onClose }: { candidateId: string; open: boolean; onClose: () => void }) {
   const [events, setEvents] = useState<ActivityEvent[]>([])
   const [live, setLive] = useState(false)
@@ -316,9 +298,10 @@ function AuditActivityDrawer({ candidateId, open, onClose }: { candidateId: stri
     return () => { source.close(); setLive(false) }
   }, [candidateId, open])
   const started = events.length ? new Date(events[0].at).getTime() : 0
+  const isInterrupted = events.some(e => e.stage === 'interrupted')
   return <div className={`drawer-scrim ${open ? 'open' : ''}`} onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
     <aside className="evidence-drawer" aria-label="Venture Scout activity">
-      <header><div><span>Venture Scout activity</span><strong>{live && events.length ? 'Running now' : live ? 'Listening…' : events.length ? 'Finished' : 'Nothing running'}</strong></div><button aria-label="Close activity" onClick={onClose}>×</button></header>
+      <header><div><span>Venture Scout activity</span><strong>{live && events.length ? 'Running now' : live ? 'Listening…' : isInterrupted ? 'Interrupted' : events.length ? 'Finished' : 'Nothing running'}</strong></div><button aria-label="Close activity" onClick={onClose}>×</button></header>
       <div className="drawer-body">
         {events.length ? <section>{events.map(event => <article key={event.sequence}>
           <span>{STAGE_LABEL[event.stage] || event.stage.replaceAll('_', ' ')}</span>
@@ -326,7 +309,7 @@ function AuditActivityDrawer({ candidateId, open, onClose }: { candidateId: stri
           <p>{event.detail}</p>
           {event.model && <small>{event.model}{event.attempt ? ` · attempt ${event.attempt}` : ''}</small>}
         </article>)}</section>
-          : <EmptyState title="No audit in flight">Start an audit and this fills in as each pass runs. The feed lives in the running service, so it does not survive a restart.</EmptyState>}
+          : <EmptyState title="No audit in flight">Start an audit and this fills in as each pass runs. Events are preserved in the ledger across restarts.</EmptyState>}
       </div>
     </aside>
   </div>
@@ -338,10 +321,11 @@ function IdeasPanel({ runs, selectedId, onSelect, onInspectFact, onAudit, audit,
 }) {
   const [filter, setFilter] = useState<'all' | 'research_more' | 'recommend' | 'blocked_conflict'>('all')
   const allIdeas = runs.flatMap(run => run.candidates.map(candidate => ({ candidate, run })))
-  const ideas = filter === 'all' ? allIdeas : allIdeas.filter(item => item.candidate.decision === filter)
+  const [kind, setKind] = useState<'ideas' | 'games'>('ideas')
+  const ideas = allIdeas.filter(item => (kind === 'games' || Boolean(item.candidate.proposal)) && matchesDecision(item.candidate.decision, filter))
   const active = allIdeas.find(item => item.candidate.id === selectedId)
-  return <IdeaPanelBody active={active} ideas={ideas} filter={filter} setFilter={setFilter}
-    onSelect={onSelect} onInspectFact={onInspectFact} onAudit={onAudit} audit={audit} busy={busy} />
+  return <><div className="filter-row" aria-label="Record type"><button aria-pressed={kind === 'ideas'} onClick={() => setKind('ideas')}>Generated ideas</button><button aria-pressed={kind === 'games'} onClick={() => setKind('games')}>Game dossiers</button></div><IdeaPanelBody active={active} ideas={ideas} filter={filter} setFilter={setFilter}
+    onSelect={onSelect} onInspectFact={onInspectFact} onAudit={onAudit} audit={audit} busy={busy} /></>
 }
 
 function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFact, onAudit, audit, busy }: {
@@ -392,13 +376,13 @@ function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFa
       <AuditActivityDrawer candidateId={candidateId} open={activityOpen} onClose={() => setActivityOpen(false)} />
       {!busy && shown?.proposal && <div className="audit-result-banner">
         <div><strong>Venture Scout audit complete</strong><span>{shown.proposal.concept_title} · {(shown.cited_fact_ids || []).length} cited fact(s){shown.withdrawn_fact_ids?.length ? `, ${shown.withdrawn_fact_ids.length} withdrawn` : ''}</span></div>
-        <div><a href="#brief-1">Read the brief</a>{shown.audit_id && <a href={`/api/audits/${shown.audit_id}`} target="_blank" rel="noreferrer">Audit record</a>}<button type="button" className="text-button" onClick={() => setActivityOpen(true)}>How it ran</button></div>
+        <div><a href="#brief-1" onClick={event => { event.preventDefault(); document.getElementById("brief-1")?.scrollIntoView() }}>Read the brief</a>{shown.audit_id && <a href={`/api/audits/${shown.audit_id}`} target="_blank" rel="noreferrer">Audit record</a>}<button type="button" className="text-button" onClick={() => setActivityOpen(true)}>How it ran</button></div>
       </div>}
       {busy && <div className="warning-box"><strong>Venture Scout is running</strong><span>Reading the evidence, drafting, critiquing its own draft and revising it. Several minutes on a local model. <button className="text-button" onClick={() => setActivityOpen(true)}>Watch it work</button></span></div>}
       {blocking.length > 0 && <div className="warning-box"><strong>Audit cannot run yet</strong>{blocking.map(gate => <p key={gate.label}>{gate.label}: {gate.detail}</p>)}</div>}
       {blockedAudit && blocking.length === 0 && <div className="warning-box"><strong>Last audit was recorded without a proposal</strong>{(blockedAudit.risks || []).map(risk => <p key={risk}>{risk}</p>)}</div>}
       <article className="brief-hero"><span>Research dossier / {run.niche}</span><h2>{proposal?.concept_title || candidate.display_name}</h2><p>{proposal?.core_loop || 'A detailed proposal will appear after the constrained local model completes a schema-valid run.'}</p><div className="metrics-grid compact"><Metric label="Engine decision" value={candidate.decision.replaceAll('_', ' ')} note="Deterministic" /><Metric label="Evidence facts" value={candidate.facts.length} note="Clickable provenance" /><Metric label="Confidence" value={candidate.confidence == null ? '—' : `${candidate.confidence.toFixed(1)}%`} note={candidate.confidence == null ? 'Not computed' : 'Evidence quality'} /><Metric label="Market score" value={candidate.score == null ? 'Locked' : candidate.score.toFixed(1)} note={candidate.score == null ? 'Calibration inactive' : 'Frozen artifact'} /></div></article>
-      <div className="brief-layout"><nav className="brief-index"><span>Research brief</span>{['Executive summary', 'Why this idea', 'Demand history', 'Competitors', 'Opportunity gap', 'Twist lab', '72-hour MVP', 'Risk register', 'Provenance'].map((item, index) => <a key={item} href={`#brief-${index + 1}`}>{String(index + 1).padStart(2, '0')}. {item}</a>)}</nav>
+      <div className="brief-layout"><nav className="brief-index"><span>Research brief</span>{['Executive summary', 'Why this idea', 'Demand history', 'Competitors', 'Opportunity gap', 'Twist lab', '72-hour MVP', 'Risk register', 'Provenance'].map((item, index) => <a key={item} href={`#brief-${index + 1}`} onClick={event => { event.preventDefault(); document.getElementById(`brief-${index + 1}`)?.scrollIntoView() }}>{String(index + 1).padStart(2, '0')}. {item}</a>)}</nav>
         <div className="brief-sections"><article id="brief-1" className="data-panel"><div className="section-number">01</div><h2>Executive summary</h2>{proposal ? <><div className="classified verified"><Badge tone="verified">Verified context</Badge><p>{candidate.facts.length} facts are available from captured evidence. Use the provenance section to inspect each exact source chain.</p></div><div className="classified proposal"><Badge tone="proposal">Model proposal</Badge><p>{proposal.executive_summary || proposal.core_loop}</p></div><div className="classified inference"><Badge tone="inference">Analyst interpretation</Badge><p>The proposal is a design hypothesis. It is not evidence that the market or game will succeed.</p></div></> : <EmptyState title="Proposal not generated">Run Venture Scout after evidence and matching gates allow an audit.</EmptyState>}</article>
           <article id="brief-2" className="data-panel"><div className="section-number">02</div><h2>Why this idea was chosen</h2><p className="body-copy">The engine state is <strong>{candidate.decision.replaceAll('_', ' ')}</strong>. Selection reasons must come from deterministic decision records; the local model cannot author a verdict.</p><div className="fact-stack">{candidate.facts.map(fact => <button key={fact.id} onClick={() => onInspectFact(fact.id)}><Badge tone="verified">Verified fact</Badge><span>{fact.text}</span><code>{fact.id}</code></button>)}</div></article>
           <article id="brief-3" className="data-panel"><div className="section-number">03</div><h2>Demand and trend history</h2><CandidateHistory candidateId={candidate.id} /></article>
@@ -441,7 +425,7 @@ function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFa
 function SourcesPage({ sources, onSource }: { sources: Source[]; onSource: (source: Source) => void }) {
   const [query, setQuery] = useState('')
   const filtered = sources.filter(source => `${source.publisher_owner} ${source.retrieval_method} ${source.url}`.toLowerCase().includes(query.toLowerCase()))
-  return <section className="workspace"><div className="section-intro"><div><span>Immutable provenance</span><h2>Sources and evidence library</h2><p>Inspect exactly where every trusted observation came from.</p></div><input className="search-input" value={query} onChange={event => setQuery(event.target.value)} placeholder="Filter publisher, endpoint or URL" /></div>
+  return <section className="workspace"><div className="section-intro"><div><span>Immutable provenance</span><h2>Sources and evidence library</h2><p>Inspect exactly where every trusted observation came from.</p></div><input className="search-input" value={query} onChange={event => setQuery(event.target.value)} aria-label="Filter sources" placeholder="Filter publisher, endpoint or URL" /></div>
     <div className="metrics-grid compact"><Metric label="Captured artifacts" value={sources.length} note="Current result set" /><Metric label="Primary" value={sources.filter(item => item.source_tier === 'primary').length} note="Authoritative APIs" tone="positive" /><Metric label="Discovery only" value={sources.filter(item => item.is_discovery_only).length} note="Cannot create facts" /><Metric label="Stored bytes" value={formatBytes(sources.reduce((sum, item) => sum + item.raw_size, 0))} note="Hashed raw payloads" /></div>
     <article className="data-panel">{filtered.length ? <div className="table-scroll"><table><thead><tr><th>Publisher / resource</th><th>Tier</th><th>Captured</th><th>Type</th><th>Yield</th><th>Size</th><th>SHA256</th><th /></tr></thead><tbody>{filtered.map(source => <tr key={source.id}><td><strong>{source.publisher_owner}</strong><small>{source.retrieval_method.replaceAll('_', ' ')}</small></td><td><Badge tone={source.is_discovery_only ? 'insufficient' : 'verified'}>{source.source_tier}</Badge></td><td>{formatDate(source.captured_at)}</td><td>{source.content_type}</td><td className="numeric">{source.observation_count}</td><td className="numeric">{formatBytes(source.raw_size)}</td><td><code>{source.sha256.slice(0, 12)}…</code></td><td><button className="text-button" onClick={() => onSource(source)}>Inspect →</button></td></tr>)}</tbody></table></div> : <EmptyState title="No matching sources">Try another filter or run research to capture evidence.</EmptyState>}</article>
   </section>
@@ -458,7 +442,7 @@ function MatchingEnginePage({ status, reviews, selectedId, onSelect, onReload, o
   return <section className="workspace"><div className="engine-banner"><div><span>Deterministic linkage workspace</span><h2>Matching Engine</h2><p>No LLM participates in entity association or threshold decisions.</p></div><Badge tone={status?.shadow_mode ? 'insufficient' : 'verified'}>{status?.shadow_mode ? 'Shadow mode' : 'Active mode'}</Badge><button className="secondary" onClick={onReload}>Refresh engine</button></div>
     {status?.artifact_error ? <div className="warning-box"><strong>Frozen policy artifact refused</strong><span>{status.artifact_error}</span></div> : null}
     <div className="metrics-grid compact"><Metric label="Matcher version" value={status?.matcher_version || '—'} note={status?.validated ? 'Validated' : 'Unvalidated'} /><Metric label="Feature schema" value={status?.feature_schema_version || '—'} note="Frozen ordering" /><Metric label="Recorded matches" value={formatCount(status?.total_associations)} note="Append only" /><Metric label="Review queue" value={formatCount(status?.pending_reviews)} note="Abstentions" /><Metric label="Held-out precision" value={status?.heldout_precision == null ? '—' : `${(status.heldout_precision * 100).toFixed(2)}%`} note={status?.benchmark_reason || 'Benchmark pending'} /></div>
-    <div className="engine-tabs"><button className="active">Review queue</button><button disabled>Threshold laboratory</button><button disabled>Feature inspector</button><button disabled>Match sandbox</button><button disabled>Versions</button></div>
+    <details className="policy-details"><summary>Policy and unavailable tools</summary><p>Threshold tuning and a match sandbox are not implemented. This workspace reviews recorded associations; it cannot loosen evidence gates.</p><p>Threshold version: {status?.threshold_version || "Unknown"}. High threshold: {status?.high_threshold ?? "Unknown"}. Required margin: {status?.margin_threshold ?? "Unknown"}.</p></details>
     <div className="review-layout"><article className="data-panel review-queue"><div className="panel-heading"><div><span>Human decisions</span><h2>Association outcomes</h2></div><Badge tone="inference">{reviews.length} items</Badge></div>{reviews.length ? reviews.map(item => <button className={review?.association_id === item.association_id ? 'active' : ''} key={item.association_id} onClick={() => onSelect(item.association_id)}><strong>{item.subject_title || 'Untitled captured source'}</strong><span>{item.candidate?.display_name || 'No candidate'} · margin {item.margin.toFixed(3)}</span><Badge tone={toneFor(item.outcome)}>{item.outcome.replaceAll('_', ' ')}</Badge></button>) : <EmptyState title="Review queue is empty">Ambiguous or conflicting associations will appear here instead of being guessed.</EmptyState>}</article>
       <div className="review-detail">{review ? <><article className="data-panel"><div className="panel-heading"><div><span>Captured source · {review.subject_type.replaceAll('_', ' ')}</span><h2>{review.subject_title || 'Untitled source'}</h2></div><Badge tone={toneFor(review.outcome)}>{review.outcome.replaceAll('_', ' ')}</Badge></div><p className="captured-copy">{review.subject_description || 'No description was captured.'}</p><div className="meta-line"><span>{review.subject_creator || 'Unknown creator'}</span><code>{review.subject_external_id || 'No external ID'}</code></div>{review.conflict_warnings.length ? <div className="warning-box"><strong>Contradiction guards</strong>{review.conflict_warnings.map(item => <span key={item}>{item.replaceAll('_', ' ')}</span>)}</div> : null}</article>
         <article className="data-panel"><div className="candidate-compare"><div><span>Top candidate</span><strong>{review.candidate?.display_name || 'None'}</strong><b>{review.top_score.toFixed(4)}</b></div><div><span>Runner-up</span><strong>{review.runner_up?.display_name || 'None'}</strong><b>{review.runner_up_score.toFixed(4)}</b></div><div><span>Margin</span><strong>{review.margin.toFixed(4)}</strong><b>{(review.required_coverage * 100).toFixed(0)}% coverage</b></div></div>{Object.keys(review.features).length ? <div className="feature-bars">{(review.feature_order.length ? review.feature_order : Object.keys(review.features)).map(name => <div key={name}><span>{name.replaceAll('_', ' ')}</span><div><i style={{ width: `${Math.max(0, Math.min(100, (review.features[name] || 0) * 100))}%` }} /></div><code>{(review.features[name] || 0).toFixed(4)}</code></div>)}</div> : <EmptyState title="No features were computed">A hard rule stopped this source before any candidate was scored, so there is nothing to weigh. The candidates below are still listed so you can choose one by hand.</EmptyState>}</article>
@@ -486,7 +470,7 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
       <small className="gate-hint">Stage list is documentation of the pipeline order. The live stage and usage below come from persisted backend checkpoints.</small></article>
     <article className="data-panel"><div className="panel-heading"><div><span>Append-only run records</span><h2>Run history</h2></div></div>{runs.length ? <div className="table-scroll"><table><thead><tr><th>Niche</th><th>Status</th><th>Started</th><th>Candidates</th><th>Result</th></tr></thead><tbody>{runs.map(run => <tr key={run.id}><td><strong>{run.niche}</strong><small><code>{run.id}</code></small></td><td><Badge tone={toneFor(run.status)}>{run.status}</Badge></td><td>{formatDate(run.created_at)}</td><td className="numeric">{run.candidates.length}</td><td>{run.message}</td></tr>)}</tbody></table></div> : <EmptyState title="No Meta Hunter runs">Submit the first niche above when you are ready to collect evidence.</EmptyState>}</article>
     {latest && <><label>Inspect research run<select value={latest.id} onChange={e => setReportId(e.target.value)}>{runs.map(r => <option key={r.id} value={r.id}>{r.niche} — {r.status}</option>)}</select></label>{latest.progress && <article className="data-panel"><h3>{latest.progress.stage}</h3><p>{Math.round(latest.progress.elapsed_seconds)}s elapsed · {Math.round(latest.progress.remaining_seconds)}s {["queued", "running"].includes(latest.status) ? "remaining" : "unused budget"}</p><div className="metrics-grid compact">{Object.entries(latest.progress.usage).map(([key, value]) => <Metric key={key} label={key.replaceAll("_", " ")} value={value} note="Reserved attempts / captured entities" />)}</div>{latest.progress.questions.map(q => <p key={q.id}>{q.question} — {q.state}</p>)}</article>}<ResearchReport runId={latest.id} status={latest.status} /></>}
-    <div className="api-readiness"><span>Tavily <b>{health?.connectors.tavily_configured ? 'Authenticated' : 'Missing key'}</b></span><span>YouTube <b>{health?.connectors.youtube_configured ? 'Authenticated' : 'Missing key'}</b></span><span>Roblox <b>Public interface</b></span><span>Qwen <b>{health?.ollama.primary_present ? '14B ready' : 'Unavailable'}</b></span></div>
+    <div className="api-readiness"><span>Tavily <b>{health?.connectors.tavily_configured ? 'Configured — not a live authentication check' : 'Missing key'}</b></span><span>YouTube <b>{health?.connectors.youtube_configured ? 'Configured — not a live authentication check' : 'Missing key'}</b></span><span>Roblox <b>Public interface</b></span><span>Qwen <b>{health?.ollama.primary_present ? '14B ready' : 'Unavailable'}</b></span></div>
   </section>
 }
 
@@ -563,14 +547,14 @@ function AgentHistoryPage({ onInspectFact, onOpenCandidate }: { onInspectFact: (
         <button key={value} className={kind === value ? 'active' : ''} onClick={() => setKind(value)}>{label}</button>)}</div>
     </div>
     <div className="history-toolbar">
-      <input placeholder="Filter by concept, experience or niche" value={query} onChange={event => setQuery(event.target.value)} />
+      <input aria-label="Filter agent history" placeholder="Filter by concept, experience or niche" value={query} onChange={event => setQuery(event.target.value)} />
       <button className="text-button" onClick={reload}>Refresh</button>
       {runs && <span>{shown.length} of {runs.length} run(s)</span>}
     </div>
     {error && <div className="warning-box"><strong>History unavailable</strong><span>{error}</span></div>}
     {!runs ? <div className="drawer-loading">Loading agent history…</div>
       : shown.length ? <div className="history-list">{shown.map(run => <article key={`${run.kind}-${run.id}`} className="history-row">
-        <header onClick={() => setOpenId(current => current === run.id ? '' : run.id)}>
+        <header role="button" tabIndex={0} aria-expanded={openId === run.id} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpenId(current => current === run.id ? "" : run.id) } }} onClick={() => setOpenId(current => current === run.id ? '' : run.id)}>
           <div>
             <Badge tone={run.kind === 'venture_scout' ? 'inference' : 'proposal'}>{AGENT_LABEL[run.kind]}</Badge>
             <Badge tone={OUTCOME_TONE[run.outcome] || 'proposal'}>{run.outcome}</Badge>
@@ -603,7 +587,7 @@ function CalibrationPage({ calibration, summary }: { calibration: Calibration | 
     ['At least ten held-out recommendations', Boolean(calibration?.heldout_recommendations && calibration.heldout_recommendations >= 10), calibration?.heldout_recommendations == null ? 'Pending' : String(calibration.heldout_recommendations)],
     ['Frozen artifact activated', Boolean(calibration?.scoring_active), calibration?.model_version || 'Not active'],
   ] as const
-  return <section className="workspace"><div className={`calibration-warning ${calibration?.scoring_active ? 'active' : ''}`}><Badge tone={calibration?.scoring_active ? 'verified' : 'conflict'}>{calibration?.scoring_active ? 'Scoring active' : 'Scoring locked'}</Badge><div><strong>{calibration?.scoring_active ? 'Market-growth scoring is active' : 'Market-growth scoring remains disabled'}</strong><p>{calibration?.reason}</p></div></div><div className="metrics-grid compact"><Metric label="Candidate clusters" value={summary?.counts.candidate_clusters || 0} note="Tracked" /><Metric label="Complete windows" value={calibration?.complete_clusters || 0} note={`of ${calibration?.required_clusters || 200}`} /><Metric label="Dataset readiness" value={`${progress.toFixed(1)}%`} note="Window gate" /><Metric label="Held-out precision" value={calibration?.heldout_precision == null ? '—' : `${(calibration.heldout_precision * 100).toFixed(2)}%`} note="Untouched test set" /></div><div className="calibration-grid"><article className="data-panel"><div className="panel-heading"><div><span>30-day snapshot continuity</span><h2>Collection matrix</h2></div></div><div className="large-progress"><i style={{ width: `${progress}%` }} /><span>{progress.toFixed(1)}%</span></div><EmptyState title="Candidate-level matrix awaits history">A row will appear for every tracked cluster. Missing daily snapshots remain explicit gaps.</EmptyState></article><article className="data-panel"><div className="panel-heading"><div><span>Activation policy</span><h2>Decision gates</h2></div></div><div className="gate-stack">{gates.map(([label, pass, result]) => <div key={label}><i className={pass ? 'pass' : ''}>{pass ? '✓' : '×'}</i><span><strong>{label}</strong><small>{result}</small></span><Badge tone={pass ? 'verified' : 'insufficient'}>{pass ? 'Pass' : 'Locked'}</Badge></div>)}</div></article></div></section>
+  return <section className="workspace"><div className={`calibration-warning ${calibration?.scoring_active ? 'active' : ''}`}><Badge tone={calibration?.scoring_active ? 'verified' : 'conflict'}>{calibration?.scoring_active ? 'Scoring active' : 'Scoring locked'}</Badge><div><strong>{calibration?.scoring_active ? 'Market-growth scoring is active' : 'Market-growth scoring remains disabled'}</strong><p>{calibration?.reason}</p></div></div><div className="metrics-grid compact"><Metric label="Candidate clusters" value={summary?.counts.candidate_clusters || 0} note="Tracked" /><Metric label="Complete windows" value={calibration?.complete_clusters || 0} note={`of ${calibration?.required_clusters || 200}`} /><Metric label="Dataset readiness" value={`${progress.toFixed(1)}%`} note="Window gate" /><Metric label="Held-out precision" value={calibration?.heldout_precision == null ? '—' : `${(calibration.heldout_precision * 100).toFixed(2)}%`} note="Untouched test set" /></div><div className="calibration-grid"><article className="data-panel"><div className="panel-heading"><div><span>30-day snapshot continuity</span><h2>Collection matrix</h2></div></div><div className="large-progress"><i style={{ width: `${progress}%` }} /><span>{progress.toFixed(1)}%</span></div><EmptyState title="Niche-cluster matrix is not implemented">Entity snapshots are available in each game dossier. They do not constitute validated niche-cluster windows.</EmptyState></article><article className="data-panel"><div className="panel-heading"><div><span>Activation policy</span><h2>Decision gates</h2></div></div><div className="gate-stack">{gates.map(([label, pass, result]) => <div key={label}><i className={pass ? 'pass' : ''}>{pass ? '✓' : '×'}</i><span><strong>{label}</strong><small>{result}</small></span><Badge tone={pass ? 'verified' : 'insufficient'}>{pass ? 'Pass' : 'Locked'}</Badge></div>)}</div></article></div></section>
 }
 
 function HealthPage({ health, summary, matching }: { health: Health | null; summary: DashboardSummary | null; matching: MatchingStatus | null }) {
@@ -619,15 +603,40 @@ function HealthPage({ health, summary, matching }: { health: Health | null; summ
     ['Daily snapshot scheduler', Boolean(health?.scheduler.daily_at), health ? `${health.scheduler.daily_at} ${health.scheduler.timezone}` : 'Checking'],
     ['Local embedding model', health?.embeddings.package_installed, health?.embeddings.package_installed ? `${health.embeddings.model_name}${health.embeddings.last_association_used_embeddings === false ? ' · last run used lexical fallback' : ''}` : 'fastembed not installed · lexical retrieval only'],
   ] as const
-  return <section className="workspace"><div className="keyring-banner"><strong>▣ Local secret boundary engaged</strong><p>API keys stay in the ignored local environment file and are never returned to the dashboard.</p><Badge tone="verified">No secrets exposed</Badge></div><div className="module-grid">{modules.map(([name, ok, detail]) => <article className="data-panel" key={name}><div><span className={`module-dot ${ok ? 'online' : ''}`} /><Badge tone={ok ? 'verified' : 'conflict'}>{ok ? 'Healthy' : 'Attention'}</Badge></div><h2>{name}</h2><p>{detail}</p></article>)}</div><div className="health-bottom"><article className="data-panel"><div className="panel-heading"><div><span>External connectors</span><h2>API readiness</h2></div></div><div className="quota-list"><div><span>Tavily</span><b>{health?.connectors.tavily_configured ? 'Authenticated' : 'Not configured'}</b></div><div><span>YouTube Data API v3</span><b>{health?.connectors.youtube_configured ? 'Authenticated' : 'Not configured'}</b></div><div><span>Roblox public interfaces</span><b>Read-only</b></div></div></article><article className="data-panel"><div className="panel-heading"><div><span>Deterministic capture</span><h2>Snapshot ledger</h2></div></div><Metric label="Last snapshot" value={formatDate(health?.scheduler.last_snapshot?.completed_at)} note={health?.scheduler.last_snapshot ? JSON.stringify(health.scheduler.last_snapshot.counts || {}) : 'No snapshot recorded'} /></article></div></section>
+  return <section className="workspace"><div className="keyring-banner"><strong>▣ Local secret boundary engaged</strong><p>API keys stay in the ignored local environment file and are never returned to the dashboard.</p><Badge tone="verified">Credentials redacted by policy</Badge></div><div className="module-grid">{modules.map(([name, ok, detail]) => <article className="data-panel" key={name}><div><span className={`module-dot ${ok ? 'online' : ''}`} /><Badge tone={ok ? 'verified' : 'conflict'}>{ok ? (name.includes('API') ? 'Configured' : name.includes('Qwen') || name.includes('embedding') ? 'Installed' : name.includes('scheduler') ? 'Scheduled' : 'Reachable') : 'Unavailable or unchecked'}</Badge></div><h2>{name}</h2><p>{detail}</p></article>)}</div><div className="health-bottom"><article className="data-panel"><div className="panel-heading"><div><span>External connectors</span><h2>API readiness</h2></div></div><div className="quota-list"><div><span>Tavily</span><b>{health?.connectors.tavily_configured ? 'Configured — not a live authentication check' : 'Not configured'}</b></div><div><span>YouTube Data API v3</span><b>{health?.connectors.youtube_configured ? 'Configured — not a live authentication check' : 'Not configured'}</b></div><div><span>Roblox public interfaces</span><b>Read-only</b></div></div></article><article className="data-panel"><div className="panel-heading"><div><span>Deterministic capture</span><h2>Snapshot ledger</h2></div></div><Metric label="Last snapshot" value={formatDate(health?.scheduler.last_snapshot?.completed_at)} note={health?.scheduler.last_snapshot ? JSON.stringify(health.scheduler.last_snapshot.counts || {}) : 'No snapshot recorded'} /></article></div></section>
 }
 
-function EvidenceDrawer({ detail, loading, onClose, onFact }: { detail: SourceDetail | null; loading: boolean; onClose: () => void; onFact: (id: string) => void }) {
-  return <div className={`drawer-scrim ${loading || detail ? 'open' : ''}`} onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}><aside className="evidence-drawer" aria-label="Evidence inspector"><header><div><span>Evidence inspector</span><strong>{detail?.artifact.id || 'Loading source'}</strong></div><button aria-label="Close evidence inspector" onClick={onClose}>×</button></header>{loading ? <div className="drawer-loading">Loading provenance…</div> : detail ? <div className="drawer-body"><dl><dt>Canonical URL</dt><dd><a href={detail.artifact.url} target="_blank" rel="noreferrer">{detail.artifact.url}</a></dd><dt>Publisher</dt><dd>{detail.artifact.publisher_owner}</dd><dt>Retrieval</dt><dd>{detail.artifact.retrieval_method.replaceAll('_', ' ')}</dd><dt>Captured</dt><dd>{formatDate(detail.artifact.captured_at)}</dd><dt>SHA256</dt><dd><code>{detail.artifact.sha256}</code></dd><dt>Raw payload</dt><dd>{detail.artifact.content_type} · {formatBytes(detail.artifact.raw_size)}</dd></dl><section><div className="drawer-section-title"><span>Extracted observations</span><Badge tone="verified">{detail.observations.length}</Badge></div>{detail.observations.length ? detail.observations.map(item => <article key={item.id}><span>{item.metric}</span><strong>{String(item.value)} {item.unit || ''}</strong><code>{item.pointer}</code><small>{item.extraction_method.replaceAll('_', ' ')}</small></article>) : <EmptyState title="No trusted observations">Discovery-only artifacts cannot create observations.</EmptyState>}</section><section><div className="drawer-section-title"><span>Compiled facts</span><Badge tone="verified">{detail.facts.length}</Badge></div>{detail.facts.map(fact => <button className="drawer-fact" key={fact.id} onClick={() => onFact(fact.id)}><Badge tone="verified">Verified fact</Badge><span>{fact.text}</span></button>)}</section></div> : null}</aside></div>
+export function EvidenceDrawer({ detail, loading, onClose, onFact }: { detail: SourceDetail | null; loading: boolean; onClose: () => void; onFact: (id: string) => void }) {
+  const panel = useRef<HTMLElement>(null)
+  const close = useRef(onClose)
+  close.current = onClose
+  const open = loading || Boolean(detail)
+  useEffect(() => {
+    if (!open) return
+    const previous = document.activeElement as HTMLElement | null
+    panel.current?.focus()
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); close.current(); return }
+      if (event.key !== 'Tab') return
+      const items = Array.from(panel.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input, select, textarea, summary, [tabindex="0"]') || []).filter(item => !item.closest('details:not([open])') || item.tagName === 'SUMMARY')
+      const first = items[0], last = items.at(-1)
+      if (!first) { event.preventDefault(); return }
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.current)) { event.preventDefault(); last?.focus() }
+      else if (!event.shiftKey && (document.activeElement === last || document.activeElement === panel.current)) { event.preventDefault(); first.focus() }
+    }
+    document.addEventListener('keydown', keydown)
+    return () => { document.removeEventListener('keydown', keydown); previous?.focus() }
+  }, [open])
+  if (!open) return null
+  return <div className={`drawer-scrim ${loading || detail ? 'open' : ''}`} onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}><aside ref={panel} tabIndex={-1} role="dialog" aria-modal="true" className="evidence-drawer" aria-label="Evidence inspector"><header><div><span>Evidence inspector</span><strong>{detail?.artifact.id || 'Loading source'}</strong></div><button aria-label="Close evidence inspector" onClick={onClose}>×</button></header>{loading ? <div className="drawer-loading">Loading provenance…</div> : detail ? <div className="drawer-body">{detail.focusedFact && <section><h2>Selected claim</h2><p>{detail.focusedFact}</p><small>Source-reported evidence, not a guarantee of source accuracy.</small></section>}<dl><dt>Canonical URL</dt><dd><a href={detail.artifact.url} target="_blank" rel="noreferrer">{detail.artifact.url}</a></dd><dt>Publisher</dt><dd>{detail.artifact.publisher_owner}</dd><dt>Retrieval</dt><dd>{detail.artifact.retrieval_method.replaceAll('_', ' ')}</dd><dt>Captured</dt><dd>{formatDate(detail.artifact.captured_at)}</dd><dt>SHA256</dt><dd><code>{detail.artifact.sha256}</code></dd><dt>Raw payload</dt><dd>{detail.artifact.content_type} · {formatBytes(detail.artifact.raw_size)}</dd></dl><section><div className="drawer-section-title"><span>Extracted observations</span><Badge tone="verified">{detail.observations.length}</Badge></div>{detail.observations.length ? detail.observations.map(item => <article key={item.id}><span>{item.metric}</span><strong>{String(item.value)} {item.unit || ''}</strong><code>{item.pointer}</code><small>{item.extraction_method.replaceAll('_', ' ')}</small></article>) : <EmptyState title="No trusted observations">Discovery-only artifacts cannot create observations.</EmptyState>}</section><section><div className="drawer-section-title"><span>Compiled facts</span><Badge tone="verified">{detail.facts.length}</Badge></div>{detail.facts.map(fact => <button className="drawer-fact" key={fact.id} onClick={() => onFact(fact.id)}><Badge tone="verified">Verified fact</Badge><span>{fact.text}</span></button>)}</section></div> : null}</aside></div>
 }
 
 export default function App() {
-  const [page, setPage] = useState<PageId>('home')
+  const [route, setRoute] = useState(readRoute)
+  const page = route.page
+  const selectedIdea = route.candidate
+  const setSelectedIdea = (id: string) => { window.location.hash = routeHash('ideas', { candidate: id }) }
+  useEffect(() => { const update = () => setRoute(readRoute()); window.addEventListener('hashchange', update); return () => window.removeEventListener('hashchange', update) }, [])
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [timeline, setTimeline] = useState<TimelinePoint[]>([])
   const [sources, setSources] = useState<Source[]>([])
@@ -637,39 +646,19 @@ export default function App() {
   const [matchingStatus, setMatchingStatus] = useState<MatchingStatus | null>(null)
   const [matchingReviews, setMatchingReviews] = useState<MatchingReview[]>([])
   const [selectedMatch, setSelectedMatch] = useState('')
-  const [selectedIdea, setSelectedIdea] = useState('')
   const [sourceDetail, setSourceDetail] = useState<SourceDetail | null>(null)
   const [sourceLoading, setSourceLoading] = useState(false)
+  const sourceGeneration = useRef(0)
   const [audit, setAudit] = useState<AuditResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    const saved = localStorage.getItem('rva_theme')
-    if (saved === 'dark' || saved === 'light') return saved
-    return 'dark'
-  })
-  const [zoom, setZoom] = useState<number>(() => {
-    const saved = localStorage.getItem('rva_zoom')
-    if (saved) {
-      const num = parseFloat(saved)
-      if (!isNaN(num) && num >= 0.8 && num <= 1.6) return num
-    }
-    return 1.15
-  })
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
-    localStorage.setItem('rva_theme', theme)
-  }, [theme])
-
-  useEffect(() => {
-    document.documentElement.style.setProperty('--app-zoom', String(zoom))
-    localStorage.setItem('rva_zoom', String(zoom))
-  }, [zoom])
-
+  useEffect(() => { document.documentElement.setAttribute('data-theme', 'light'); document.documentElement.style.removeProperty('--app-zoom') }, [])
+  const refreshGeneration = useRef(0)
+  const [updatedAt, setUpdatedAt] = useState('')
+  const [refreshErrors, setRefreshErrors] = useState<string[]>([])
   const candidates = useMemo(() => runs.flatMap(run => run.candidates), [runs])
   const metaRunning = runs.some(run => ['queued', 'running'].includes(run.status))
   const scoutReady = candidates.length > 0
@@ -687,8 +676,12 @@ export default function App() {
   // lost data rather than a slow request -- and the runs list is by far the
   // heaviest, since it carries every candidate and its facts.
   const loadAll = useCallback(async () => {
-    setRefreshing(true); setError('')
-    const fill = async <T,>(url: string, apply: (value: T) => void) => apply(await api<T>(url))
+    const generation = ++refreshGeneration.current
+    setRefreshing(true)
+    const fill = async <T,>(url: string, apply: (value: T) => void) => {
+      try { const value = await api<T>(url); if (generation === refreshGeneration.current) apply(value) }
+      catch (e) { throw new Error(url.split('?')[0] + ': ' + (e as Error).message) }
+    }
     const results = await Promise.allSettled([
       fill<DashboardSummary>('/api/dashboard/summary', setSummary),
       fill<{ points: TimelinePoint[] }>('/api/dashboard/timeline', value => setTimeline(value.points)),
@@ -698,27 +691,22 @@ export default function App() {
       fill<Health>('/api/health', setHealth),
       loadMatching(),
     ])
-    const failed = results.find(result => result.status === 'rejected')
-    setError(failed ? (failed.reason as Error).message : '')
+    if (generation !== refreshGeneration.current) return
+    const failures = results.flatMap(r => r.status === 'rejected' ? [(r.reason as Error).message] : [])
+    setRefreshErrors(failures)
+    if (!failures.length) setUpdatedAt(new Date().toISOString())
     setRefreshing(false)
   }, [loadMatching])
 
   useEffect(() => { void loadAll() }, [loadAll])
 
-  // Depend on the active run's ID, not on `runs`. The callback calls setRuns,
-  // so depending on the array tore down and rebuilt the timer every tick.
-  const activeRunId = runs.find(run => ['queued', 'running'].includes(run.status))?.id ?? ''
   useEffect(() => {
-    if (!activeRunId) return
-    const timer = window.setInterval(async () => {
-      try {
-        const updated = await api<Run>(`/api/research-runs/${activeRunId}`)
-        setRuns(current => current.map(run => run.id === updated.id ? updated : run))
-        if (!['queued', 'running'].includes(updated.status)) void loadAll()
-      } catch (caught) { setError((caught as Error).message) }
-    }, 1500)
-    return () => window.clearInterval(timer)
-  }, [activeRunId, loadAll])
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout>
+    const tick = async () => { await loadAll(); if (!stopped) timer = setTimeout(tick, 5000) }
+    timer = setTimeout(tick, 5000)
+    return () => { stopped = true; clearTimeout(timer) }
+  }, [loadAll])
 
   async function startResearch(niche: string) {
     setBusy(true); setError(''); setNotice('')
@@ -730,26 +718,25 @@ export default function App() {
   }
 
   async function openSourceById(artifactId: string) {
+    const generation = ++sourceGeneration.current
     setSourceLoading(true); setSourceDetail(null); setError('')
-    try { setSourceDetail(await api<SourceDetail>(`/api/sources/${artifactId}`)) }
-    catch (caught) { setError((caught as Error).message) }
-    finally { setSourceLoading(false) }
+    try { const detail = await api<SourceDetail>(`/api/sources/${artifactId}`); if (generation === sourceGeneration.current) setSourceDetail(detail) }
+    catch (caught) { if (generation === sourceGeneration.current) setError((caught as Error).message) }
+    finally { if (generation === sourceGeneration.current) setSourceLoading(false) }
   }
-
-  async function openSource(source: Source) {
-    await openSourceById(source.id)
-  }
-
+  async function openSource(source: Source) { await openSourceById(source.id) }
   async function inspectFact(id: string) {
-    setError('')
+    const generation = ++sourceGeneration.current
+    setSourceLoading(true); setSourceDetail(null); setError('')
     try {
-      const evidence = await api<{ artifacts: Array<{ id: string }> }>(`/api/evidence/${id}`)
-      const artifactId = evidence.artifacts[0]?.id
-      if (!artifactId) throw new Error('This fact has no linked source artifact.')
-      // Fetch the artifact by ID. Searching the loaded source list meant any
-      // fact beyond the first 100 sources could not be inspected at all.
-      await openSourceById(artifactId)
-    } catch (caught) { setError((caught as Error).message) }
+      const evidence = await api<{ fact: SourceDetail['facts'][number]; observations: Array<{ id: string }>; artifacts: Array<{ id: string }> }>(`/api/evidence/${id}`)
+      if (!evidence.artifacts.length) throw new Error('This fact has no linked source artifact.')
+      const records = await Promise.all(evidence.artifacts.map(a => api<SourceDetail>(`/api/sources/${a.id}`)))
+      const selected = new Set(evidence.observations.map(o => o.id))
+      if (generation === sourceGeneration.current) setSourceDetail({ ...records[0], focusedFact: evidence.fact.text,
+        observations: records.flatMap(r => r.observations).filter(o => selected.has(o.id)), facts: [evidence.fact] })
+    } catch (caught) { if (generation === sourceGeneration.current) setError((caught as Error).message) }
+    finally { if (generation === sourceGeneration.current) setSourceLoading(false) }
   }
 
   async function runAudit(candidate: Candidate) {
@@ -772,21 +759,21 @@ export default function App() {
   }
 
   function navigate(nextPage: PageId) {
-    setPage(nextPage); setError(''); setNotice('')
-    if (nextPage !== 'ideas') setSelectedIdea('')
+    window.location.hash = routeHash(nextPage)
+    setError(''); setNotice('')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   return <div className="app-shell">
     <AppSidebar page={page} onNavigate={navigate} health={health} metaRunning={metaRunning} scoutReady={scoutReady} />
-    <div className="app-content"><TopBar page={page} health={health} calibration={calibration} refreshing={refreshing} onRefresh={loadAll} metaRunning={metaRunning} scoutReady={scoutReady} theme={theme} onToggleTheme={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} zoom={zoom} onZoomChange={setZoom} />
-      <main id="primary-workspace">
-        {error && <div role="alert" className="global-alert"><strong>Request failed safely</strong><span>{error}</span><button onClick={() => setError('')}>×</button></div>}
-        {notice && <div className="global-notice"><span>{notice}</span><button onClick={() => setNotice('')}>×</button></div>}
-        {page === 'home' && <CommandCenter summary={summary} timeline={timeline} sources={sources} runs={runs} health={health} calibration={calibration} onSource={openSource} onNavigate={navigate} />}
+    <div className="app-content"><TopBar page={page} calibration={calibration} refreshing={refreshing} onRefresh={loadAll} />
+      <main id="primary-workspace"><p className="data-freshness" role="status">{refreshing ? 'Refreshing data…' : updatedAt ? 'Last complete refresh: ' + formatDate(updatedAt) : 'Waiting for data'}{refreshErrors.length > 0 ? ' · Some panels are stale or unavailable.' : ''}</p>{refreshErrors.length > 0 && <div className="warning-box">{refreshErrors.map(message => <p key={message}>{message}</p>)}</div>}
+        {error && <div role="alert" className="global-alert"><strong>Request failed safely</strong><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError('')}>×</button></div>}
+        {notice && <div className="global-notice"><span>{notice}</span><button aria-label="Dismiss notification" onClick={() => setNotice('')}>×</button></div>}
+        {page === 'home' && <CommandCenter summary={summary} timeline={timeline} sources={sources} runs={runs} health={health} calibration={calibration} onSource={openSource} onNavigate={navigate} onCandidate={setSelectedIdea} />}
         {page === 'ideas' && <IdeasPanel runs={runs} selectedId={selectedIdea} onSelect={setSelectedIdea} onInspectFact={inspectFact} onAudit={runAudit} audit={audit} busy={busy} />}
         {page === 'sources' && <SourcesPage sources={sources} onSource={openSource} />}
-        {page === 'history' && <AgentHistoryPage onInspectFact={inspectFact} onOpenCandidate={id => { setSelectedIdea(id); setPage('ideas') }} />}
+        {page === 'history' && <AgentHistoryPage onInspectFact={inspectFact} onOpenCandidate={id => setSelectedIdea(id)} />}
         {page === 'matching' && <MatchingEnginePage status={matchingStatus} reviews={matchingReviews} selectedId={selectedMatch} onSelect={setSelectedMatch} onReload={loadMatching} onReview={reviewMatch} busy={busy} />}
         {page === 'meta' && <MetaHunterPage runs={runs} health={health} onStart={startResearch} busy={busy} />}
         {page === 'scout' && <VentureScoutPage candidates={candidates} onAudit={runAudit} audit={audit} busy={busy} />}
@@ -794,6 +781,6 @@ export default function App() {
         {page === 'health' && <HealthPage health={health} summary={summary} matching={matchingStatus} />}
       </main>
     </div>
-    <EvidenceDrawer detail={sourceDetail} loading={sourceLoading} onClose={() => { setSourceDetail(null); setSourceLoading(false) }} onFact={inspectFact} />
+    <EvidenceDrawer detail={sourceDetail} loading={sourceLoading} onClose={() => { sourceGeneration.current++; setSourceDetail(null); setSourceLoading(false) }} onFact={inspectFact} />
   </div>
 }

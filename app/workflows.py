@@ -439,14 +439,23 @@ class ResearchOrchestrator:
         db.add(decision)
         return decision
 
-    async def audit(self, candidate_id: str, proposal_id: str | None = None, *, budget=None, gaps=None) -> dict[str, Any]:
-        audit_activity.start(candidate_id)
+    async def audit(self, candidate_id: str, proposal_id: str | None = None, *, budget=None, gaps=None, operation=None, on_event=None) -> dict[str, Any]:
+        audit_activity.start(candidate_id, session_factory=self.session_factory)
+        def emit(_candidate_id, stage, detail="", **extra):
+            audit_activity.emit(_candidate_id, stage, detail, **extra)
+            if on_event:
+                on_event(stage, detail, **extra)
         with self.session_factory() as db:
             readiness = audit_readiness(db, candidate_id, proposal_id)
             candidate = db.get(Candidate, candidate_id)
             run = db.get(ResearchRun, candidate.run_id)
             hunter = db.get(Proposal, proposal_id) if proposal_id else db.scalar(select(Proposal).where(
                 Proposal.candidate_id == candidate_id, Proposal.agent == "meta_hunter").order_by(Proposal.created_at.desc()))
+            if operation == "analyze_game":
+                hunter = None
+                for gate in readiness.gates:
+                    if gate.label == "Selected Hunter proposal":
+                        gate.state, gate.passed, gate.detail = "not_applicable", False, "Analyze game: no Hunter design selected"
             packet = evidence_packet(db, candidate_id)
             selected_id = hunter.id if hunter and hunter.candidate_id == candidate_id else None
             hunter_payload = hunter.payload if selected_id else None
@@ -459,7 +468,7 @@ class ResearchOrchestrator:
             "evidence_state": "blocked", "decision": decision,
             "risks": [], "note": "Speculative design audit, not a prediction of game success.",
         }
-        audit_activity.emit(
+        emit(
             candidate_id, "gates",
             f"{sum(1 for g in readiness.gates if g.passed)} of {len(readiness.gates)} gates pass",
         )
@@ -467,10 +476,10 @@ class ResearchOrchestrator:
             result["risks"] = [g.label + ": " + g.detail for g in readiness.gates if g.state in {"fail", "missing"}]
             for gate in readiness.gates:
                 if gate.state in {"fail", "missing"}:
-                    audit_activity.emit(candidate_id, "gate_blocked", f"{gate.label}: {gate.detail}")
+                    emit(candidate_id, "gate_blocked", f"{gate.label}: {gate.detail}")
         else:
             try:
-                audit_activity.emit(
+                emit(
                     candidate_id, "evidence",
                     f"{len(packet)} verified fact(s) packed"
                     + (" with a Hunter proposal to critique" if hunter_payload else "; no Hunter proposal, analysing the evidence directly"),
@@ -480,7 +489,7 @@ class ResearchOrchestrator:
                     "sourced_name": "Selected sourced experience",
                     "fact_ids": [p["id"] for p in packet], "evidence": packet,
                     "hunter_proposal": hunter_payload, "gaps": gaps or [], "require_citations": True,
-                    "on_event": lambda stage, detail, **extra: audit_activity.emit(candidate_id, stage, detail, **extra),
+                    "on_event": lambda stage, detail, **extra: emit(candidate_id, stage, detail, **extra),
                 }
                 if budget:
                     kwargs["before_attempt"] = budget.model_attempt
@@ -497,7 +506,7 @@ class ResearchOrchestrator:
                 result["proposal"] = generated.payload.model_dump()
                 result["risks"] = generated.payload.risks
                 result["evidence_state"] = "source_backed_design_speculative"
-                audit_activity.emit(candidate_id, "proposal_accepted", f"Design accepted from {generated.model}")
+                emit(candidate_id, "proposal_accepted", f"Design accepted from {generated.model}")
             except (LLMUnavailable, TimeoutError) as exc:
                 # Saying "within the budget" for a schema rejection sent every
                 # investigation after the clock instead of the actual cause.
@@ -514,7 +523,7 @@ class ResearchOrchestrator:
                 db, candidate_id, (result["proposal"] or {}).get("supporting_fact_ids", []),
             )
             result["cited_fact_ids"], result["withdrawn_fact_ids"] = cited, withdrawn
-            audit_activity.emit(
+            emit(
                 candidate_id, "citations",
                 f"{len(cited)} citation(s) re-verified, {len(withdrawn)} withdrawn",
             )

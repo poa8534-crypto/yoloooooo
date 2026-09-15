@@ -162,10 +162,11 @@ class OllamaProposalClient:
         # Without this the model wrote its milestones as durations ("spend
         # 3 days on ..."), which the firewall refuses, so every attempt
         # failed on build_steps with no hint about what to change.
-        prompt += ("\nYou may label a step with a plain ordinal such as 'Day 1' or 'Step 2'."
-                   " You may not write a duration, a count of features or any measured amount"
-                   " in prose: not '3 days', not '15 minutes', not '72-hour'. Write it in"
-                   " words, or put the number in design_assumptions.")
+        prompt += ("\nDigits are allowed in prose in only two shapes: a milestone label"
+                   " such as 'Day 1', 'Step 2' or 'Phase 3'; and a genre token such as '2D'"
+                   " or '1v1'. Every other number must be written in words ('three zones',"
+                   " 'two players') or placed in design_assumptions. Not '3 days', not"
+                   " '15 minutes', not '72-hour', not '80 daily sessions', not 'Phase 2 of 3'.")
         # The packet carries the IDs, but nothing previously asked the model to
         # cite them, so concepts came back with an empty supporting_fact_ids
         # and no link to the evidence they were drawn from.

@@ -20,6 +20,7 @@ from .association import AssociationService, active_thresholds, is_association_u
 from .association.materialize import apply_association
 from .association.service import human_confirmation
 from . import audit_activity
+from .audit_jobs import AuditJobs, JobConflict, ACTIVE as ACTIVE_AUDIT_STATES
 from .calibration import calibration_status, load_artifact
 from .config import ROOT, get_settings
 from .db import SessionLocal, get_db, init_db
@@ -27,6 +28,7 @@ from .evidence import fact_freshness, render_fact
 from .matching import DEFAULT_EMBEDDING_MODEL
 from .models import (
     AssociationRecord,
+    AuditActivityEvent,
     AuditRecord,
     Candidate,
     ConfidenceRecord,
@@ -42,6 +44,7 @@ from .models import (
     ResearchRun,
     RunStatus,
     ScoreRecord,
+    ScoutAuditRun,
     SourceArtifact,
     SystemState,
 )
@@ -111,14 +114,39 @@ async def lifespan(app: FastAPI):
             run.status = "interrupted"
             run.message = "Interrupted by a previous service shutdown; no evidence was fabricated."
             run.completed_at = datetime.now(UTC)
+
+        orphaned_audits = list(db.scalars(select(ScoutAuditRun).where(
+            ScoutAuditRun.status == "running"
+        )))
+        for scout_run in orphaned_audits:
+            scout_run.status = "interrupted"
+            scout_run.message = "Interrupted by a previous service shutdown; ledger integrity preserved."
+            scout_run.completed_at = datetime.now(UTC)
+            max_seq = db.scalar(
+                select(func.max(AuditActivityEvent.sequence))
+                .where(AuditActivityEvent.run_id == scout_run.id)
+            ) or 0
+            interrupted_event = AuditActivityEvent(
+                candidate_id=scout_run.candidate_id,
+                run_id=scout_run.id,
+                sequence=max_seq + 1,
+                stage="interrupted",
+                detail="Service was restarted while audit was in flight. Evidence and ledger integrity preserved.",
+                extra_json={"interrupted": True},
+                created_at=datetime.now(UTC),
+            )
+            db.add(interrupted_event)
         db.commit()
     app.state.orchestrator = ResearchOrchestrator(SessionLocal)
+    app.state.audit_jobs = AuditJobs(SessionLocal, app.state.orchestrator)
+    app.state.audit_jobs.reconcile()
     # Shadow mode stays on until a benchmark validates fuzzy matching.
     app.state.association_service = app.state.orchestrator.associations
     app.state.scheduler = start_scheduler()
     await catch_up_if_needed()
     yield
     app.state.scheduler.shutdown(wait=False)
+    await app.state.audit_jobs.close()
     for task in TASKS:
         task.cancel()
     await asyncio.gather(*TASKS, return_exceptions=True)
@@ -263,6 +291,60 @@ async def audit_candidate(candidate_id: str, proposal_id: str | None = None, db:
         return AuditView.model_validate(result)
     except KeyError:
         raise HTTPException(404, "candidate not found")
+
+
+@app.post("/api/candidates/{candidate_id}/audit-jobs", status_code=202)
+async def start_audit_job(candidate_id: str, operation: str, proposal_id: str | None = None):
+    try:
+        return app.state.audit_jobs.start(candidate_id, operation, proposal_id)
+    except KeyError:
+        raise HTTPException(404, "candidate not found")
+    except JobConflict as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.get("/api/audit-jobs/{job_id}")
+def get_audit_job(job_id: str):
+    try:
+        return app.state.audit_jobs.get(job_id)
+    except KeyError:
+        raise HTTPException(404, "audit job not found")
+
+
+@app.post("/api/audit-jobs/{job_id}/cancel")
+async def cancel_audit_job(job_id: str):
+    get_audit_job(job_id)
+    return await app.state.audit_jobs.cancel(job_id)
+
+
+@app.post("/api/audit-jobs/{job_id}/resume", status_code=202)
+async def resume_audit_job(job_id: str):
+    get_audit_job(job_id)
+    try:
+        return app.state.audit_jobs.resume(job_id)
+    except JobConflict as exc:
+        raise HTTPException(409, str(exc))
+
+
+@app.get("/api/audit-jobs/{job_id}/events")
+async def audit_job_events(job_id: str, after: int = 0):
+    get_audit_job(job_id)
+    async def stream():
+        sequence = max(0, after)
+        while True:
+            job = app.state.audit_jobs.get(job_id)
+            for event in job["events"]:
+                if event["sequence"] > sequence:
+                    sequence = event["sequence"]
+                    yield f"id: {sequence}\ndata: {json.dumps(event)}\n\n"
+            if job["status"] not in ACTIVE_AUDIT_STATES:
+                yield f"event: done\ndata: {json.dumps({'status': job['status']})}\n\n"
+                break
+            yield ": keepalive\n\n"
+            await asyncio.sleep(1)
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/research-runs/{run_id}/report")

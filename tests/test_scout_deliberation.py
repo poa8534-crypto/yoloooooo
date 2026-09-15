@@ -298,12 +298,26 @@ BLOCKED_PROSE = [
     "Ship a 72-hour MVP",
     "a 3 day prototype",
     "adds 5 features",
+    # The finding that showed a blacklist of metric words could never win:
+    # "sessions" was simply not on the list.
+    "The game has 80 daily sessions.",
+    "runs 5 sessions per day",
+    "12 matches per hour",
+    "a 20 wave gauntlet",
+    # A trailing count is still a count, however the sentence starts.
+    "Phase 2 of 3",
+    "Day 1: build a map with 3 distinct zones",
 ]
 
 ALLOWED_PROSE = [
     "Day 1: build the baseplate",
-    "Phase 2 of 3",
+    "Phase 2",
+    "Milestone 1",
     "Step 1 set up, Step 2 test",
+    # The digit is part of the word, not a quantity.
+    "a 2D scrolling map",
+    "1v1 duels",
+    "three distinct zones",
     "Two players share one plot",
     "Day 3: playtest and cut what does not land",
 ]
