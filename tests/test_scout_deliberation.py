@@ -60,31 +60,40 @@ def _client(settings_obj, responses) -> tuple[OllamaProposalClient, list]:
 # --- 1. Scout no longer needs a Hunter proposal ----------------------------
 
 
-def test_a_candidate_without_a_hunter_proposal_is_auditable(session_factory, settings):
-    """Hunter writes proposals for a handful of candidates; Scout must not be
-    limited to those, or almost every candidate produces no brief at all."""
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+def test_a_game_the_hunter_proposed_a_concept_for_is_auditable(session_factory, settings):
+    """The other half of the rule. Restricting the Scout to Hunter output only
+    helps if the games the Hunter did send still pass every gate."""
+    _, candidate_id, *_ = seed(session_factory)
     with session_factory() as db:
         readiness = audit_readiness(db, candidate_id)
     hunter_gate = next(g for g in readiness.gates if g.label == "Selected Hunter proposal")
-    assert hunter_gate.state == "not_applicable", hunter_gate.detail
+    assert hunter_gate.passed, hunter_gate.detail
     assert readiness.ready, [g.model_dump() for g in readiness.gates if not g.passed]
 
 
 @pytest.mark.asyncio
-async def test_an_audit_without_a_hunter_proposal_reaches_the_model(session_factory, settings):
+async def test_a_game_the_hunter_never_proposed_anything_about_is_refused(session_factory,
+                                                                          settings):
+    """The Scout works on Hunter output and nothing else.
+
+    Both operations used to be reachable for any captured game, so the
+    candidate list ran 140 rows deep and mostly read "no Hunter proposal".
+    That spent minutes of the model on games the Hunter had never judged
+    worth proposing anything about.
+    """
     _, candidate_id, *_ = seed(session_factory, hunter=False)
     llm = FakeLLM()
-    result = await orchestrator(session_factory, llm).audit(candidate_id)
-    assert result["evidence_state"] == "source_backed_design_speculative"
-    assert llm.calls, "the model was never called for a candidate with no Hunter proposal"
-    assert llm.calls[0]["hunter_proposal"] is None
+
+    with pytest.raises(ValueError, match="no Hunter proposal"):
+        await orchestrator(session_factory, llm).audit(candidate_id)
+
+    assert not llm.calls, "the model was asked about a game the Hunter never sent"
 
 
 def test_a_proposal_belonging_to_another_candidate_is_still_refused(session_factory, settings):
     """Positive control: unbinding Scout must not make the binding meaningless."""
     _, first, _, proposal_id = seed(session_factory, universe="77")
-    _, second, *_ = seed(session_factory, universe="88", hunter=False)
+    _, second, *_ = seed(session_factory, universe="88")
     with session_factory() as db:
         readiness = audit_readiness(db, second, proposal_id)
     hunter_gate = next(g for g in readiness.gates if g.label == "Selected Hunter proposal")
@@ -372,7 +381,7 @@ def test_the_latest_audit_is_served_back_for_a_candidate(session_factory, settin
     from app.db import get_db
     from app.main import app
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    _, candidate_id, *_ = seed(session_factory)
     llm = FakeLLM()
     monkeypatch.setattr(app.state, "orchestrator", orchestrator(session_factory, llm), raising=False)
 
@@ -440,7 +449,7 @@ def test_a_stored_audit_is_re_verified_when_it_is_served_back(session_factory, s
     from app.main import app
     from app.models import AuditRecord
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    _, candidate_id, *_ = seed(session_factory)
     invented = str(uuid4())
     with session_factory() as db:
         db.add(AuditRecord(candidate_id=candidate_id, proposal_id=None, payload={
@@ -477,7 +486,7 @@ def test_the_activity_feed_reports_each_pass(session_factory, settings, monkeypa
 
     from app import audit_activity
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    _, candidate_id, *_ = seed(session_factory)
     asyncio.run(orchestrator(session_factory, FakeLLM()).audit(candidate_id))
 
     state = audit_activity.snapshot(candidate_id)
@@ -513,7 +522,7 @@ def test_a_new_audit_does_not_show_the_previous_run(session_factory, settings):
 
     from app import audit_activity
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    _, candidate_id, *_ = seed(session_factory)
     asyncio.run(orchestrator(session_factory, FakeLLM()).audit(candidate_id))
     first = len(audit_activity.snapshot(candidate_id)["events"])
     assert first
@@ -561,7 +570,7 @@ def test_the_model_passes_reach_the_drawer(session_factory, settings):
         async def close(self):
             pass
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    _, candidate_id, *_ = seed(session_factory)
     asyncio.run(orchestrator(session_factory, ReportingLLM()).audit(candidate_id))
 
     events = audit_activity.snapshot(candidate_id)["events"]
@@ -583,7 +592,7 @@ def test_a_candidate_view_says_whether_an_audit_exists(session_factory, settings
     from app.db import get_db
     from app.main import app
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    _, candidate_id, *_ = seed(session_factory)
     monkeypatch.setattr(app.state, "orchestrator", orchestrator(session_factory, FakeLLM()), raising=False)
 
     def dependency():
@@ -615,7 +624,7 @@ def test_the_audited_set_notices_an_audit_written_in_the_same_session(session_fa
     from app.main import _audited_candidate_ids
     from app.models import AuditRecord
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    _, candidate_id, *_ = seed(session_factory)
     with session_factory() as db:
         assert candidate_id not in _audited_candidate_ids(db)
         db.add(AuditRecord(candidate_id=candidate_id, proposal_id=None, payload={
@@ -714,7 +723,7 @@ def test_history_citations_carry_their_text_and_are_re_verified(session_factory,
         async def close(self):
             pass
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    _, candidate_id, *_ = seed(session_factory)
     monkeypatch.setattr(app.state, "orchestrator", orchestrator(session_factory, CitingLLM()), raising=False)
 
     def dependency():
@@ -740,7 +749,7 @@ def test_history_is_ordered_newest_first(session_factory, settings, monkeypatch)
     ordering assertion over one batch passes without the sort doing anything."""
     from app.models import AuditRecord
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    _, candidate_id, *_ = seed(session_factory)
     stamps = [
         datetime(2026, 1, 3, 12, 0, tzinfo=UTC),
         datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
@@ -802,7 +811,7 @@ def test_history_withdraws_a_citation_that_no_longer_resolves(session_factory, s
     show evidence as verified long after it stopped being admissible."""
     from app.models import AuditRecord
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    _, candidate_id, *_ = seed(session_factory)
     invented = str(uuid4())
     with session_factory() as db:
         db.add(AuditRecord(candidate_id=candidate_id, proposal_id=None, payload={
@@ -890,7 +899,7 @@ async def test_an_audit_with_unanswered_concerns_is_recorded_as_incomplete(sessi
         async def close(self):
             pass
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    _, candidate_id, *_ = seed(session_factory)
     result = await orchestrator(session_factory, UnrevisedLLM()).audit(candidate_id)
 
     assert result["evidence_state"] == "source_backed_design_incomplete", result["evidence_state"]
@@ -915,7 +924,7 @@ async def test_an_answered_audit_is_recorded_as_speculative_not_incomplete(sessi
         async def close(self):
             pass
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    _, candidate_id, *_ = seed(session_factory)
     result = await orchestrator(session_factory, RevisedLLM()).audit(candidate_id)
     assert result["evidence_state"] == "source_backed_design_speculative"
     assert result["unresolved_concerns"] == []

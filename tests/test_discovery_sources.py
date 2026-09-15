@@ -164,7 +164,9 @@ async def test_analyze_game_is_about_the_game_not_the_capturing_run(session_fact
     run's niche."""
     from tests.test_deep_research import FakeLLM, orchestrator, seed
 
-    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    # Seeded with a Hunter proposal because the Scout only accepts games the
+    # Hunter sent; the operation still ignores it and works from the evidence.
+    _, candidate_id, *_ = seed(session_factory)
     llm = FakeLLM()
     result = await orchestrator(session_factory, llm).audit(candidate_id, operation="analyze_game")
 

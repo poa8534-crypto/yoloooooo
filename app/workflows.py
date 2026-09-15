@@ -468,6 +468,22 @@ class ResearchOrchestrator:
             run = db.get(ResearchRun, candidate.run_id)
             hunter = db.get(Proposal, proposal_id) if proposal_id else db.scalar(select(Proposal).where(
                 Proposal.candidate_id == candidate_id, Proposal.agent == "meta_hunter").order_by(Proposal.created_at.desc()))
+            # The Scout works on Hunter output and nothing else.
+            #
+            # Both operations were reachable for any captured game, so the
+            # candidate list was 140 rows deep and mostly read "no Hunter
+            # proposal". That let the Scout spend minutes of the model on a
+            # game the Hunter had never judged worth proposing anything about,
+            # and produced audits that no concept was ever going to reference.
+            # A game reaches the Scout because the Hunter sent it, or it does
+            # not reach the Scout.
+            has_hunter = db.scalar(select(Proposal.id).where(
+                Proposal.candidate_id == candidate_id, Proposal.agent == "meta_hunter"))
+            if has_hunter is None:
+                raise ValueError(
+                    "The Venture Scout only works on games Meta Hunter has proposed a "
+                    "concept for. This game has no Hunter proposal."
+                )
             if operation == "analyze_game":
                 hunter = None
                 for gate in readiness.gates:

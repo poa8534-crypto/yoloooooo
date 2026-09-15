@@ -386,9 +386,23 @@ test.describe('discovery is visible', () => {
 })
 
 test.describe('the Hunter to Scout queue', () => {
+  // The queue's contents are backend behaviour and are covered there. These
+  // stub it because an earlier spec runs a real audit against the shared
+  // fixture ledger, which empties the queue these assertions read.
+  const QUEUE = {
+    queued: [
+      { proposal_id: 'p1', candidate_id: 'c1', universe_id: '1', game_name: 'Alpha',
+        concept_title: 'First concept', core_loop: 'loop', niche: 'n',
+        created_at: '2026-09-15T00:00:00+00:00', facts: 3, available: true, unavailable_reason: '' },
+      { proposal_id: 'p2', candidate_id: 'c2', universe_id: '2', game_name: 'Beta',
+        concept_title: 'Second concept', core_loop: 'loop', niche: 'n',
+        created_at: '2026-09-15T00:00:00+00:00', facts: 2, available: true, unavailable_reason: '' },
+    ], runnable: 2, blocked: 0, note: 'note' }
+
   test('concepts arrive routed and selected, and the count is on the button', async ({ page }) => {
     // Routing is the automatic half. Nothing should need clicking for a
     // Hunter concept to be waiting here.
+    await page.route('**/api/scout/queue', route => route.fulfill({ json: QUEUE }))
     await page.goto('/#/scout')
     const panel = page.locator('.data-panel', { hasText: 'Audit queue' })
     await expect(panel).toBeVisible()
@@ -410,6 +424,7 @@ test.describe('the Hunter to Scout queue', () => {
   })
 
   test('a concept can be de-selected before running, and the count follows', async ({ page }) => {
+    await page.route('**/api/scout/queue', route => route.fulfill({ json: QUEUE }))
     await page.goto('/#/scout')
     const panel = page.locator('.data-panel', { hasText: 'Audit queue' })
     const runButton = panel.getByRole('button', { name: /Yes, run/ })
