@@ -6,9 +6,39 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Words that turn a number into a claim about the world rather than an ordinal.
+_METRIC_UNIT = (
+    r"(?:players?|visits?|views?|users?|concurrent|ccu|favou?rites?|subscribers?"
+    r"|downloads?|installs?|retention|conversion|robux|usd|dollars?|revenue|sales|percent"
+    # Design quantities belong in `design_assumptions`, where they are typed and
+    # labelled as unverified, not loose in prose where they read as findings.
+    r"|seconds?|minutes?|hours?|days?|weeks?|months?|features?|levels?|rounds?|maps?|stages?)"
+)
+
+# The firewall keeps measured-sounding claims out of model prose, where they
+# would read as findings rather than as design.
+#
+# It used to refuse every digit, which also refused "Day 1" in a milestone plan
+# and "72-hour MVP" in a summary. Once the brief got long enough to be useful a
+# collision was certain, and every audit failed closed on `build_steps` with no
+# way for the model to comply. What is refused now is anything shaped like a
+# measurement: links, numbers large enough to be counts, percentages, prices,
+# magnitudes, dates, and any number sitting beside a metric word. A bare
+# ordinal passes.
 FORBIDDEN_PROPOSAL_TEXT = re.compile(
-    r"(?:https?://|www\.|\d|\b[\w-]+\.(?:com|org|net|io)\b)",
-    re.IGNORECASE,
+    r"""
+      https?://
+    | www\.
+    | \b[\w-]+\.(?:com|org|net|io)\b
+    | \d[\d,]{2,}
+    | \d+\s*[%$\u00a3\u20ac]
+    | [%$\u00a3\u20ac]\s*\d
+    | \b\d+(?:\.\d+)?\s*(?:k|m|bn|b)\b
+    | \b\d[\d,.]*\s*(?:-\s*)?""" + _METRIC_UNIT + r"""\b
+    | \b""" + _METRIC_UNIT + r"""\s*[:=]\s*\d
+    | \b\d{1,4}[/-]\d{1,2}[/-]\d{1,4}\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
 )
 
 
@@ -118,6 +148,10 @@ class CandidateView(StrictModel):
     decision_id: str | None
     score: float | None
     confidence: float | None
+    # Re-resolved against the ledger when the view is built, not when the
+    # proposal was written.
+    cited_fact_ids: list[str] = Field(default_factory=list)
+    withdrawn_fact_ids: list[str] = Field(default_factory=list)
 
 
 class RunView(StrictModel):
@@ -284,3 +318,5 @@ class AuditView(StrictModel):
     risks: list[str]
     decision: str
     note: str
+    cited_fact_ids: list[str] = Field(default_factory=list)
+    withdrawn_fact_ids: list[str] = Field(default_factory=list)

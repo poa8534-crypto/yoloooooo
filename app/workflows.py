@@ -39,7 +39,8 @@ from .models import (
     RunStatus,
     ScoreRecord,
 )
-from .research_evidence import audit_readiness, evidence_packet
+from .research_evidence import audit_readiness, evidence_packet, verify_citations
+from .security import redact
 
 
 def _roblox_facts(db: Session, candidate: Candidate, artifact, index: int) -> list[str]:
@@ -482,10 +483,21 @@ class ResearchOrchestrator:
                 result["risks"] = generated.payload.risks
                 result["evidence_state"] = "source_backed_design_speculative"
             except (LLMUnavailable, TimeoutError) as exc:
-                result["risks"] = ["Local model did not produce valid output within the budget."]
+                # Saying "within the budget" for a schema rejection sent every
+                # investigation after the clock instead of the actual cause.
+                # The reason the model's answer was refused is the useful part.
+                result["risks"] = [
+                    "The audit ran out of time before the model answered."
+                    if isinstance(exc, TimeoutError)
+                    else f"Every attempt was refused before it could be trusted: {redact(str(exc))}"
+                ]
                 if budget:
                     budget.error("scout", exc)
         with self.session_factory() as db:
+            cited, withdrawn = verify_citations(
+                db, candidate_id, (result["proposal"] or {}).get("supporting_fact_ids", []),
+            )
+            result["cited_fact_ids"], result["withdrawn_fact_ids"] = cited, withdrawn
             row = AuditRecord(candidate_id=candidate_id, proposal_id=selected_id, payload=result)
             db.add(row)
             db.commit()

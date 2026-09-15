@@ -118,6 +118,20 @@ def evidence_packet(db, candidate_id, *, include_stale=False):
     return packet
 
 
+def verify_citations(db, candidate_id, cited_ids):
+    """Re-check cited evidence against the ledger at render time.
+
+    A citation was admissible when the model wrote it. Associations can be
+    rejected by a reviewer afterwards, and measurements go stale, so a stored
+    proposal can keep pointing at evidence that no longer supports it. Every
+    fact the brief is about to show is re-resolved here; anything that no
+    longer holds is reported as withdrawn instead of rendered as verified.
+    """
+    live = {item["id"] for item in evidence_packet(db, candidate_id)}
+    cited = list(dict.fromkeys(cited_ids or []))
+    return [fid for fid in cited if fid in live], [fid for fid in cited if fid not in live]
+
+
 def audit_readiness(db, candidate_id, proposal_id=None):
     if db.get(Candidate, candidate_id) is None:
         raise KeyError(candidate_id)

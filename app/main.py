@@ -50,6 +50,7 @@ from .research_evidence import (
     evidence_packet,
     history,
     verified_fact_packet,
+    verify_citations,
 )
 from .scheduler import catch_up_if_needed, start_scheduler
 from .schemas import (
@@ -145,6 +146,9 @@ def _candidate_view(db: Session, candidate: Candidate) -> CandidateView:
     score = db.get(ScoreRecord, decision.score_id) if decision and decision.score_id else None
     confidence = db.get(ConfidenceRecord, decision.confidence_id) if decision and decision.confidence_id else None
     active = bool((load_artifact() or {}).get("active"))
+    cited, withdrawn = verify_citations(
+        db, candidate.id, proposal.supporting_fact_ids if proposal else []
+    )
     return CandidateView(
         id=candidate.id,
         external_id=candidate.external_id,
@@ -156,6 +160,8 @@ def _candidate_view(db: Session, candidate: Candidate) -> CandidateView:
         decision_id=decision.id if decision else None,
         score=score.value if active and score else None,
         confidence=confidence.value if active and confidence else None,
+        cited_fact_ids=cited,
+        withdrawn_fact_ids=withdrawn,
     )
 
 
@@ -271,6 +277,32 @@ def get_audit(audit_id: str, db: Session = Depends(get_db)):
     if row is None:
         raise HTTPException(404, "audit not found")
     return {**row.payload, "audit_id": row.id}
+
+
+@app.get("/api/candidates/{candidate_id}/audit", response_model=AuditView)
+def get_latest_audit(candidate_id: str, db: Session = Depends(get_db)):
+    """The most recent stored audit, so a reload does not lose the brief.
+
+    An audit takes minutes and is written to the ledger, but nothing served it
+    back: reopening the page showed an empty brief as though the audit had
+    never run. Citations are re-resolved here rather than replayed from the
+    stored payload, because what was admissible then may not be now.
+    """
+    if db.get(Candidate, candidate_id) is None:
+        raise HTTPException(404, "candidate not found")
+    row = db.scalar(
+        select(AuditRecord)
+        .where(AuditRecord.candidate_id == candidate_id)
+        .order_by(AuditRecord.created_at.desc())
+    )
+    if row is None:
+        raise HTTPException(404, "no audit recorded for this candidate")
+    payload = dict(row.payload)
+    cited, withdrawn = verify_citations(
+        db, candidate_id, (payload.get("proposal") or {}).get("supporting_fact_ids", []),
+    )
+    payload["cited_fact_ids"], payload["withdrawn_fact_ids"] = cited, withdrawn
+    return {**payload, "audit_id": row.id}
 
 
 @app.get("/api/candidates/{candidate_id}/history")

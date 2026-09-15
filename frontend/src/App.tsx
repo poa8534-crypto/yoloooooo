@@ -5,11 +5,20 @@ type Fact = { id: string; text: string; source_ids: string[]; freshness: string;
 type Proposal = {
   concept_title: string; core_loop: string; differentiator: string; build_steps: string[]
   risks: string[]; questions: string[]; supporting_fact_ids: string[]
+  // Authored only by a Venture Scout audit; a Hunter concept leaves them empty.
+  executive_summary?: string; opportunity_gap?: string; competitive_notes?: string[]
 }
 type Candidate = {
   id: string; external_id: string; display_name: string; facts: Fact[]; proposal: Proposal | null; proposal_id?: string | null
+  cited_fact_ids?: string[]; withdrawn_fact_ids?: string[]
   decision: string; decision_id: string | null; score: number | null; confidence: number | null
 }
+interface AuditResult {
+  candidate_id: string; proposal_id?: string | null; proposal?: Proposal | null
+  risks?: string[]; note?: string; audit_id?: string | null; evidence_state?: string
+  gates?: AuditGate[]; cited_fact_ids?: string[]; withdrawn_fact_ids?: string[]
+}
+
 type Run = {
   id: string; niche: string; status: string; message: string; created_at: string; completed_at: string | null
   candidates: Candidate[]; passing_results: Candidate[]
@@ -268,27 +277,75 @@ function CommandCenter({ summary, timeline, sources, runs, health, calibration, 
 
 function IdeasPanel({ runs, selectedId, onSelect, onInspectFact, onAudit, audit, busy }: {
   runs: Run[]; selectedId: string; onSelect: (id: string) => void; onInspectFact: (id: string) => void
-  onAudit: (candidate: Candidate) => void; audit: { candidate_id: string; proposal_id?: string; proposal?: Proposal; risks?: string[]; note?: string } | null; busy: boolean
+  onAudit: (candidate: Candidate) => void; audit: AuditResult | null; busy: boolean
 }) {
   const [filter, setFilter] = useState<'all' | 'research_more' | 'recommend' | 'blocked_conflict'>('all')
   const allIdeas = runs.flatMap(run => run.candidates.map(candidate => ({ candidate, run })))
   const ideas = filter === 'all' ? allIdeas : allIdeas.filter(item => item.candidate.decision === filter)
   const active = allIdeas.find(item => item.candidate.id === selectedId)
+  return <IdeaPanelBody active={active} ideas={ideas} filter={filter} setFilter={setFilter}
+    onSelect={onSelect} onInspectFact={onInspectFact} onAudit={onAudit} audit={audit} busy={busy} />
+}
+
+function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFact, onAudit, audit, busy }: {
+  active: { candidate: Candidate; run: Run } | undefined
+  ideas: { candidate: Candidate; run: Run }[]
+  filter: string; setFilter: (value: 'all' | 'research_more' | 'recommend' | 'blocked_conflict') => void
+  onSelect: (id: string) => void; onInspectFact: (id: string) => void
+  onAudit: (candidate: Candidate) => void; audit: AuditResult | null; busy: boolean
+}) {
+  // The audit button used to be unconditional, so a candidate whose gates
+  // could never pass returned a blocked audit in two seconds and the brief
+  // said only "Proposal not generated" -- which reads as the model failing
+  // rather than the request never reaching it.
+  const candidateId = active?.candidate.id || ''
+  const [readiness, setReadiness] = useState<AuditReadiness | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setReadiness(null)
+    if (!candidateId) return
+    api<AuditReadiness>(`/api/candidates/${candidateId}/audit-readiness`)
+      .then(result => { if (!cancelled) setReadiness(result) })
+      .catch(() => { if (!cancelled) setReadiness(null) })
+    return () => { cancelled = true }
+  }, [candidateId])
+  // An audit costs minutes and is already in the ledger. Without this the
+  // brief came back empty after a reload, which reads as the audit never
+  // having run.
+  const [stored, setStored] = useState<AuditResult | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setStored(null)
+    if (!candidateId) return
+    api<AuditResult>(`/api/candidates/${candidateId}/audit`)
+      .then(result => { if (!cancelled) setStored(result) })
+      .catch(() => { if (!cancelled) setStored(null) })
+    return () => { cancelled = true }
+  }, [candidateId, audit])
+  const shown = audit?.candidate_id === candidateId ? audit : stored
+  const blocking = (readiness?.gates || []).filter(gate => gate.state === 'fail' || gate.state === 'missing')
+  const blockedAudit = shown && !shown.proposal ? shown : null
   if (active) {
     const { candidate, run } = active
-    const proposal = (audit?.candidate_id === candidate.id && audit.proposal_id === candidate.proposal_id ? audit.proposal : null) || candidate.proposal
-    return <section className="workspace analyst-brief"><div className="brief-toolbar"><button className="text-button" onClick={() => onSelect('')}>← Back to ideas</button><div><Badge tone={toneFor(candidate.decision)}>{candidate.decision.replaceAll('_', ' ')}</Badge><Badge tone="verified">{candidate.facts.length} verified facts</Badge></div><button className="primary" disabled={busy} onClick={() => onAudit(candidate)}>{busy ? 'Auditing…' : 'Run Venture Scout audit'}</button></div>
+    const proposal = shown?.proposal || candidate.proposal
+    const citedIds = shown?.proposal ? shown.cited_fact_ids : candidate.cited_fact_ids
+    const withdrawnIds = shown?.proposal ? shown.withdrawn_fact_ids : candidate.withdrawn_fact_ids
+    return <section className="workspace analyst-brief"><div className="brief-toolbar"><button className="text-button" onClick={() => onSelect('')}>← Back to ideas</button><div><Badge tone={toneFor(candidate.decision)}>{candidate.decision.replaceAll('_', ' ')}</Badge><Badge tone="verified">{candidate.facts.length} verified facts</Badge></div><button className="primary" disabled={busy || blocking.length > 0} onClick={() => onAudit(candidate)} title={blocking.length ? blocking.map(gate => `${gate.label}: ${gate.detail}`).join(' · ') : 'Scout reads the evidence, drafts, critiques its own draft and revises. This takes several minutes.'}>{busy ? 'Scout is deliberating…' : blocking.length ? 'Audit blocked by gates' : 'Run Venture Scout audit'}</button></div>
+      {busy && <div className="warning-box"><strong>Venture Scout is running</strong><span>Reading the evidence, drafting, critiquing its own draft and revising it. Several minutes on a local model; the page stays usable.</span></div>}
+      {blocking.length > 0 && <div className="warning-box"><strong>Audit cannot run yet</strong>{blocking.map(gate => <p key={gate.label}>{gate.label}: {gate.detail}</p>)}</div>}
+      {blockedAudit && blocking.length === 0 && <div className="warning-box"><strong>Last audit was recorded without a proposal</strong>{(blockedAudit.risks || []).map(risk => <p key={risk}>{risk}</p>)}</div>}
       <article className="brief-hero"><span>Research dossier / {run.niche}</span><h2>{proposal?.concept_title || candidate.display_name}</h2><p>{proposal?.core_loop || 'A detailed proposal will appear after the constrained local model completes a schema-valid run.'}</p><div className="metrics-grid compact"><Metric label="Engine decision" value={candidate.decision.replaceAll('_', ' ')} note="Deterministic" /><Metric label="Evidence facts" value={candidate.facts.length} note="Clickable provenance" /><Metric label="Confidence" value={candidate.confidence == null ? '—' : `${candidate.confidence.toFixed(1)}%`} note={candidate.confidence == null ? 'Not computed' : 'Evidence quality'} /><Metric label="Market score" value={candidate.score == null ? 'Locked' : candidate.score.toFixed(1)} note={candidate.score == null ? 'Calibration inactive' : 'Frozen artifact'} /></div></article>
       <div className="brief-layout"><nav className="brief-index"><span>Research brief</span>{['Executive summary', 'Why this idea', 'Demand history', 'Competitors', 'Opportunity gap', 'Twist lab', '72-hour MVP', 'Risk register', 'Provenance'].map((item, index) => <a key={item} href={`#brief-${index + 1}`}>{String(index + 1).padStart(2, '0')}. {item}</a>)}</nav>
-        <div className="brief-sections"><article id="brief-1" className="data-panel"><div className="section-number">01</div><h2>Executive summary</h2>{proposal ? <><div className="classified verified"><Badge tone="verified">Verified context</Badge><p>{candidate.facts.length} facts are available from captured evidence. Use the provenance section to inspect each exact source chain.</p></div><div className="classified proposal"><Badge tone="proposal">Model proposal</Badge><p>{proposal.core_loop}</p></div><div className="classified inference"><Badge tone="inference">Analyst interpretation</Badge><p>The proposal is a design hypothesis. It is not evidence that the market or game will succeed.</p></div></> : <EmptyState title="Proposal not generated">Run Venture Scout after evidence and matching gates allow an audit.</EmptyState>}</article>
+        <div className="brief-sections"><article id="brief-1" className="data-panel"><div className="section-number">01</div><h2>Executive summary</h2>{proposal ? <><div className="classified verified"><Badge tone="verified">Verified context</Badge><p>{candidate.facts.length} facts are available from captured evidence. Use the provenance section to inspect each exact source chain.</p></div><div className="classified proposal"><Badge tone="proposal">Model proposal</Badge><p>{proposal.executive_summary || proposal.core_loop}</p></div><div className="classified inference"><Badge tone="inference">Analyst interpretation</Badge><p>The proposal is a design hypothesis. It is not evidence that the market or game will succeed.</p></div></> : <EmptyState title="Proposal not generated">Run Venture Scout after evidence and matching gates allow an audit.</EmptyState>}</article>
           <article id="brief-2" className="data-panel"><div className="section-number">02</div><h2>Why this idea was chosen</h2><p className="body-copy">The engine state is <strong>{candidate.decision.replaceAll('_', ' ')}</strong>. Selection reasons must come from deterministic decision records; the local model cannot author a verdict.</p><div className="fact-stack">{candidate.facts.map(fact => <button key={fact.id} onClick={() => onInspectFact(fact.id)}><Badge tone="verified">Verified fact</Badge><span>{fact.text}</span><code>{fact.id}</code></button>)}</div></article>
           <article id="brief-3" className="data-panel"><div className="section-number">03</div><h2>Demand and trend history</h2><CandidateHistory candidateId={candidate.id} /></article>
           <article id="brief-4" className="data-panel"><div className="section-number">04</div><h2>Competitor landscape</h2><p>Discovered peers, not validated niche competitors. Current source-reported measurements:</p><div className="fact-stack">{run.candidates.filter(peer => peer.id !== candidate.id).map(peer => <div key={peer.id}><strong>{peer.display_name}</strong>{peer.facts.filter(f => /concurrent players|lifetime visits/.test(f.text)).map(f => <p key={f.id}>{f.text}</p>)}</div>)}</div></article>
-          <article id="brief-5" className="data-panel"><div className="section-number">05</div><h2>Opportunity gap</h2><div className="classified inference"><Badge tone="inference">Unvalidated hypothesis</Badge><p>{proposal?.differentiator || "No admissible proposal. More evidence is needed."}</p><p>Niche relevance and absence of competition have not been established.</p></div></article>
+          <article id="brief-5" className="data-panel"><div className="section-number">05</div><h2>Opportunity gap</h2><div className="classified inference"><Badge tone="inference">Unvalidated hypothesis</Badge><p>{proposal?.opportunity_gap || proposal?.differentiator || "No admissible proposal. More evidence is needed."}</p><p>Niche relevance and absence of competition have not been established.</p></div></article>
           <article id="brief-6" className="data-panel"><div className="section-number">06</div><h2>Twist lab</h2>{proposal ? <div className="twist-grid"><div><Badge tone="proposal">Core loop</Badge><h3>{proposal.concept_title}</h3><p>{proposal.core_loop}</p></div><div><Badge tone="proposal">Differentiator</Badge><h3>Distinctive layer</h3><p>{proposal.differentiator}</p></div></div> : <EmptyState title="No model proposal">A schema-valid proposal has not been stored.</EmptyState>}</article>
           <article id="brief-7" className="data-panel"><div className="section-number">07</div><h2>72-hour MVP plan</h2>{proposal && <DesignDetails design={proposal} />}{proposal ? <div className="milestone-grid">{proposal.build_steps.map((step, index) => <div key={step}><span>Phase {index + 1}</span><strong>{step}</strong><small>Scope and timing require human confirmation.</small></div>)}</div> : <EmptyState title="MVP plan unavailable">Run the Venture Scout audit to generate a constrained proposal.</EmptyState>}</article>
           <article id="brief-8" className="data-panel"><div className="section-number">08</div><h2>Risk register</h2>{proposal?.risks.length ? <div className="risk-list">{proposal.risks.map(risk => <div key={risk}><Badge tone="proposal">Model risk</Badge><p>{risk}</p><span>Requires human assessment</span></div>)}</div> : <EmptyState title="No risk record">The audit has not produced a valid risk checklist.</EmptyState>}</article>
-          <article id="brief-9" className="data-panel"><div className="section-number">09</div><h2>Provenance and audit trail</h2><div className="provenance-grid"><div><span>Supporting facts</span>{candidate.facts.map(fact => <button className="text-button" key={fact.id} onClick={() => onInspectFact(fact.id)}>{fact.id}</button>)}</div><div><span>Source artifacts</span><strong>{new Set(candidate.facts.flatMap(fact => fact.source_ids)).size}</strong></div><div><span>Research run</span><code>{run.id}</code><small>{formatDate(run.created_at)}</small></div></div></article>
+          <article id="brief-9" className="data-panel"><div className="section-number">09</div><h2>Provenance and audit trail</h2>{!!withdrawnIds?.length && <div className="warning-box"><strong>Citations withdrawn since the audit ran</strong><span>These were cited when the proposal was written and no longer resolve to admissible evidence, so they are not shown as verified.</span>{withdrawnIds.map(id => <p key={id}><code>{id}</code></p>)}</div>}
+            <div className="provenance-grid"><div><span>Cited and re-verified</span>{(citedIds || []).map(id => <button className="text-button" key={id} onClick={() => onInspectFact(id)}>{id}</button>)}{!citedIds?.length && <small>The proposal cites no evidence that still resolves.</small>}</div><div><span>Supporting facts</span>{candidate.facts.map(fact => <button className="text-button" key={fact.id} onClick={() => onInspectFact(fact.id)}>{fact.id}</button>)}</div><div><span>Source artifacts</span><strong>{new Set(candidate.facts.flatMap(fact => fact.source_ids)).size}</strong></div><div><span>Research run</span><code>{run.id}</code><small>{formatDate(run.created_at)}</small></div></div></article>
         </div></div>
     </section>
   }
@@ -349,7 +406,7 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
   </section>
 }
 
-function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Candidate[]; onAudit: (candidate: Candidate) => void; audit: { candidate_id: string; proposal_id?: string; proposal?: Proposal; risks?: string[]; note?: string } | null; busy: boolean }) {
+function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Candidate[]; onAudit: (candidate: Candidate) => void; audit: AuditResult | null; busy: boolean }) {
   const [candidateId, setCandidateId] = useState(candidates[0]?.id || '')
   const [readiness, setReadiness] = useState<AuditReadiness | null>(null)
   const [readinessError, setReadinessError] = useState('')
@@ -427,7 +484,7 @@ export default function App() {
   const [selectedIdea, setSelectedIdea] = useState('')
   const [sourceDetail, setSourceDetail] = useState<SourceDetail | null>(null)
   const [sourceLoading, setSourceLoading] = useState(false)
-  const [audit, setAudit] = useState<{ candidate_id: string; proposal_id?: string; proposal?: Proposal; risks?: string[]; note?: string } | null>(null)
+  const [audit, setAudit] = useState<AuditResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')

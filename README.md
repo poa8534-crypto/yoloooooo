@@ -3,7 +3,10 @@
 A local, evidence-first research dashboard with two constrained agent workflows:
 
 - **Meta Hunter** discovers Roblox market candidates and collects primary evidence.
-- **Venture Scout** proposes a small MVP and risk checklist for a selected candidate.
+- **Venture Scout** audits a candidate: it drafts, critiques its own draft against
+  solo-beginner scope and evidence support, then revises. A Meta Hunter proposal
+  narrows it to critiquing that design; without one it analyses the captured
+  evidence directly. Reasoning is on and a single audit takes minutes.
 
 The trusted layer targets **zero unsupported factual slots**: facts are compiled from hashed source artifacts through JSON pointers or captured exact passages. This is a tested provenance invariant, not a guarantee of source truth or semantic correctness of model prose. The language model cannot author source URLs, observed metrics, scores, confidence, or verdicts; its designs and interpretations remain speculative.
 

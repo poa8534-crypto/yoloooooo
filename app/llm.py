@@ -54,6 +54,44 @@ REVISION_INSTRUCTION = (
 )
 
 
+def _reason(exc: Exception, limit: int = 160) -> str:
+    """A short, safe description of why one completion was refused."""
+    if isinstance(exc, ValidationError):
+        detail = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors()[:3]
+        )
+    else:
+        detail = str(exc)
+    detail = redact(" ".join(detail.split()))
+    return detail[:limit] + "…" if len(detail) > limit else detail
+
+
+def grammar_safe(schema: dict) -> dict:
+    """Strip `maxLength` before handing a schema to Ollama as a grammar.
+
+    Ollama compiles the schema into a sampling grammar, and some upper bounds
+    make that compiler fail outright -- `maxLength: 2000` returns
+    "failed to parse grammar" every time, while 1500 and 2500 are both fine.
+    Widening the prose limits for a real analyst brief walked straight into it
+    and no audit could produce anything at all.
+
+    Nothing is lost by removing it: the grammar constrains shape, and
+    `ProposalPayload` still enforces every length after parsing. An overlong
+    answer fails validation and is retried, exactly as before.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    cleaned = {
+        key: [grammar_safe(item) for item in value] if isinstance(value, list)
+        else grammar_safe(value) if isinstance(value, dict)
+        else value
+        for key, value in schema.items()
+        if key != "maxLength"
+    }
+    return cleaned
+
+
 @dataclass(frozen=True)
 class GeneratedProposal:
     payload: ProposalPayload
@@ -120,6 +158,13 @@ class OllamaProposalClient:
         else:
             prompt += "\nCompare supplied candidates, seek counterevidence and propose a distinct research hypothesis. Fill counterevidence and unanswered questions. Do not assert market success or verified niche relevance."
         prompt += "\nAll prose is speculative design, not factual reporting. Put any proposed quantities ONLY in design_assumptions. Do not repeat observed metrics or source names in prose. Supporting evidence IDs belong only in supporting_fact_ids."
+        # Without this the model wrote its milestones as durations ("spend
+        # 3 days on ..."), which the firewall refuses, so every attempt
+        # failed on build_steps with no hint about what to change.
+        prompt += ("\nYou may label a step with a plain ordinal such as 'Day 1' or 'Step 2'."
+                   " You may not write a duration, a count of features or any measured amount"
+                   " in prose: not '3 days', not '15 minutes', not '72-hour'. Write it in"
+                   " words, or put the number in design_assumptions.")
         # The packet carries the IDs, but nothing previously asked the model to
         # cite them, so concepts came back with an empty supporting_fact_ids
         # and no link to the evidence they were drawn from.
@@ -205,7 +250,7 @@ class OllamaProposalClient:
                             "model": model,
                             "stream": False,
                             "think": self.settings.ollama_think,
-                            "format": schema,
+                            "format": grammar_safe(schema),
                             "options": {
                                 "num_ctx": self.settings.ollama_context,
                                 "temperature": 0.2,
@@ -225,5 +270,8 @@ class OllamaProposalClient:
                         check(payload)
                     return payload, model
                 except (httpx.HTTPError, KeyError, json.JSONDecodeError, ValidationError, ValueError) as exc:
-                    errors.append(f"{model}: {type(exc).__name__}")
+                    # The exception type alone sent every investigation looking
+                    # in the wrong place. Which field was refused, and why, is
+                    # the part worth keeping.
+                    errors.append(f"{model}: {type(exc).__name__}: {_reason(exc)}")
         raise LLMUnavailable("proposal generation failed closed: " + " | ".join(errors[-4:]))
