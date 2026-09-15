@@ -12,7 +12,11 @@ from sqlalchemy import select
 from .association import MatchSubjectView, is_downstream_admissible
 from .association.normalize import word_tokens
 from .association.subjects import SUBJECT_WEB_PAGE
-from .connectors import extract_roblox_place_ids
+from .connectors import (
+    ConnectorError,
+    extract_roblox_place_ids,
+    extract_roblox_universe_ids,
+)
 from .evidence import (
     accept_web_claim,
     add_json_observation,
@@ -154,14 +158,53 @@ class DeepResearch:
         cache[key] = row.id
         return row
 
-    async def discover(self, query):
-        search = await self.b.call(self.o.connectors, "tavily_search", query)
-        with self.factory() as db:
-            self.capture(db, search, "tavily_search:" + query, "discovery", "tavily.com")
-            db.commit()
+    async def search_sources(self, query):
+        """Ask every configured source, and keep going if one of them fails.
+
+        Discovery used to depend on a single metered third-party search, so an
+        exhausted daily allowance ended discovery for the day. Roblox's own
+        search answers with universe IDs directly; a local SearxNG instance and
+        the third-party API answer with pages to resolve. Each is optional, and
+        the run continues on whatever answered.
+        """
+        universes: list[str] = []
+        places: list[str] = []
+        answered = 0
+        for method, owner in (("roblox_search", "roblox.com"),
+                              ("searxng_search", "searxng.local"),
+                              ("tavily_search", "tavily.com")):
+            try:
+                result = await self.b.call(self.o.connectors, method, query)
+            except BudgetExceeded:
+                raise
+            except Exception as exc:
+                # A source being absent or unreachable is not a failure of the
+                # run: discovery asks several and continues on whatever
+                # answered. Only all of them failing is an error, raised below.
+                self.b.abstain(f"discovery:{method}", f"source unavailable: {type(exc).__name__}")
+                continue
+            answered += 1
+            with self.factory() as db:
+                self.capture(db, result, f"{method}:{query}", "discovery", owner)
+                db.commit()
+            if method == "roblox_search":
+                universes += extract_roblox_universe_ids(result.payload)
+            else:
+                places += extract_roblox_place_ids(result.payload)
         self.b.save()
-        places = extract_roblox_place_ids(search.payload)[:30]
+        if not answered:
+            raise ConnectorError("no discovery source answered")
+        return list(dict.fromkeys(universes))[:30], list(dict.fromkeys(places))[:30]
+
+    async def discover(self, query):
+        direct, places = await self.search_sources(query)
         resolved = {}
+        # Universe IDs from Roblox's own search need no resolution at all.
+        for uid in direct:
+            if len(self.contexts) + len(resolved) >= self.b.state["limits"]["universes"]:
+                break
+            if uid not in {c.universe_id for c in self.contexts}:
+                resolved.setdefault(uid, [])
         for place in places:
             if len(self.contexts) + len(resolved) >= self.b.state["limits"]["universes"]:
                 break

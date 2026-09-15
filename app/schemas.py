@@ -365,6 +365,9 @@ class AuditView(StrictModel):
     unresolved_concerns: list[str] = Field(default_factory=list)
     revision_applied: bool = True
     operation: Literal["analyze_game", "audit_idea"] | None = None
+    # What the design was aimed at: the game itself for an analysis, the run's
+    # niche for a critique of a proposal written in it.
+    niche: str = ""
     # What the audit found against its own draft, kept whether or not the
     # revision landed, so a reviewer can see what was raised.
     critique: AuditCritique | None = None

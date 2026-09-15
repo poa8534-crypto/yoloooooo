@@ -476,7 +476,22 @@ class ResearchOrchestrator:
             packet = evidence_packet(db, candidate_id)
             selected_id = hunter.id if hunter and hunter.candidate_id == candidate_id else None
             hunter_payload = hunter.payload if selected_id else None
-            niche = run.niche if run else "Roblox"
+            # Which niche the audit is about.
+            #
+            # "Audit idea" critiques a Hunter proposal, and that proposal was
+            # written for the run's niche, so it inherits it. "Analyze game"
+            # is about the game you picked, and inheriting the niche of
+            # whichever run happened to discover it produced a design for an
+            # unrelated subject: choosing a game captured by a "Toilet
+            # Simulator" run made the model design a toilet game from that
+            # game's evidence.
+            resolved_operation = operation or ("audit_idea" if selected_id else "analyze_game")
+            if resolved_operation == "audit_idea":
+                niche = run.niche if run else "Roblox"
+            else:
+                name = next((str(f["slots"][0]["value"]) for f in packet
+                             if f["template_id"] == "roblox_name"), "")
+                niche = name or (run.niche if run else "Roblox")
             latest_decision = db.scalar(select(DecisionRecord).where(DecisionRecord.candidate_id == candidate_id).order_by(DecisionRecord.created_at.desc()))
             decision = latest_decision.kind if latest_decision else "collection_only"
         result = {
@@ -484,7 +499,10 @@ class ResearchOrchestrator:
             # Which operation produced this record. Without it, history cannot
             # tell an evidence-only analysis from a critique of a proposal --
             # two different claims that look identical once stored.
-            "operation": operation or ("audit_idea" if selected_id else "analyze_game"),
+            "operation": resolved_operation,
+            # Recorded so a reader can see what the design was aimed at,
+            # rather than inferring it from the run that captured the game.
+            "niche": niche,
             "gates": [gate.model_dump() for gate in readiness.gates],
             "evidence_state": "blocked", "decision": decision,
             "risks": [], "note": "Speculative design audit, not a prediction of game success.",

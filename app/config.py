@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     artifact_dir: Path = ROOT / "data" / "artifacts"
     model_dir: Path = ROOT / "data" / "models"
     tavily_api_key: str = ""
+    # A local SearxNG instance. No key and no daily allowance, so discovery is
+    # not rationed by a third party. See docs/LOCAL_SEARCH.md.
+    searxng_url: str = "http://127.0.0.1:8888"
+    searxng_enabled: bool = True
+    # Roblox's own search. First-party, no key, and it returns universe IDs
+    # directly, so a resolution call per result is not needed.
+    roblox_search_enabled: bool = True
     youtube_api_key: str = ""
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_primary_model: str = "qwen3:14b"

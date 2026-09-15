@@ -24,6 +24,9 @@ PREFIX = "dependency:"
 # recorded rather than filed under a guess.
 PROVIDERS = (
     ("api.tavily.com", "tavily"),
+    ("127.0.0.1:8888", "searxng"),
+    ("localhost:8888", "searxng"),
+    ("apis.roblox.com/search-api", "roblox_search"),
     ("googleapis.com/youtube", "youtube"),
     ("roblox.com", "roblox"),
 )

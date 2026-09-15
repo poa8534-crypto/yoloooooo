@@ -138,6 +138,35 @@ class Connectors:
             },
         )
 
+    async def searxng_search(self, query: str) -> ConnectorResult:
+        """A local metasearch instance, so discovery needs no third-party key.
+
+        Results are web pages, which makes them discovery-tier like any other
+        search: they can point at a game, never testify about one.
+        """
+        if not self.settings.searxng_enabled:
+            raise ConnectorError("local search is disabled")
+        return await self._json(
+            "GET",
+            self.settings.searxng_url.rstrip("/") + "/search",
+            params={"q": query, "format": "json"},
+        )
+
+    async def roblox_search(self, query: str) -> ConnectorResult:
+        """Roblox's own search, which answers with universe IDs directly.
+
+        Undocumented, so it is treated as one source among several rather than
+        the only one: if its shape changes, discovery degrades instead of
+        stopping.
+        """
+        if not self.settings.roblox_search_enabled:
+            raise ConnectorError("Roblox search is disabled")
+        return await self._json(
+            "GET",
+            "https://apis.roblox.com/search-api/omni-search",
+            params={"searchQuery": query, "pageToken": "", "sessionId": "venture-agents"},
+        )
+
     async def universe_for_place(self, place_id: str) -> ConnectorResult:
         return await self._json(
             "GET", f"https://apis.roblox.com/universes/v1/places/{place_id}/universe"
@@ -221,5 +250,20 @@ def extract_roblox_place_ids(search_payload: dict[str, Any]) -> list[str]:
         url = str(result.get("url", ""))
         if match := ROBLOX_PLACE_RE.search(url):
             ids.append(match.group(1))
+    return list(dict.fromkeys(ids))
+
+
+def extract_roblox_universe_ids(search_payload: dict[str, Any]) -> list[str]:
+    """Universe IDs straight out of Roblox's own search response.
+
+    Saves a resolution call per result, and a universe ID from Roblox is a
+    stronger identifier than one inferred from a URL found on the open web.
+    """
+    ids: list[str] = []
+    for group in search_payload.get("searchResults", []) or []:
+        for item in group.get("contents", []) or []:
+            universe = item.get("universeId")
+            if universe:
+                ids.append(str(universe))
     return list(dict.fromkeys(ids))
 

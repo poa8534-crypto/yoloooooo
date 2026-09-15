@@ -83,6 +83,15 @@ class FakeConnectors:
     async def tavily_search(self, query):
         self.calls.append(("tavily", query))
         return ConnectorResult("https://api.tavily.com/search", {"results": [{"url": "https://www.roblox.com/games/123/Test"}]})
+    async def searxng_search(self, query):
+        self.calls.append(("searxng", query))
+        return ConnectorResult("http://127.0.0.1:8888/search",
+                               {"results": [{"url": "https://www.roblox.com/games/123/Test"}]})
+    async def roblox_search(self, query):
+        self.calls.append(("roblox_search", query))
+        # Roblox answers with universe IDs directly, needing no resolution.
+        return ConnectorResult("https://apis.roblox.com/search-api/omni-search",
+                               {"searchResults": [{"contents": [{"universeId": 77, "rootPlaceId": 123}]}]})
     async def universe_for_place(self, place): return ConnectorResult("https://apis.roblox.com/resolve", {"universeId": 77})
     async def roblox_games(self, ids):
         return ConnectorResult("https://games.roblox.com/v1/games", {"data": [{"id": 77, "rootPlaceId": 123, "name": "Evidence Garden", "playing": 42, "visits": 900, "favoritedCount": 80, "updated": "source date", "description": "Plant seeds together."}]})
