@@ -1,6 +1,6 @@
 import { ResearchReport, CandidateHistory, DesignDetails } from './ResearchReport'
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { readRoute, routeHash, matchesDecision, type PageId } from './routing'
+import { readRoute, routeHash, matchesDecision, RESEARCH_PHASES, researchPhase, type PageId } from './routing'
 
 type Fact = { id: string; text: string; source_ids: string[]; freshness: string; verification_state: string }
 type Proposal = {
@@ -24,7 +24,7 @@ interface AuditResult {
 type Run = {
   id: string; niche: string; status: string; message: string; created_at: string; completed_at: string | null
   candidates: Candidate[]; passing_results: Candidate[]
-  progress?: { stage: string; elapsed_seconds: number; remaining_seconds: number; usage: Record<string, number>; stop_reason?: string; questions: Array<{ id: string; question: string; state: string }> }
+  progress?: { stage: string; elapsed_seconds: number; remaining_seconds: number; usage: Record<string, number>; stop_reason?: string; round?: number; questions: Array<{ id: string; question: string; state: string }> }
 }
 type Calibration = {
   phase: string; complete_clusters: number; required_clusters: number; scoring_active: boolean
@@ -493,10 +493,11 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
   const [niche, setNiche] = useState('')
   const active = runs.find(run => ['queued', 'running'].includes(run.status))
   function submit(event: FormEvent) { event.preventDefault(); onStart(niche) }
-  // Reference documentation of the pipeline, not per-stage telemetry. The
-  // backend reports one status and one message per run; claiming to know which
-  // of eight stages is live would be invented.
-  const stages = ['Discovering source leads', 'Resolving Roblox universe IDs', 'Capturing primary artifacts', 'Extracting typed observations', 'Running deterministic matching', 'Waiting for review gates', 'Generating constrained proposals', 'Compiling results']
+  // This was eight documentation steps with none of them marked, because the
+  // backend used to report only one message per run. It reports a real stage
+  // now, so the phases below are the ones it actually moves through and the
+  // live one is marked. An unrecognised stage marks nothing rather than
+  // guessing.
   const [reportId, setReportId] = useState("")
   const latest = runs.find(r => r.id === reportId) || runs[0]
   return <section className="workspace"><div className="agent-boundary"><Badge tone="proposal">Agent authority: proposal only</Badge><p>Meta Hunter can suggest concepts and search heuristics. It cannot create URLs, platform metrics, scores, confidence values or verdicts.</p><strong>Invariant enforced</strong></div>
@@ -504,8 +505,23 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
       <article className="data-panel"><div className="panel-heading"><div><span>Immutable safety rules</span><h2>Protected invariants</h2></div></div><div className="invariant-list">{[['Evidence firewall', true], ['URLs from model', false], ['Platform metrics from model', false], ['Model-authored verdicts', false], ['Strict JSON schema', true], ['Fail-closed mode', true]].map(([label, enabled]) => <div key={String(label)}><span>{label}</span><Badge tone={enabled ? 'verified' : 'conflict'}>{enabled ? 'Enabled · locked' : 'Disabled · locked'}</Badge></div>)}</div></article></div>
     <article className="data-panel"><div className="panel-heading"><div><span>Reported run state</span><h2>Pipeline</h2></div>{latest && <Badge tone={toneFor(latest.status)}>{latest.status}</Badge>}</div>
       {latest ? <div className="run-state"><strong>{latest.niche}</strong><p className="mono">{latest.message}</p><small>{active ? 'This run is still in progress.' : `Finished ${formatDate(latest.completed_at || latest.created_at)}`}</small></div> : <EmptyState title="No run reported yet">Start a research run to see its reported state.</EmptyState>}
-      <div className="pipeline-list reference">{stages.map((stage, index) => <div key={stage}><b>{index + 1}</b><span>{stage}</span></div>)}</div>
-      <small className="gate-hint">Stage list is documentation of the pipeline order. The live stage and usage below come from persisted backend checkpoints.</small></article>
+      {(() => {
+        const stage = latest?.progress?.stage || ''
+        const current = latest ? researchPhase(stage, latest.status) : 0
+        const round = latest?.progress?.round
+        return <>
+          <ol className="pipeline-list">{RESEARCH_PHASES.map((phase, index) => {
+            const state = current < 0 ? 'unknown' : index < current ? 'done' : index === current ? 'current' : 'pending'
+            return <li key={phase.id} className={state} aria-current={state === 'current' ? 'step' : undefined}>
+              <b>{state === 'done' ? '✓' : index + 1}</b>
+              <span><strong>{phase.label}{state === 'current' && phase.id === 'investigating' && round ? ` · round ${round}` : ''}</strong><small>{phase.detail}</small></span>
+              {state === 'current' && <Badge tone="inference">Now</Badge>}
+            </li>
+          })}</ol>
+          {current < 0 && <small className="gate-hint">The run reports a stage this page does not recognise: <code>{stage}</code>. Nothing is marked rather than guessing which phase it belongs to.</small>}
+          {current >= 0 && <small className="gate-hint">Phases come from the stage the run persists to its checkpoint, not from a fixed script.</small>}
+        </>
+      })()}</article>
     <article className="data-panel"><div className="panel-heading"><div><span>Append-only run records</span><h2>Run history</h2></div></div>{runs.length ? <div className="table-scroll"><table><thead><tr><th>Niche</th><th>Status</th><th>Started</th><th>Candidates</th><th>Result</th></tr></thead><tbody>{runs.map(run => <tr key={run.id}><td><strong>{run.niche}</strong><small><code>{run.id}</code></small></td><td><Badge tone={toneFor(run.status)}>{run.status}</Badge></td><td>{formatDate(run.created_at)}</td><td className="numeric">{run.candidates.length}</td><td>{run.message}</td></tr>)}</tbody></table></div> : <EmptyState title="No Meta Hunter runs">Submit the first niche above when you are ready to collect evidence.</EmptyState>}</article>
     {latest && <><label>Inspect research run<select value={latest.id} onChange={e => setReportId(e.target.value)}>{runs.map(r => <option key={r.id} value={r.id}>{r.niche} — {r.status}</option>)}</select></label>{latest.progress && <article className="data-panel"><h3>{latest.progress.stage}</h3><p>{Math.round(latest.progress.elapsed_seconds)}s elapsed · {Math.round(latest.progress.remaining_seconds)}s {["queued", "running"].includes(latest.status) ? "remaining" : "unused budget"}</p><div className="metrics-grid compact">{Object.entries(latest.progress.usage).map(([key, value]) => <Metric key={key} label={key.replaceAll("_", " ")} value={value} note="Reserved attempts / captured entities" />)}</div>{latest.progress.questions.map(q => <p key={q.id}>{q.question} — {q.state}</p>)}</article>}<ResearchReport runId={latest.id} status={latest.status} /></>}
     <div className="api-readiness"><span>Tavily <b>{health?.connectors.tavily_configured ? 'Configured — not a live authentication check' : 'Missing key'}</b></span><span>YouTube <b>{health?.connectors.youtube_configured ? 'Configured — not a live authentication check' : 'Missing key'}</b></span><span>Roblox <b>Public interface</b></span><span>Qwen <b>{health?.ollama.primary_present ? '14B ready' : 'Unavailable'}</b></span></div>

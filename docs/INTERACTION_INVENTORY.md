@@ -10,8 +10,8 @@ Automated coverage behind this table:
 | Suite | Count | What it exercises |
 | --- | --- | --- |
 | `pytest` | 406 | API behaviour, evidence rules, agent guarantees |
-| `vitest` | 5 | Routing helpers and the evidence drawer component |
-| `playwright` | 147 | Real browser, three viewports, including actions that change data |
+| `vitest` | 8 | Routing helpers, run phases and the evidence drawer component |
+| `playwright` | 162 | Real browser, three viewports, including actions that change data |
 
 Browser tests run against an isolated ledger created by
 `scripts/e2e_fixture.py`: a temporary database and artifact directory, a stub
@@ -102,7 +102,7 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 | --- | --- | --- | --- |
 | Start a run | Bounded, durable | not tested (browser) | backend covered; a live run is the real check |
 | Empty niche | Refused | passed | `mutations.spec.ts` |
-| Progress and stage | Reflects the current stage | **failed** | the pipeline list highlights no current stage |
+| Progress and stage | Reflects the current stage | passed | `interactions.spec.ts`, `research-phase.test.ts` |
 | Report selection | Opens that run's report | not tested | — |
 | Interrupt / resume | Durable, budgets retained | not tested (browser) | `test_audit_jobs*.py` |
 
@@ -152,15 +152,11 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 
 ## Open findings
 
-1. **Meta Hunter progress does not indicate the current stage.** The pipeline
-   list renders all six stages and highlights none, so a run deep in stage six
-   is indistinguishable from one stuck on stage one. Reported by the operator
-   during a live run and still unfixed.
-2. **`source_backed_design_incomplete` has never been produced live.** The path
+1. **`source_backed_design_incomplete` has never been produced live.** The path
    is unit-tested and mutation-checked, but no real audit has yet failed its
    revision, so the banner and history rendering for it are unverified against
    real data.
-3. **Matching review mutations are deliberately not exercised.** Approving,
+2. **Matching review mutations are deliberately not exercised.** Approving,
    rejecting or reassigning an association changes what downstream metrics are
    allowed to resolve through. Those paths are covered by backend tests against
    isolated fixtures and are not clicked in a browser.

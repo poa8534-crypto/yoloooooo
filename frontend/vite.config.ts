@@ -8,5 +8,11 @@ export default defineConfig({
     port: 5173,
     proxy: { '/api': 'http://127.0.0.1:8742' },
   },
+  // Component tests live beside the components. The e2e directory belongs to
+  // Playwright, and Vitest collecting those specs made both suites fail.
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.{ts,tsx}'],
+  },
 })
 

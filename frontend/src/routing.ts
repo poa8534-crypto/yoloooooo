@@ -14,3 +14,28 @@ export function routeHash(page: PageId, params: Partial<Omit<Route, 'page'>> = {
 export function matchesDecision(decision: string, filter: string): boolean {
   return filter === 'all' || (filter === 'research_more' ? ['collection_only', 'research_more'].includes(decision) : decision === filter)
 }
+
+// The pipeline list used to be eight invented documentation steps with nothing
+// highlighted, because the backend only reported one message per run and
+// guessing which step was live would have been a fabrication. It now reports a
+// real stage string, so these are the phases it actually moves through, and an
+// unrecognised stage returns -1 rather than being forced into one of them.
+export const RESEARCH_PHASES = [
+  { id: 'queued', label: 'Queued', detail: 'Waiting to start' },
+  { id: 'investigating', label: 'Investigating', detail: 'Discovering, capturing and answering open questions' },
+  { id: 'concepts', label: 'Drafting concepts', detail: 'Comparing evidence and writing research concepts' },
+  { id: 'audit', label: 'Auditing', detail: 'Venture Scout drafts, critiques and revises' },
+  { id: 'finished', label: 'Finished', detail: 'Report written to the ledger' },
+] as const
+
+const FINISHED = new Set(['complete', 'partial', 'interrupted', 'failed'])
+
+export function researchPhase(stage: string, status: string): number {
+  if (FINISHED.has(status)) return RESEARCH_PHASES.length - 1
+  const text = (stage || '').trim().toLowerCase()
+  if (text.startsWith('investigating') || text.startsWith('scout follow-up')) return 1
+  if (text.startsWith('comparing evidence')) return 2
+  if (text.startsWith('venture scout')) return 3
+  if (status === 'queued' || text === '' || text === 'queued') return 0
+  return -1
+}

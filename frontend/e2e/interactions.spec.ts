@@ -164,3 +164,72 @@ test.describe('matching engine', () => {
     }
   })
 })
+
+test.describe('meta hunter pipeline', () => {
+  test('the finished run marks every phase done', async ({ page }) => {
+    // The fixture seeds one complete run, so the last phase is current and the
+    // earlier ones are behind it.
+    await page.goto('/#/meta')
+    const phases = page.locator('.pipeline-list li')
+    await expect(phases).toHaveCount(5)
+    await expect(page.locator('.pipeline-list li.current')).toHaveCount(1)
+    await expect(page.locator('.pipeline-list li.current')).toContainText('Finished')
+    await expect(page.locator('.pipeline-list li.done')).toHaveCount(4)
+  })
+
+  test('exactly one phase is marked, and it is marked for assistive technology', async ({ page }) => {
+    // The list used to highlight nothing at all, so a run deep in the audit
+    // looked identical to one that had just started.
+    await page.goto('/#/meta')
+    await expect(page.locator('.pipeline-list li[aria-current="step"]')).toHaveCount(1)
+  })
+
+  test('a running audit marks the audit phase, not the first one', async ({ page }) => {
+    // The complaint this fixes: a run deep in the audit looked identical to one
+    // stuck on stage one. Stubbed so the state is exact and costs no model time.
+    await page.route('**/api/research-runs*', async route => {
+      const response = await route.fetch()
+      const runs = await response.json()
+      runs[0] = {
+        ...runs[0], status: 'running',
+        progress: { ...runs[0].progress, stage: 'Venture Scout: auditing selected proposal', round: 4 },
+      }
+      await route.fulfill({ json: runs })
+    })
+    await page.goto('/#/meta')
+    const current = page.locator('.pipeline-list li.current')
+    await expect(current).toHaveCount(1)
+    await expect(current).toContainText('Auditing')
+    await expect(page.locator('.pipeline-list li.done')).toHaveCount(3)
+    await expect(page.locator('.pipeline-list li').last()).toHaveClass(/pending/)
+  })
+
+  test('an investigating run shows which round it is on', async ({ page }) => {
+    await page.route('**/api/research-runs*', async route => {
+      const response = await route.fetch()
+      const runs = await response.json()
+      runs[0] = {
+        ...runs[0], status: 'running',
+        progress: { ...runs[0].progress, stage: 'Investigating round 2', round: 2 },
+      }
+      await route.fulfill({ json: runs })
+    })
+    await page.goto('/#/meta')
+    await expect(page.locator('.pipeline-list li.current')).toContainText('round 2')
+  })
+
+  test('an unrecognised stage marks nothing rather than guessing', async ({ page }) => {
+    await page.route('**/api/research-runs*', async route => {
+      const response = await route.fetch()
+      const runs = await response.json()
+      runs[0] = {
+        ...runs[0], status: 'running',
+        progress: { ...runs[0].progress, stage: 'Doing something this page has never heard of' },
+      }
+      await route.fulfill({ json: runs })
+    })
+    await page.goto('/#/meta')
+    await expect(page.locator('.pipeline-list li.current')).toHaveCount(0)
+    await expect(page.getByText(/does not recognise/i)).toBeVisible()
+  })
+})

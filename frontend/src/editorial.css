@@ -189,3 +189,27 @@ label { text-transform: none; letter-spacing: 0; font-size: 14px; }
    and the whole page scrolled sideways. Capping the track is the fix, and it
    is correct at every width, not just narrow ones. */
 .workspace { grid-template-columns: minmax(0, 1fr); }
+
+/* Pipeline phases. The list previously highlighted nothing, so a run deep in
+   the audit looked identical to one that had just started. */
+.pipeline-list { list-style: none; margin: 14px 0 8px; padding: 0; display: grid; gap: 6px; }
+.pipeline-list li {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg-surface); color: var(--text-muted);
+}
+.pipeline-list li b {
+  flex: 0 0 24px; height: 24px; display: grid; place-items: center;
+  border-radius: 50%; background: var(--bg-surface-3);
+  color: var(--text-muted); font: 600 11px var(--mono);
+}
+.pipeline-list li span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pipeline-list li strong { color: var(--text-secondary); font-size: 13px; }
+.pipeline-list li small { color: var(--text-muted); font-size: 12px; }
+.pipeline-list li.done b { background: var(--green-soft); color: var(--green); }
+.pipeline-list li.done strong { color: var(--text-muted); }
+.pipeline-list li.current { border-color: var(--blue); background: var(--blue-soft); }
+.pipeline-list li.current b { background: var(--blue); color: #fff; }
+.pipeline-list li.current strong { color: var(--text-primary); }
+.pipeline-list li .badge, .pipeline-list li .evidence-badge { margin-left: auto; }
+.pipeline-list li.pending { opacity: .72; }
