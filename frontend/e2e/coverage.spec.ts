@@ -425,6 +425,17 @@ test.describe('the Hunter to Scout queue', () => {
     await expect(runButton).toContainText(`Yes, run ${before - 1}`)
   })
 
+  test('an empty queue says so instead of offering a dead button', async ({ page }) => {
+    // Every concept audited is the normal resting state, not a fault.
+    await page.route('**/api/scout/queue', async route => {
+      await route.fulfill({ json: { queued: [], runnable: 0, blocked: 0, note: 'note' } })
+    })
+    await page.goto('/#/scout')
+    const panel = page.locator('.data-panel', { hasText: 'Audit queue' })
+    await expect(panel).toContainText('Nothing waiting')
+    await expect(panel.getByRole('button', { name: /Yes, run/ })).toHaveCount(0)
+  })
+
   test('a concept that cannot run is shown with its reason, not hidden', async ({ page }) => {
     await page.route('**/api/scout/queue', async route => {
       await route.fulfill({ json: {

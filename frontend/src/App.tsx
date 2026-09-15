@@ -928,13 +928,19 @@ function ScoutQueueSection() {
       <Badge tone={selected ? 'proposal' : 'insufficient'}>{selected} selected</Badge></div>
       <p className="body-copy">{queue?.note}</p>
       {error && <div className="warning-box"><p>{error}</p></div>}
-      <div className="queue-actions">
-        <button className="primary" disabled={busy || !selected || !!active.length} onClick={run}>
-          {active.length ? 'Running…' : `Yes, run ${selected} idea${selected === 1 ? '' : 's'}`}</button>
-        <button className="secondary" disabled={!queue?.queued.length} onClick={() => setPanelOpen(true)}>
-          Choose which to run</button>
-        {!!queue?.blocked && <small>{queue.blocked} cannot run yet</small>}
-      </div>
+      {/* An empty queue is the normal resting state once everything is
+          audited. A dead "run 0" button reads as something broken, so say
+          what is true instead. */}
+      {queue && !queue.queued.length
+        ? <EmptyState title="Nothing waiting">Every Hunter concept has been audited.
+            The next Meta Hunter run puts its concepts here on its own.</EmptyState>
+        : <div className="queue-actions">
+            <button className="primary" disabled={busy || !selected || !!active.length} onClick={run}>
+              {active.length ? 'Running…' : `Yes, run ${selected} idea${selected === 1 ? '' : 's'}`}</button>
+            <button className="secondary" disabled={!queue?.queued.length} onClick={() => setPanelOpen(true)}>
+              Choose which to run</button>
+            {!!queue?.blocked && <small>{queue.blocked} cannot run yet</small>}
+          </div>}
       {!!jobs.length && <div className="queue-progress">
         <strong>{done} of {jobs.length} finished</strong>
         <small>The model takes one audit at a time; the rest are queued behind it.</small>
