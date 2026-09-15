@@ -283,55 +283,59 @@ const STAGE_LABEL: Record<string, string> = {
   interrupted: 'Interrupted by restart',
 }
 
-const STAGE_TONE: Record<string, Tone> = {
-  attempt_refused: 'insufficient', gate_blocked: 'insufficient', blocked: 'insufficient',
-  critique_skipped: 'insufficient', revision_skipped: 'insufficient', interrupted: 'insufficient',
-  draft_ready: 'verified', critique_ready: 'verified', revision_ready: 'verified',
-  proposal_accepted: 'verified', stored: 'verified', citations: 'verified',
-}
-
 // An audit takes minutes and used to show nothing but a spinner, so a working
 // run and a stuck one looked identical. The feed is backed by a durable
 // SQLite ledger and in-memory broker, so progress survives service restarts.
-function AuditActivityDrawer({ candidateId, open, onClose }: { candidateId: string; open: boolean; onClose: () => void }) {
-  const [events, setEvents] = useState<ActivityEvent[]>([])
-  const [live, setLive] = useState(false)
+function useAuditJob(candidateId: string) {
+  const [job, setJob] = useState<AuditJob | null>(null)
+  const [jobError, setJobError] = useState('')
+  const [workOpen, setWorkOpen] = useState(false)
+  const [stored, setStored] = useState<AuditResult | null>(null)
+  const running = Boolean(job && JOB_ACTIVE.includes(job.status))
+
+  // A finished audit lives in the ledger, so selecting a candidate reads back
+  // whatever it already has rather than showing an empty panel.
+  const reload = useCallback(() => {
+    if (!candidateId) { setStored(null); return }
+    api<AuditResult>(`/api/candidates/${candidateId}/audit`)
+      .then(setStored).catch(() => setStored(null))
+  }, [candidateId])
+  useEffect(() => { setStored(null); setJob(null); setJobError(''); reload() }, [candidateId, reload])
+
+  // Follow the job by polling rather than holding a request open. Polling also
+  // recovers a job that was already running when the page loaded, which a
+  // stream opened on submit would miss.
   useEffect(() => {
-    if (!open || !candidateId) return
-    setEvents([]); setLive(true)
-    const source = new EventSource(`/api/candidates/${candidateId}/audit-activity`)
-    source.addEventListener('activity', message => {
-      const event = JSON.parse((message as MessageEvent).data) as ActivityEvent
-      setEvents(current => current.some(item => item.sequence === event.sequence) ? current : [...current, event])
-    })
-    const stop = () => { setLive(false); source.close() }
-    source.addEventListener('done', stop)
-    source.addEventListener('idle', stop)
-    source.onerror = () => setLive(false)
-    return () => { source.close(); setLive(false) }
-  }, [candidateId, open])
-  const started = events.length ? new Date(events[0].at).getTime() : 0
-  const isInterrupted = events.some(e => e.stage === 'interrupted')
-  return <div className={`drawer-scrim ${open ? 'open' : ''}`} onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
-    <aside className="evidence-drawer" aria-label="Venture Scout activity">
-      <header><div><span>Venture Scout activity</span><strong>{live && events.length ? 'Running now' : live ? 'Listening…' : isInterrupted ? 'Interrupted' : events.length ? 'Finished' : 'Nothing running'}</strong></div><button aria-label="Close activity" onClick={onClose}>×</button></header>
-      <div className="drawer-body">
-        {events.length ? <section>{events.map(event => <article key={event.sequence}>
-          <span>{STAGE_LABEL[event.stage] || event.stage.replaceAll('_', ' ')}</span>
-          <Badge tone={STAGE_TONE[event.stage] || 'proposal'}>{`+${Math.max(0, Math.round((new Date(event.at).getTime() - started) / 1000))}s`}</Badge>
-          <p>{event.detail}</p>
-          {event.model && <small>{event.model}{event.attempt ? ` · attempt ${event.attempt}` : ''}</small>}
-        </article>)}</section>
-          : <EmptyState title="No audit in flight">Start an audit and this fills in as each pass runs. Events are preserved in the ledger across restarts.</EmptyState>}
-      </div>
-    </aside>
-  </div>
+    if (!job || !JOB_ACTIVE.includes(job.status)) return
+    const timer = window.setInterval(async () => {
+      try {
+        const next = await api<AuditJob>(`/api/audit-jobs/${job.id}`)
+        setJob(next)
+        if (!JOB_ACTIVE.includes(next.status)) reload()
+      } catch (caught) { setJobError((caught as Error).message) }
+    }, 1200)
+    return () => window.clearInterval(timer)
+  }, [job, reload])
+
+  async function start(operation: ScoutOperation, proposalId?: string | null) {
+    if (!candidateId) return
+    setJobError(''); setWorkOpen(true)
+    const query = new URLSearchParams({ operation })
+    if (operation === 'audit_idea' && proposalId) query.set('proposal_id', proposalId)
+    try {
+      setJob(await api<AuditJob>(`/api/candidates/${candidateId}/audit-jobs?${query}`, { method: 'POST' }))
+    } catch (caught) { setJobError((caught as Error).message) }
+  }
+
+  async function cancel() {
+    if (!job) return
+    try { setJob(await api<AuditJob>(`/api/audit-jobs/${job.id}/cancel`, { method: 'POST' })) }
+    catch (caught) { setJobError((caught as Error).message) }
+  }
+
+  return { job, jobError, running, workOpen, setWorkOpen, stored, start, cancel }
 }
 
-// What the agents are doing, including the model's own reasoning. A `reasoning`
-// event is the one thing here written by the model rather than by the pipeline;
-// it is shown as reasoning, never as evidence, and is folded away by default
-// because it runs to thousands of characters per pass.
 function BackgroundWorkDrawer({ job, events, open, onClose, onCancel }: {
   job: AuditJob | null; events: JobEvent[]; open: boolean; onClose: () => void; onCancel: () => void
 }) {
@@ -378,9 +382,8 @@ function BackgroundWorkDrawer({ job, events, open, onClose, onCancel }: {
   </div>
 }
 
-function IdeasPanel({ runs, selectedId, onSelect, onInspectFact, onAudit, audit, busy }: {
+function IdeasPanel({ runs, selectedId, onSelect, onInspectFact }: {
   runs: Run[]; selectedId: string; onSelect: (id: string) => void; onInspectFact: (id: string) => void
-  onAudit: (candidate: Candidate) => void; audit: AuditResult | null; busy: boolean
 }) {
   const [filter, setFilter] = useState<'all' | 'research_more' | 'recommend' | 'blocked_conflict'>('all')
   const allIdeas = runs.flatMap(run => run.candidates.map(candidate => ({ candidate, run })))
@@ -388,15 +391,14 @@ function IdeasPanel({ runs, selectedId, onSelect, onInspectFact, onAudit, audit,
   const ideas = allIdeas.filter(item => (kind === 'games' || Boolean(item.candidate.proposal)) && matchesDecision(item.candidate.decision, filter))
   const active = allIdeas.find(item => item.candidate.id === selectedId)
   return <><div className="filter-row" aria-label="Record type"><button aria-pressed={kind === 'ideas'} onClick={() => setKind('ideas')}>Generated ideas</button><button aria-pressed={kind === 'games'} onClick={() => setKind('games')}>Game dossiers</button></div><IdeaPanelBody active={active} ideas={ideas} filter={filter} setFilter={setFilter}
-    onSelect={onSelect} onInspectFact={onInspectFact} onAudit={onAudit} audit={audit} busy={busy} /></>
+    onSelect={onSelect} onInspectFact={onInspectFact} /></>
 }
 
-function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFact, onAudit, audit, busy }: {
+function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFact }: {
   active: { candidate: Candidate; run: Run } | undefined
   ideas: { candidate: Candidate; run: Run }[]
   filter: string; setFilter: (value: 'all' | 'research_more' | 'recommend' | 'blocked_conflict') => void
   onSelect: (id: string) => void; onInspectFact: (id: string) => void
-  onAudit: (candidate: Candidate) => void; audit: AuditResult | null; busy: boolean
 }) {
   // The audit button used to be unconditional, so a candidate whose gates
   // could never pass returned a blocked audit in two seconds and the brief
@@ -416,18 +418,12 @@ function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFa
   // An audit costs minutes and is already in the ledger. Without this the
   // brief came back empty after a reload, which reads as the audit never
   // having run.
-  const [activityOpen, setActivityOpen] = useState(false)
-  const [stored, setStored] = useState<AuditResult | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    setStored(null)
-    if (!candidateId) return
-    api<AuditResult>(`/api/candidates/${candidateId}/audit`)
-      .then(result => { if (!cancelled) setStored(result) })
-      .catch(() => { if (!cancelled) setStored(null) })
-    return () => { cancelled = true }
-  }, [candidateId, audit])
-  const shown = audit?.candidate_id === candidateId ? audit : stored
+  const { job, jobError, running, workOpen, setWorkOpen, stored, start, cancel } = useAuditJob(candidateId)
+  // The audit is bound to the Hunter proposal when the game has one, and works
+  // from the evidence alone when it does not. The button used to do only the
+  // first and refuse everything else.
+  const operation: ScoutOperation = active?.candidate.proposal_id ? 'audit_idea' : 'analyze_game' 
+  const shown = stored
   const blocking = (readiness?.gates || []).filter(gate => gate.state === 'fail' || gate.state === 'missing')
   const blockedAudit = shown && !shown.proposal ? shown : null
   if (active) {
@@ -435,15 +431,17 @@ function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFa
     const proposal = shown?.proposal || candidate.proposal
     const citedIds = shown?.proposal ? shown.cited_fact_ids : candidate.cited_fact_ids
     const withdrawnIds = shown?.proposal ? shown.withdrawn_fact_ids : candidate.withdrawn_fact_ids
-    return <section className="workspace analyst-brief"><div className="brief-toolbar"><button className="text-button" onClick={() => onSelect('')}>← Back to ideas</button><div><Badge tone={toneFor(candidate.decision)}>{candidate.decision.replaceAll('_', ' ')}</Badge><Badge tone="verified">{candidate.facts.length} verified facts</Badge></div><button className="primary" disabled={busy || blocking.length > 0} onClick={() => onAudit(candidate)} title={blocking.length ? blocking.map(gate => `${gate.label}: ${gate.detail}`).join(' · ') : 'Scout reads the evidence, drafts, critiques its own draft and revises. This takes several minutes.'}>{busy ? 'Scout is deliberating…' : blocking.length ? 'Audit blocked by gates' : 'Run Venture Scout audit'}</button><button className="text-button" onClick={() => setActivityOpen(true)}>Show activity{busy ? ' ●' : ''}</button></div>
-      <AuditActivityDrawer candidateId={candidateId} open={activityOpen} onClose={() => setActivityOpen(false)} />
-      {!busy && shown?.proposal && <div className={`audit-result-banner${shown.unresolved_concerns?.length ? ' incomplete' : ''}`}>
+    return <section className="workspace analyst-brief"><div className="brief-toolbar"><button className="text-button" onClick={() => onSelect('')}>← Back to ideas</button><div><Badge tone={toneFor(candidate.decision)}>{candidate.decision.replaceAll('_', ' ')}</Badge><Badge tone="verified">{candidate.facts.length} verified facts</Badge></div><button className="primary" disabled={running || blocking.length > 0} onClick={() => start(operation, candidate.proposal_id)} title={blocking.length ? blocking.map(gate => `${gate.label}: ${gate.detail}`).join(' · ') : 'Scout reads the evidence, drafts, critiques its own draft and revises. This takes several minutes.'}>{running ? 'Scout is deliberating…' : blocking.length ? 'Audit blocked by gates' : operation === 'audit_idea' ? 'Audit this idea' : 'Analyze this game'}</button><button className="text-button" onClick={() => setWorkOpen(true)}>See what it is doing{running ? ' ●' : ''}</button>{running && <button className="text-button" onClick={cancel}>Cancel</button>}</div>
+      {jobError && <div className="warning-box"><strong>The run could not be started</strong><span>{jobError}</span></div>}
+      <BackgroundWorkDrawer job={job} events={job?.events || []} open={workOpen}
+        onClose={() => setWorkOpen(false)} onCancel={cancel} />
+      {!running && shown?.proposal && <div className={`audit-result-banner${shown.unresolved_concerns?.length ? ' incomplete' : ''}`}>
         <div><strong>{shown.unresolved_concerns?.length ? 'Venture Scout audit incomplete' : 'Venture Scout audit complete'}</strong><span>{shown.proposal.concept_title} · {(shown.cited_fact_ids || []).length} cited fact(s){shown.withdrawn_fact_ids?.length ? `, ${shown.withdrawn_fact_ids.length} withdrawn` : ''}</span></div>
-        <div><a href="#brief-1" onClick={event => { event.preventDefault(); document.getElementById("brief-1")?.scrollIntoView() }}>Read the brief</a>{shown.audit_id && <a href={`/api/audits/${shown.audit_id}`} target="_blank" rel="noreferrer">Audit record</a>}<button type="button" className="text-button" onClick={() => setActivityOpen(true)}>How it ran</button></div>
+        <div><a href="#brief-1" onClick={event => { event.preventDefault(); document.getElementById("brief-1")?.scrollIntoView() }}>Read the brief</a>{shown.audit_id && <a href={`/api/audits/${shown.audit_id}`} target="_blank" rel="noreferrer">Audit record</a>}<button type="button" className="text-button" onClick={() => setWorkOpen(true)}>How it ran</button></div>
       </div>}
-      {busy && <div className="warning-box"><strong>Venture Scout is running</strong><span>Reading the evidence, drafting, critiquing its own draft and revising it. Several minutes on a local model. <button className="text-button" onClick={() => setActivityOpen(true)}>Watch it work</button></span></div>}
+      {running && <div className="warning-box"><strong>Venture Scout is running</strong><span>Reading the evidence, drafting, critiquing its own draft and revising it. Several minutes on a local model. <button className="text-button" onClick={() => setWorkOpen(true)}>Watch it work</button></span></div>}
       {blocking.length > 0 && <div className="warning-box"><strong>Audit cannot run yet</strong>{blocking.map(gate => <p key={gate.label}>{gate.label}: {gate.detail}</p>)}</div>}
-      {!busy && !!shown?.unresolved_concerns?.length && <div className="warning-box">
+      {!running && !!shown?.unresolved_concerns?.length && <div className="warning-box">
         <strong>The audit raised concerns it never answered</strong>
         <span>It criticised its own draft and the revision that should have addressed the critique did not arrive, so this design is the unrevised draft. Treat it as work in progress.</span>
         {shown.unresolved_concerns.map(concern => <p key={concern}>{concern}</p>)}</div>}
@@ -585,18 +583,12 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
   </section>
 }
 
-function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Candidate[]; onAudit: (candidate: Candidate) => void; audit: AuditResult | null; busy: boolean }) {
+function VentureScoutPage({ candidates }: { candidates: Candidate[] }) {
   const [candidateId, setCandidateId] = useState(candidates[0]?.id || '')
   const [operation, setOperation] = useState<ScoutOperation>('analyze_game')
-  const [job, setJob] = useState<AuditJob | null>(null)
-  const [jobError, setJobError] = useState('')
-  const [workOpen, setWorkOpen] = useState(false)
+  const { job, jobError, running, workOpen, setWorkOpen, stored, start, cancel } = useAuditJob(candidateId)
   const [readiness, setReadiness] = useState<AuditReadiness | null>(null)
   const [readinessError, setReadinessError] = useState('')
-  // An audit is written to the ledger, so a reload must bring it back. The Idea
-  // Panel already did this; leaving it out here meant the same result survived
-  // a refresh on one page and disappeared on the other.
-  const [stored, setStored] = useState<AuditResult | null>(null)
   // Only a candidate carrying a selected Meta Hunter proposal can be audited;
   // the rest fail the binding gate before the model is ever called. Default to
   // one that can actually run rather than to whichever loaded first.
@@ -614,54 +606,9 @@ function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Ca
       .catch(caught => { if (!cancelled) setReadinessError((caught as Error).message) })
     return () => { cancelled = true }
   }, [candidateId])
-
-  useEffect(() => {
-    let cancelled = false
-    setStored(null)
-    if (!candidateId) return
-    api<AuditResult>(`/api/candidates/${candidateId}/audit`)
-      .then(result => { if (!cancelled) setStored(result) })
-      .catch(() => { if (!cancelled) setStored(null) })
-    return () => { cancelled = true }
-  }, [candidateId, audit])
-  const shown = audit?.candidate_id === candidateId ? audit : stored
-  const running = Boolean(job && JOB_ACTIVE.includes(job.status))
-
-  // Follow the job rather than holding a request open. Polling, not SSE: this
-  // also recovers a job that was already running when the page loaded, which a
-  // stream opened on submit would miss.
-  useEffect(() => {
-    if (!job || !JOB_ACTIVE.includes(job.status)) return
-    const timer = window.setInterval(async () => {
-      try {
-        const next = await api<AuditJob>(`/api/audit-jobs/${job.id}`)
-        setJob(next)
-        if (!JOB_ACTIVE.includes(next.status)) {
-          // The result lives in the ledger; re-read it rather than trusting
-          // whatever the page happened to be holding.
-          api<AuditResult>(`/api/candidates/${next.candidate_id}/audit`)
-            .then(setStored).catch(() => undefined)
-        }
-      } catch (caught) { setJobError((caught as Error).message) }
-    }, 1200)
-    return () => window.clearInterval(timer)
-  }, [job])
-
-  async function startJob() {
-    if (!candidate) return
-    setJobError(''); setWorkOpen(true)
-    const query = new URLSearchParams({ operation })
-    if (operation === 'audit_idea' && candidate.proposal_id) query.set('proposal_id', candidate.proposal_id)
-    try {
-      setJob(await api<AuditJob>(`/api/candidates/${candidate.id}/audit-jobs?${query}`, { method: 'POST' }))
-    } catch (caught) { setJobError((caught as Error).message) }
-  }
-
-  async function cancelJob() {
-    if (!job) return
-    try { setJob(await api<AuditJob>(`/api/audit-jobs/${job.id}/cancel`, { method: 'POST' })) }
-    catch (caught) { setJobError((caught as Error).message) }
-  }
+  const shown = stored
+  const startJob = () => start(operation, candidate?.proposal_id)
+  const cancelJob = cancel
   return <section className="workspace">
     <BackgroundWorkDrawer job={job} events={job?.events || []} open={workOpen}
       onClose={() => setWorkOpen(false)} onCancel={cancelJob} />
@@ -875,7 +822,6 @@ export default function App() {
   const [sourceDetail, setSourceDetail] = useState<SourceDetail | null>(null)
   const [sourceLoading, setSourceLoading] = useState(false)
   const sourceGeneration = useRef(0)
-  const [audit, setAudit] = useState<AuditResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
@@ -965,13 +911,6 @@ export default function App() {
     finally { if (generation === sourceGeneration.current) setSourceLoading(false) }
   }
 
-  async function runAudit(candidate: Candidate) {
-    setBusy(true); setError(''); setAudit(null)
-    try { setAudit(await api(`/api/candidates/${candidate.id}/audit${candidate.proposal_id ? "?proposal_id=" + candidate.proposal_id : ""}`, { method: 'POST' })) }
-    catch (caught) { setError((caught as Error).message) }
-    finally { setBusy(false) }
-  }
-
   async function reviewMatch(review: MatchingReview, verdict: string, reason: string, candidateId: string | null) {
     setBusy(true); setError(''); setNotice('')
     try {
@@ -997,12 +936,12 @@ export default function App() {
         {error && <div role="alert" className="global-alert"><strong>Request failed safely</strong><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError('')}>×</button></div>}
         {notice && <div className="global-notice"><span>{notice}</span><button aria-label="Dismiss notification" onClick={() => setNotice('')}>×</button></div>}
         {page === 'home' && <CommandCenter summary={summary} timeline={timeline} sources={sources} runs={runs} health={health} calibration={calibration} onSource={openSource} onNavigate={navigate} onCandidate={setSelectedIdea} />}
-        {page === 'ideas' && <IdeasPanel runs={runs} selectedId={selectedIdea} onSelect={setSelectedIdea} onInspectFact={inspectFact} onAudit={runAudit} audit={audit} busy={busy} />}
+        {page === 'ideas' && <IdeasPanel runs={runs} selectedId={selectedIdea} onSelect={setSelectedIdea} onInspectFact={inspectFact} />}
         {page === 'sources' && <SourcesPage sources={sources} onSource={openSource} />}
         {page === 'history' && <AgentHistoryPage onInspectFact={inspectFact} onOpenCandidate={id => setSelectedIdea(id)} />}
         {page === 'matching' && <MatchingEnginePage status={matchingStatus} reviews={matchingReviews} selectedId={selectedMatch} onSelect={setSelectedMatch} onReload={loadMatching} onReview={reviewMatch} busy={busy} />}
         {page === 'meta' && <MetaHunterPage runs={runs} health={health} onStart={startResearch} busy={busy} />}
-        {page === 'scout' && <VentureScoutPage candidates={candidates} onAudit={runAudit} audit={audit} busy={busy} />}
+        {page === 'scout' && <VentureScoutPage candidates={candidates} />}
         {page === 'calibration' && <CalibrationPage calibration={calibration} summary={summary} />}
         {page === 'health' && <HealthPage health={health} summary={summary} matching={matchingStatus} />}
       </main>

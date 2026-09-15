@@ -121,3 +121,44 @@ test.describe('background work', () => {
     await expect(page.locator('.drawer-scrim.open')).toHaveCount(0)
   })
 })
+
+test.describe('idea panel runs the same way', () => {
+  test('a brief starts a durable job and can be watched and cancelled', async ({ page }) => {
+    test.setTimeout(120_000)
+    await page.goto('/#/ideas')
+    await page.locator('.filter-row').first().waitFor()
+    const toggle = page.getByRole('button', { name: /Game dossiers|Games/i })
+    if (await toggle.count()) await toggle.first().click()
+    await page.locator('.ideas-list button').first().waitFor()
+    await page.locator('.ideas-list button').first().click()
+
+    // The label reflects which operation this game supports.
+    const action = page.getByRole('button', { name: /Audit this idea|Analyze this game/ })
+    await expect(action).toBeVisible()
+    await action.click()
+
+    const drawer = page.locator('aside[aria-label="Background work"]')
+    await expect(drawer).toBeVisible()
+    await expect(drawer.locator('header')).toContainText(/queued|running/)
+    await drawer.getByRole('button', { name: 'Cancel run' }).click()
+    await expect(drawer.locator('header')).toContainText(/cancelled/i, { timeout: 30_000 })
+  })
+
+  test('both pages share one drawer implementation', async ({ page }) => {
+    // Two drawers meant two behaviours; the candidate-keyed one did not
+    // survive a restart, and only one of them could cancel.
+    for (const route of ['/#/scout', '/#/ideas']) {
+      await page.goto(route)
+      if (route === '/#/ideas') {
+        await page.locator('.filter-row').first().waitFor()
+        const toggle = page.getByRole('button', { name: /Game dossiers|Games/i })
+        if (await toggle.count()) await toggle.first().click()
+        await page.locator('.ideas-list button').first().waitFor()
+        await page.locator('.ideas-list button').first().click()
+      }
+      await page.getByRole('button', { name: /See what it is doing/ }).click()
+      await expect(page.locator('aside[aria-label="Background work"]')).toBeVisible()
+      await page.keyboard.press('Escape')
+    }
+  })
+})

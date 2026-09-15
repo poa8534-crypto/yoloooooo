@@ -11,7 +11,7 @@ Automated coverage behind this table:
 | --- | --- | --- |
 | `pytest` | 410 | API behaviour, evidence rules, agent guarantees |
 | `vitest` | 8 | Routing helpers, run phases and the evidence drawer component |
-| `playwright` | 168 | Real browser, three viewports, including actions that change data |
+| `playwright` | 174 | Real browser, three viewports, including actions that change data |
 
 Browser tests run against an isolated ledger created by
 `scripts/e2e_fixture.py`: a temporary database and artifact directory, a stub
@@ -54,7 +54,8 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 | Fact button | Opens that exact claim | passed | `interactions.spec.ts` |
 | Brief disclosures | Open and close, including by keyboard | passed | `responsive.spec.ts` |
 | Brief section anchors | Jump without losing the route | not tested | — |
-| Run Venture Scout audit | Runs, stores, restores | passed | `mutations.spec.ts` |
+| Run Venture Scout audit | Starts a durable job; label matches the operation | passed | `mutations.spec.ts` |
+| Watch and cancel from a brief | Same drawer and job as the Scout page | passed | `mutations.spec.ts` |
 
 ## Sources
 
