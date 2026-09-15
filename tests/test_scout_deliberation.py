@@ -941,3 +941,18 @@ async def test_two_pass_deliberation_still_carries_the_unanswered_critique(setti
     assert generated.payload.concept_title == "Draft only"
     assert generated.revision_applied is False, "no revision ran, yet one was reported"
     assert generated.critique == critique, "the critique was discarded"
+
+
+def test_a_sequel_numeral_in_another_games_name_is_still_refused():
+    """A known, accepted cost of the whitelist.
+
+    The rule cannot tell a sequel number in "Toilet World Roleplay 2" from a
+    count, and special-casing capitalised names would reopen the hole the
+    whitelist closed. The prompt tells the model to drop the numeral instead,
+    so this is a retry, not a dead end.
+    """
+    from app.schemas import contains_unsupported_measurement
+
+    assert contains_unsupported_measurement("social roleplay (Toilet World Roleplay 2)")
+    assert not contains_unsupported_measurement("social roleplay (Toilet World Roleplay)")
+    assert not contains_unsupported_measurement("its sequel focuses on roleplay")

@@ -128,3 +128,23 @@ def test_discovery_does_not_repeat_the_same_query_every_round(round_index):
     chosen = [plan[0]["query"] for plan in plans]
     assert len(set(chosen)) > 1, chosen
     assert plans[round_index][0]["query"] in QUERIES
+
+
+def test_the_round_plan_reaches_the_report(session_factory, settings):
+    """A plan the run cannot show is not auditable. It was saved to the
+    checkpoint but dropped by `progress`, so nothing outside the database
+    could see why a round did what it did.
+    """
+    from app.models import ResearchRun
+    from app.research_budget import RunBudget, progress
+    from tests.test_deep_research import seed
+
+    run_id, *_ = seed(session_factory)
+    budget = RunBudget(session_factory, run_id)
+    chosen = [{"kind": "youtube", "candidate_id": "c1", "display_name": "Alpha", "question": "creators"}]
+    budget.save(plan=chosen)
+
+    with session_factory() as db:
+        reported = progress(db, db.get(ResearchRun, run_id))
+
+    assert reported["plan"] == chosen, "the round's choices never left the checkpoint"

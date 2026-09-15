@@ -173,7 +173,10 @@ class OllamaProposalClient:
                    " such as 'Day 1', 'Step 2' or 'Phase 3'; and a genre token such as '2D'"
                    " or '1v1'. Every other number must be written in words ('three zones',"
                    " 'two players') or placed in design_assumptions. Not '3 days', not"
-                   " '15 minutes', not '72-hour', not '80 daily sessions', not 'Phase 2 of 3'.")
+                   " '15 minutes', not '72-hour', not '80 daily sessions', not 'Phase 2 of 3'."
+                   " This applies to other games' names too: write 'Toilet World Roleplay' or"
+                   " 'its sequel', never 'Toilet World Roleplay 2'. A captured name belongs in"
+                   " the evidence, not in your prose.")
         # The packet carries the IDs, but nothing previously asked the model to
         # cite them, so concepts came back with an empty supporting_fact_ids
         # and no link to the evidence they were drawn from.

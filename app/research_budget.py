@@ -43,6 +43,10 @@ def progress(db, run):
             "stop_reason": state.get("stop_reason"), "round": state.get("round", 0),
             "errors": state.get("errors", []), "abstentions": state.get("abstentions", []),
             "budget_stops": state.get("budget_stops", []),
+            # What this round chose to capture and which open question each
+            # capture was meant to answer. Recorded so a round's choices can
+            # be read back rather than inferred from a slice index.
+            "plan": state.get("plan", []),
             "evidence_additions": state.get("evidence_additions", 0)}
 
 
