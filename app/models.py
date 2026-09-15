@@ -89,6 +89,38 @@ class AuditRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ScoutAuditRun(Base):
+    """Tracks the lifecycle of an in-flight Venture Scout audit.
+
+    Like ResearchRun, this is a mutable state tracker that moves from
+    running -> complete, blocked, or interrupted across service restarts.
+    """
+    __tablename__ = "scout_audit_runs"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    candidate_id: Mapped[str] = mapped_column(ForeignKey("candidates.id"), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="running", index=True)
+    message: Mapped[str] = mapped_column(Text, default="Venture Scout audit requested")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AuditActivityEvent(Base):
+    """One immutable milestone or gate result emitted during a Scout audit.
+
+    Append-only: this forms the durable forensic trail for live activity
+    and replaying past audits. It carries descriptions of work, never model output.
+    """
+    __tablename__ = "audit_activity_events"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    candidate_id: Mapped[str] = mapped_column(ForeignKey("candidates.id"), index=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True)
+    sequence: Mapped[int] = mapped_column(Integer, index=True)
+    stage: Mapped[str] = mapped_column(String(64), index=True)
+    detail: Mapped[str] = mapped_column(Text, default="")
+    extra_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class TrackedVideo(Base):
     __tablename__ = "tracked_videos"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
@@ -414,7 +446,7 @@ class AssociationOverride(Base):
 
 
 APPEND_ONLY = (
-    ResearchReport, AuditRecord,
+    ResearchReport, AuditRecord, AuditActivityEvent,
     SourceArtifact, Observation, Fact, Proposal, Inference,
     ScoreRecord, ConfidenceRecord, DecisionRecord, DecisionOverride,
     AssociationRecord, AssociationReview, AssociationOverride, MatcherVersion,
