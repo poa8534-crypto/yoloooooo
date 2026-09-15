@@ -15,9 +15,8 @@ from .association.normalize import word_tokens
 from .association.subjects import SUBJECT_WEB_PAGE
 from .connectors import (
     ConnectorError,
-    extract_roblox_place_ids,
-    extract_roblox_universe_ids,
 )
+from .discovery_rank import leads_from_search, niche_relevance_rank, select_diverse
 from .evidence import (
     accept_web_claim,
     add_json_observation,
@@ -157,6 +156,36 @@ def plan_round(questions, contexts, queries, round_index, per_round=3):
     return actions[:per_round]
 
 
+def remaining_universe_slots(state, contexts):
+    """Never search for games that the run cannot inspect anymore."""
+    limit = state["limits"]["universes"]
+    return max(0, min(limit - len(contexts), limit - state.get("usage", {}).get("universes", 0)))
+
+
+def select_concept_dossiers(dossiers, contexts, niche, limit=3):
+    """Do not draft niche concepts from high-CCU but unrelated games.
+
+    This prioritizes source-backed names and descriptions. It does not decide
+    that a game fits the niche; those dossier labels remain provisional.
+    """
+    by_id = {context.candidate_id: context for context in contexts}
+
+    def relevance(dossier):
+        context = by_id.get(dossier["candidate_id"])
+        return (niche_relevance_rank(context.display_name, context.description, niche)
+                if context is not None else -1)
+
+    def demand(dossier):
+        for fact in dossier["facts"]:
+            if fact["template_id"] == "roblox_playing":
+                return float(fact["slots"][0]["value"])
+        return -1
+
+    eligible = [dossier for dossier in dossiers if relevance(dossier) > 0]
+    return sorted(eligible, key=lambda dossier: (-relevance(dossier), -demand(dossier),
+                                                  dossier["universe_id"]))[:limit]
+
+
 class DeepResearch:
     def __init__(self, orchestrator, run_id):
         self.o, self.factory, self.run_id = orchestrator, orchestrator.session_factory, run_id
@@ -187,14 +216,20 @@ class DeepResearch:
         the third-party API answer with pages to resolve. Each is optional, and
         the run continues on whatever answered.
         """
-        universes: list[str] = []
-        places: list[str] = []
+        # Roblox's native search understands game terms, not web `site:`
+        # operators. Web engines receive the restriction to avoid unrelated
+        # search pages; source queries remain part of the captured artifact.
+        native_query = re.sub(r"(?i)\bsite:roblox\.com/games\b", "", query).strip()
+        web_query = query if "site:" in query.casefold() else f"site:roblox.com/games {query}"
+        leads_by_source = {}
+        diagnostics = []
         answered = 0
         for method, owner in (("roblox_search", "roblox.com"),
                               ("searxng_search", "searxng.local"),
                               ("tavily_search", "tavily.com")):
+            source_query = native_query if method == "roblox_search" else web_query
             try:
-                result = await self.b.call(self.o.connectors, method, query)
+                result = await self.b.call(self.o.connectors, method, source_query)
             except BudgetExceeded:
                 raise
             except Exception as exc:
@@ -205,16 +240,22 @@ class DeepResearch:
                 continue
             answered += 1
             with self.factory() as db:
-                self.capture(db, result, f"{method}:{query}", "discovery", owner)
+                self.capture(db, result, f"{method}:{source_query}", "discovery", owner)
                 db.commit()
-            if method == "roblox_search":
-                universes += extract_roblox_universe_ids(result.payload)
-            else:
-                places += extract_roblox_place_ids(result.payload)
-        self.b.save()
+            leads = leads_from_search(result.payload, method, self.niche, native_query)
+            leads_by_source[method] = leads
+            diagnostics.append({"source": method, "query": source_query,
+                                "usable_leads": len(leads),
+                                "engine_errors": len(result.payload.get("unresponsive_engines", []) or [])})
         if not answered:
             raise ConnectorError("no discovery source answered")
-        return list(dict.fromkeys(universes))[:30], list(dict.fromkeys(places))[:30]
+        slots = remaining_universe_slots(self.b.state, self.contexts)
+        selected = select_diverse(leads_by_source, slots)
+        for entry in diagnostics:
+            entry["selected_leads"] = sum(lead.source == entry["source"] for lead in selected)
+        self.b.save(discovery_sources=self.b.state.get("discovery_sources", []) + diagnostics)
+        return ([lead.entity_id for lead in selected if lead.kind == "universe"],
+                [lead.entity_id for lead in selected if lead.kind == "place"])
 
     async def discover(self, query):
         direct, places = await self.search_sources(query)
@@ -360,8 +401,11 @@ class DeepResearch:
                 return "finalization_reserve"
             # Every capture this round exists to answer something still open.
             plan = plan_round(questions, self.contexts, queries, round_index)
+            if not remaining_universe_slots(self.b.state, self.contexts):
+                plan = [action for action in plan if action["kind"] != "discover"]
             if not plan:
-                return "all_questions_answered"
+                return ("candidate_inspection_limit" if not remaining_universe_slots(self.b.state, self.contexts)
+                        else "all_questions_answered")
             self.b.save(stage=f"Investigating round {round_index + 1}", plan=plan)
             for action in plan:
                 if self.b.remaining <= 180:
@@ -397,12 +441,10 @@ class DeepResearch:
     async def concepts_and_audits(self):
         self.b.save(stage="Comparing evidence and drafting research concepts")
         dossiers = self.dossiers()
-        def demand(dossier):
-            for fact in dossier["facts"]:
-                if fact["template_id"] == "roblox_playing":
-                    return float(fact["slots"][0]["value"])
-            return -1
-        chosen = sorted(dossiers, key=lambda d: (-demand(d), d["universe_id"]))[:3]
+        chosen = select_concept_dossiers(dossiers, self.contexts, self.niche)
+        if not chosen:
+            self.b.abstain("hunter", "no inspected game has a source-backed title or description matching the niche; no concept drafted")
+            return
         # Bounded packet fits local context; descriptions are already untrusted.
         comparison = [{"candidate_id": d["candidate_id"], "facts": d["facts"], "niche_relevance": d["niche_relevance"]} for d in chosen]
         gaps = [q["limitation"] for q in self.b.state["questions"] if q["state"] != "answered"]
@@ -463,13 +505,19 @@ class DeepResearch:
         with self.factory() as db:
             run = db.get(ResearchRun, self.run_id)
             run.status = "partial" if partial else "complete"
-            run.message = "Research concepts only; niche relevance remains provisional and scoring is locked."
             run.completed_at = datetime.now(UTC)
             proposals = list(db.scalars(select(Proposal).join(Candidate).where(Candidate.run_id == self.run_id, Proposal.agent == "meta_hunter")))
+            # A run that declined to draft anything said so in one line the run
+            # list never showed: every finished run carried the same sentence,
+            # so abstaining and producing three concepts looked identical until
+            # the report was opened.
+            run.message = ("Research concepts only; niche relevance remains provisional and scoring is locked."
+                           if proposals else
+                           "No concepts drafted; no inspected game matched the niche by its own Roblox name or description.")
             audits = list(db.scalars(select(AuditRecord).join(Candidate).where(Candidate.run_id == self.run_id)))
             payload = {"version": "deep-report-v1", "run_id": self.run_id, "niche": self.niche,
                        "progress": progress(db, run), "questions": questions, "comparison": dossiers,
-                       "selection_rule": "Up to three captured candidates by current source-reported CCU; not an opportunity score or validated niche ranking.",
+                       "selection_rule": "Up to three concepts from inspected games with niche-related Roblox names or descriptions, ordered by deterministic retrieval relevance then current CCU. This is not a validated niche match, opportunity score, or recommendation.",
                        "concepts": [{"id": p.id, "candidate_id": p.candidate_id, "classification": "speculative_research_concept", "payload": p.payload} for p in proposals],
                        "audits": [{"audit_id": a.id, **a.payload} for a in audits],
                        "limitations": [q["limitation"] for q in questions], "passing_recommendations": [],

@@ -28,22 +28,34 @@ def test_a_search_response_with_no_games_yields_nothing():
     assert extract_roblox_place_ids({"results": [{"url": "https://example.com/x"}]}) == []
 
 
+def test_only_actual_roblox_hosts_can_supply_game_place_ids():
+    from app.connectors import roblox_place_id_from_url
+
+    for url in ("https://evilroblox.com/games/123/Farm",
+                "https://roblox.com.evil.example/games/123/Farm",
+                "https://search.example/?next=https://www.roblox.com/games/123/Farm"):
+        assert roblox_place_id_from_url(url) is None
+    assert roblox_place_id_from_url("https://www.roblox.com/en-us/games/123/Farm") == "123"
+
+
 class Sources:
     """Connectors where each source can be made to fail independently."""
 
     def __init__(self, working=("roblox_search", "searxng_search", "tavily_search")):
         self.working = set(working)
         self.asked: list[str] = []
+        self.queries: dict[str, str] = {}
 
     async def _answer(self, name, query):
         self.asked.append(name)
+        self.queries[name] = query
         if name not in self.working:
             raise RuntimeError(f"{name} unavailable")
         if name == "roblox_search":
             return ConnectorResult("https://apis.roblox.com/search-api/omni-search",
                                    {"searchResults": [{"contents": [{"universeId": 77}]}]})
         return ConnectorResult(f"https://{name}/search",
-                               {"results": [{"url": "https://www.roblox.com/games/123/Test"}]})
+                               {"results": [{"url": "https://www.roblox.com/games/123/Cozy-Farming"}]})
 
     async def roblox_search(self, query): return await self._answer("roblox_search", query)
     async def searxng_search(self, query): return await self._answer("searxng_search", query)
@@ -73,6 +85,17 @@ async def test_every_configured_source_is_asked(run_state):
     assert sources.asked == ["roblox_search", "searxng_search", "tavily_search"]
     assert universes == ["77"]
     assert places == ["123"]
+    assert sources.queries["roblox_search"] == "cozy farming"
+    assert sources.queries["searxng_search"] == "site:roblox.com/games cozy farming"
+    assert sources.queries["tavily_search"] == sources.queries["searxng_search"]
+
+
+@pytest.mark.asyncio
+async def test_web_site_operator_is_not_sent_to_native_roblox_search(run_state):
+    sources = Sources()
+    await run_state(sources).search_sources("site:roblox.com/games cozy farming")
+    assert sources.queries["roblox_search"] == "cozy farming"
+    assert sources.queries["searxng_search"] == "site:roblox.com/games cozy farming"
 
 
 @pytest.mark.asyncio
@@ -106,6 +129,29 @@ async def test_a_local_source_alone_is_enough(run_state):
     deep = run_state(sources)
     universes, places = await deep.search_sources("cozy farming")
     assert places == ["123"] and universes == []
+
+
+@pytest.mark.asyncio
+async def test_filled_inspection_budget_stops_further_discovery(run_state):
+    from types import SimpleNamespace
+
+    sources = Sources()
+    deep = run_state(sources)
+    deep.contexts = [SimpleNamespace(candidate_id="one", display_name="Cozy Farm", video_ids=[])]
+    deep.b.state["limits"]["universes"] = 1
+    deep.b.state["search_queries"] = ["site:roblox.com/games farming"]
+    deep.b.state["questions"] = [{"id": "relevance", "state": "open"}]
+    assert await deep.investigate() == "candidate_inspection_limit"
+    assert sources.asked == [], "no connector search can add a game after the limit"
+
+
+def test_reserved_universe_budget_also_closes_discovery():
+    from app.deep_research import remaining_universe_slots
+
+    assert remaining_universe_slots({"limits": {"universes": 30},
+                                     "usage": {"universes": 30}}, []) == 0
+    assert remaining_universe_slots({"limits": {"universes": 30},
+                                     "usage": {"universes": 5}}, [object()]) == 25
 
 
 # --- Analyze game is about the game -----------------------------------------

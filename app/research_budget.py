@@ -50,6 +50,10 @@ def progress(db, run):
             # The searches this run decided to make, planned once at the
             # start, so a reader can see what it actually looked for.
             "search_queries": state.get("search_queries", []),
+            # What each source returned per round, and how much of it survived
+            # ranking. A source that answered and yielded nothing usable looks
+            # identical to a source that was never asked unless this is shown.
+            "discovery_sources": state.get("discovery_sources", []),
             "evidence_additions": state.get("evidence_additions", 0)}
 
 

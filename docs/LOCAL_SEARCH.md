@@ -70,6 +70,33 @@ Nothing breaks. The source is recorded as unavailable for that round and
 discovery continues on Roblox's own search. The Health page reports the local
 instance separately from the others, with when it was last observed.
 
+## Ranking leads before spending the budget
+
+A search can answer with forty titles and a run can inspect thirty games. The
+order matters, so leads are ranked by how far the niche's words reach into the
+title and the description before any are inspected.
+
+Three rules keep the ranker from becoming a second, unaudited filter:
+
+* **A source that answered is never emptied.** If nothing matches the niche,
+  every lead is kept at the lowest rank instead of being dropped. "toilet
+  simulator" is answered with "Skibidi Battle" and "Bathroom Escape Obby",
+  neither of which contains either word; dropping unmatched leads meant a run
+  where every source answered, nothing failed, and no candidate was found.
+* **A lead with no title or description is kept, not judged.** Absent metadata
+  is not evidence of irrelevance.
+* **Sources take turns.** One large native answer cannot consume the whole
+  inspection budget before web results are considered.
+
+Ranking decides order, never truth. A lead is a nomination: the game is still
+captured from Roblox's own API and every measurement still goes through the
+association pipeline. Nothing a search engine says about a game becomes a fact.
+
+The per-source counts -- searches made, leads kept, leads used, and how many
+upstream engines failed -- are recorded per round and shown on the Meta Hunter
+page, so a source that answered with nothing usable does not look the same as
+a source that was never asked.
+
 ## Engine availability is the whole game
 
 `site:roblox.com/games <terms>` is the right query form. Measured on one query

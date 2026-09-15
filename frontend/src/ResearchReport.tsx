@@ -35,6 +35,19 @@ export function DesignDetails({ design, facts, onInspect }: { design: Design; fa
   </div>
 }
 
+// Why the run stopped, in words. The identifier alone tells a reader nothing
+// about whether to trust the result: "round_limit" and "all_questions_answered"
+// look equally final and mean opposite things. The identifier stays visible
+// next to the sentence so a report can still be matched against the code.
+const STOP_REASONS: Record<string, string> = {
+  all_questions_answered: 'every research question was answered.',
+  candidate_inspection_limit: 'the cap on how many games one run may inspect was reached, so discovery stopped looking for more.',
+  no_new_admissible_evidence_two_rounds: 'two rounds running added no admissible evidence, so the run stopped rather than repeat itself.',
+  round_limit: 'the configured number of rounds ran out with questions still open.',
+  finalization_reserve: 'time ran short and the rest of the budget was held back to write this report.',
+  service_shutdown: 'the service stopped mid-run. This run was interrupted, not finished.',
+}
+
 function HistoryTable({ data }: { data: History }) {
   return <div><p>{data.status.replaceAll('_', ' ')}. Daily captures are not interpolated.</p>
     {data.trend && <p>Preliminary seven-day CCU difference: {data.trend.value}. Not a growth forecast.</p>}
@@ -72,7 +85,9 @@ export function ResearchReport({ runId, status }: { runId: string; status: strin
   }, [runId, status])
   if (!report) return <article className="data-panel"><h2>Research report</h2><p>{error || 'Report will appear when the bounded investigation finishes.'}</p></article>
   return <article className="data-panel"><div className="panel-heading"><div><span>Persisted investigation</span><h2>Evidence-backed research report</h2></div><span className="evidence-badge insufficient">Research only</span></div>
-    <p>{report.selection_rule}</p><p>Elapsed: {Math.round(report.progress.elapsed_seconds)} seconds · Stop: {report.progress.stop_reason}</p>
+    <p>{report.selection_rule}</p>
+    <p>Elapsed: {Math.round(report.progress.elapsed_seconds)} seconds · Stop: {STOP_REASONS[report.progress.stop_reason] ?? report.progress.stop_reason}
+      {!!STOP_REASONS[report.progress.stop_reason] && <small><code>{report.progress.stop_reason}</code></small>}</p>
     <details><summary>API and model attempt usage</summary><ul>{Object.entries(report.api_usage).map(([key, value]) => <li key={key}>{key}: {value}</li>)}</ul><p>{report.quota_note}</p></details>
     {!!report.progress.errors?.length && <div className="warning-box"><strong>Incomplete steps</strong>{report.progress.errors.map((e, i) => <p key={i}>{e.stage}: {e.error}</p>)}</div>}
     {/* A configured cap stopping further work is the budget holding, not a failure. */}
@@ -90,6 +105,14 @@ export function ResearchReport({ runId, status }: { runId: string; status: strin
       return <details key={c.id}><summary>{c.payload.concept_title} · speculative research concept</summary><p>{c.payload.core_loop}</p><p>{c.payload.differentiator}</p><DesignDetails design={c.payload} />
         {audit ? <div><h3>Venture Scout — {audit.evidence_state.replaceAll('_', ' ')}</h3><a href={`/api/audits/${audit.audit_id}`} target="_blank" rel="noreferrer">Persistent audit record</a>{audit.proposal && <><p>{audit.proposal.core_loop}</p><ol>{audit.proposal.build_steps.map((s, i) => <li key={i}>{s}</li>)}</ol><DesignDetails design={audit.proposal} /></>}<ul>{audit.risks.map((risk, i) => <li key={i}>{risk}</li>)}</ul></div> : <p>Audit not produced within evidence/model budget.</p>}
       </details>
-    }) : <p>No valid concepts produced. This is an allowed abstention; inspect limitations and errors.</p>}
+    }) : (() => {
+      // Drafting nothing is now a decision with a stated reason, not just an
+      // absence. Making the reader open a fold to find out why is how the
+      // generic version of this message wasted their time.
+      const declined = report.abstentions?.find(a => a.stage === 'hunter')
+      return <div className="warning-box"><strong>No concepts drafted</strong>
+        <p>{declined ? declined.reason : 'No valid concepts were produced.'}</p>
+        <small>This is an allowed abstention, not a failure. Inspect the limitations and errors above.</small></div>
+    })()}
   </article>
 }

@@ -21,10 +21,27 @@ interface AuditResult {
   unresolved_concerns?: string[]; revision_applied?: boolean
 }
 
+// One source, one round. Recorded per search so that "answered but returned
+// nothing we could use" stays distinguishable from "never asked".
+type DiscoveryDiagnostic = { source: string; query: string; usable_leads: number; selected_leads?: number; engine_errors?: number }
+
+function discoveryTotals(rows: DiscoveryDiagnostic[] = []) {
+  const totals: Record<string, { found: number; used: number; engineErrors: number; rounds: number }> = {}
+  for (const row of rows) {
+    const entry = totals[row.source] || { found: 0, used: 0, engineErrors: 0, rounds: 0 }
+    entry.found += row.usable_leads ?? 0
+    entry.used += row.selected_leads ?? 0
+    entry.engineErrors += row.engine_errors ?? 0
+    entry.rounds += 1
+    totals[row.source] = entry
+  }
+  return totals
+}
+
 type Run = {
   id: string; niche: string; status: string; message: string; created_at: string; completed_at: string | null
   candidates: Candidate[]; passing_results: Candidate[]
-  progress?: { stage: string; elapsed_seconds: number; remaining_seconds: number; usage: Record<string, number>; stop_reason?: string; round?: number; search_queries?: string[]; questions: Array<{ id: string; question: string; state: string }> }
+  progress?: { stage: string; elapsed_seconds: number; remaining_seconds: number; usage: Record<string, number>; stop_reason?: string; round?: number; search_queries?: string[]; discovery_sources?: DiscoveryDiagnostic[]; questions: Array<{ id: string; question: string; state: string }> }
 }
 type Calibration = {
   phase: string; complete_clusters: number; required_clusters: number; scoring_active: boolean
@@ -593,10 +610,18 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
     <article className="data-panel"><div className="panel-heading"><div><span>Append-only run records</span><h2>Run history</h2></div></div>{runs.length ? <div className="table-scroll"><table><thead><tr><th>Niche</th><th>Status</th><th>Started</th><th>Candidates</th><th>Result</th></tr></thead><tbody>{runs.map(run => <tr key={run.id}><td><strong>{run.niche}</strong><small><code>{run.id}</code></small></td><td><Badge tone={toneFor(run.status)}>{run.status}</Badge></td><td>{formatDate(run.created_at)}</td><td className="numeric">{run.candidates.length}</td><td>{run.message}</td></tr>)}</tbody></table></div> : <EmptyState title="No Meta Hunter runs">Submit the first niche above when you are ready to collect evidence.</EmptyState>}</article>
     {latest?.progress && <article className="data-panel"><div className="panel-heading"><div><span>Where the games came from</span><h2>Discovery sources</h2></div></div>
       <p className="body-copy">Every source is asked and the run keeps whatever answers. One being unavailable is recorded as an abstention, not a failure.</p>
-      <div className="table-scroll"><table><thead><tr><th>Source</th><th>Searches made</th><th>Needs a key</th></tr></thead><tbody>
-        {([['Roblox search', 'roblox_search', false], ['Local search (SearxNG)', 'searxng_search', false], ['Tavily', 'tavily_search', true]] as const).map(([label, key, keyed]) =>
-          <tr key={key}><td>{label}</td><td className="numeric">{latest.progress?.usage[key] ?? 0}</td><td>{keyed ? 'yes' : 'no'}</td></tr>)}
-      </tbody></table></div>
+      {(() => { const totals = discoveryTotals(latest.progress?.discovery_sources)
+        return <div className="table-scroll"><table><thead><tr><th>Source</th><th>Search attempts</th><th>Ranked leads per query</th><th>Selected leads</th><th>Needs a key</th></tr></thead><tbody>
+        {([['Roblox search', 'roblox_search', false], ['Local search (SearxNG)', 'searxng_search', false], ['Tavily', 'tavily_search', true]] as const).map(([label, key, keyed]) => {
+          const searches = latest.progress?.usage[key] ?? 0, seen = totals[key]
+          return <tr key={key}><td>{label}{!!seen?.engineErrors && <small>{seen.engineErrors} upstream engine failures across searches</small>}</td>
+            <td className="numeric">{searches}</td>
+            {/* Answered but nothing survived ranking is a real outcome and must not read as "never asked". */}
+            <td className="numeric">{seen ? seen.found : (searches ? '—' : 0)}</td>
+            <td className="numeric">{seen ? seen.used : (searches ? '—' : 0)}</td>
+            <td>{keyed ? 'yes' : 'no'}</td></tr>
+        })}
+      </tbody></table></div> })()}
       {!!latest.progress?.search_queries?.length && <details className="brief-fold"><summary>Planned searches<span>{latest.progress.search_queries.length}</span></summary>
         <p>Written from your niche by the query planner, then reused every round.</p>
         <ul>{latest.progress!.search_queries!.map(q => <li key={q}><code>{q}</code></li>)}</ul></details>}

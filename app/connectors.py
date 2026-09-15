@@ -17,7 +17,7 @@ from .config import Settings, get_settings
 from . import dependency_health, search_cache
 from .security import sanitize_url
 
-ROBLOX_PLACE_RE = re.compile(r"roblox\.com/(?:[a-z]{2}/)?games/(\d+)", re.IGNORECASE)
+ROBLOX_PLACE_PATH_RE = re.compile(r"^/(?:[a-z]{2}(?:-[a-z]{2})?/)?games/(\d+)(?:/|$)", re.IGNORECASE)
 
 MAX_CAPTURE_REDIRECTS = 3
 
@@ -274,12 +274,25 @@ class Connectors:
         raise ConnectorError("too many redirects while capturing the page")
 
 
+def roblox_place_id_from_url(url: str) -> str | None:
+    """Accept a game link only when Roblox owns the URL's actual hostname."""
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").casefold()
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or not (host == "roblox.com" or host.endswith(".roblox.com")):
+        return None
+    match = ROBLOX_PLACE_PATH_RE.match(parsed.path)
+    return match.group(1) if match else None
+
+
 def extract_roblox_place_ids(search_payload: dict[str, Any]) -> list[str]:
     ids: list[str] = []
     for result in search_payload.get("results", []):
         url = str(result.get("url", ""))
-        if match := ROBLOX_PLACE_RE.search(url):
-            ids.append(match.group(1))
+        if place_id := roblox_place_id_from_url(url):
+            ids.append(place_id)
     return list(dict.fromkeys(ids))
 
 
