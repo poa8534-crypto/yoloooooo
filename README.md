@@ -165,6 +165,13 @@ requests. A request whose outcome was never observed is *not* replayed
 automatically — it is refused, because silently re-sending it would spend quota
 twice.
 
+Reaching one of those caps is the budget working, not a failure. Planned
+refusals — a limit, a local quota allowance, the deadline — are recorded under
+`budget_stops` and shown in the report as *Budget caps reached*; they do not
+mark the run `partial`. Only a genuine failure does, including the refusal to
+replay a request whose outcome was never observed, which means the run's own
+bookkeeping is in an unexpected state.
+
 Thirty minutes is a maximum, not a promise of depth or completion. A longer run
 is not a better one.
 

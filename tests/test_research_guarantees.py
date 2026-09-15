@@ -6,6 +6,7 @@ deleted, the suite stayed green, and the claim turned out to be unprotected.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -401,3 +402,74 @@ async def test_a_primary_page_claim_carries_an_association(session_factory, sett
             assert is_association_usable(db, record)
             assert record.outcome == "auto_associate"
             assert "exact_verified_id_evidence" in record.rationale_codes
+
+
+# --- 11. A configured cap is not a failure ---------------------------------
+
+
+def test_reaching_a_configured_cap_is_not_recorded_as_an_error(session_factory, settings):
+    """A run that spends its whole discovery budget behaved as specified.
+
+    `partial` is derived from `errors`, so filing a planned cap there marked a
+    correct run as degraded. The cap must still be recorded — just not as a
+    failure.
+    """
+    run_id, *_ = seed(session_factory)
+    budget = RunBudget(session_factory, run_id)
+    budget.state["limits"]["universes"] = 1
+    budget.save()
+    budget.reserve("universes")
+    with pytest.raises(BudgetExceeded) as caught:
+        budget.reserve("universes")
+    budget.error("discovery", caught.value)
+
+    assert budget.state["errors"] == [], "a configured cap was reported as an error"
+    stops = budget.state["budget_stops"]
+    assert [entry["stage"] for entry in stops] == ["discovery"]
+    assert "universes_limit" in stops[0]["error"], "the cap that stopped work must stay visible"
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_to_replay_an_unknown_request_still_counts_as_an_error(
+    session_factory, settings
+):
+    """Positive control: not every BudgetExceeded is a planned cap.
+
+    Declining to replay a request whose outcome was never recorded means the
+    run's bookkeeping is in an unexpected state. Routing every BudgetExceeded
+    to `budget_stops` would silence that, so this asserts the opposite case.
+    """
+    run_id, *_ = seed(session_factory)
+    budget = RunBudget(session_factory, run_id)
+    key = hashlib.sha256(json.dumps(["tavily_search", "x"], sort_keys=True).encode()).hexdigest()
+    budget.state["requests"][key] = {"status": "interrupted", "method": "tavily_search"}
+    budget.save()
+
+    with pytest.raises(BudgetExceeded) as caught:
+        await budget.call(FakeConnectors(), "tavily_search", "x")
+    budget.error("resume", caught.value)
+
+    assert budget.state["budget_stops"] == [], "an unknown-outcome refusal is not a planned cap"
+    assert [entry["stage"] for entry in budget.state["errors"]] == ["resume"]
+
+
+def test_a_run_that_only_hit_caps_is_not_reported_as_partial(session_factory, settings):
+    """The flag the report shows users, end to end."""
+    from app.models import ResearchRun
+    from app.research_budget import progress
+
+    run_id, *_ = seed(session_factory)
+    budget = RunBudget(session_factory, run_id)
+    budget.state["limits"]["videos"] = 0
+    budget.save()
+    with pytest.raises(BudgetExceeded) as caught:
+        budget.reserve("videos")
+    budget.error("discovery", caught.value)
+
+    # This is the expression the controller uses to decide `partial`.
+    assert not bool(budget.state["errors"])
+
+    with session_factory() as db:
+        reported = progress(db, db.get(ResearchRun, run_id))
+    assert reported["errors"] == []
+    assert len(reported["budget_stops"]) == 1, "the cap must reach the report, not vanish"

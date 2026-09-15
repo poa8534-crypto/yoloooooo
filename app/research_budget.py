@@ -15,7 +15,18 @@ DEFAULT_LIMITS = {"seconds": 1800, "rounds": 4, "tavily_search": 12, "youtube_se
 
 
 class BudgetExceeded(RuntimeError):
-    pass
+    """A declared budget refused more work.
+
+    `planned` separates a cap the run was configured to reach -- a limit, a
+    local quota allowance, the deadline -- from a refusal that means the
+    run's own bookkeeping is in an unexpected state, such as declining to
+    replay a request whose outcome was never recorded. Only the second kind
+    says anything went wrong.
+    """
+
+    def __init__(self, reason, planned=True):
+        super().__init__(reason)
+        self.planned = planned
 
 
 def utc(value):
@@ -31,6 +42,7 @@ def progress(db, run):
             "usage": state.get("usage", {}), "questions": state.get("questions", []),
             "stop_reason": state.get("stop_reason"), "round": state.get("round", 0),
             "errors": state.get("errors", []), "abstentions": state.get("abstentions", []),
+            "budget_stops": state.get("budget_stops", []),
             "evidence_additions": state.get("evidence_additions", 0)}
 
 
@@ -43,7 +55,7 @@ class RunBudget:
             checkpoint = db.get(ResearchCheckpoint, run_id)
             self.state = dict(checkpoint.state) if checkpoint else {}
         self.state.setdefault("limits", dict(DEFAULT_LIMITS))
-        for key, default in {"usage": {}, "requests": {}, "errors": [], "abstentions": [], "model_calls": [], "contexts": [], "questions": []}.items():
+        for key, default in {"usage": {}, "requests": {}, "errors": [], "abstentions": [], "budget_stops": [], "model_calls": [], "contexts": [], "questions": []}.items():
             self.state.setdefault(key, default)
         self.gate = asyncio.Semaphore(4)
 
@@ -91,7 +103,18 @@ class RunBudget:
         self.save()
 
     def error(self, stage, exc):
-        self.state["errors"].append({"stage": stage, "error": redact(str(exc)), "kind": type(exc).__name__, "at": datetime.now(UTC).isoformat()})
+        """Record a failure, or a planned budget cap as its own kind of event.
+
+        Reaching a configured cap is the budget doing its job. Filing it under
+        `errors` marked a run that behaved exactly as specified as degraded,
+        so planned refusals go to `budget_stops` instead. They stay visible;
+        they just no longer claim something failed.
+        """
+        entry = {"stage": stage, "error": redact(str(exc)), "kind": type(exc).__name__, "at": datetime.now(UTC).isoformat()}
+        if isinstance(exc, BudgetExceeded) and exc.planned:
+            self.state.setdefault("budget_stops", []).append(entry)
+        else:
+            self.state["errors"].append(entry)
         self.save()
 
     def quota(self, name):
@@ -123,7 +146,7 @@ class RunBudget:
             if prior["status"] == "complete":
                 return ConnectorResult(**prior["result"])
             # Unknown outcome after interruption must not silently replay/spend.
-            raise BudgetExceeded("request_previously_" + prior["status"])
+            raise BudgetExceeded("request_previously_" + prior["status"], planned=False)
         async with self.gate:
             self.reserve(name)
             if getattr(connectors, "quota_meter", None):

@@ -5,7 +5,8 @@ type History = { status: string; trend: null | { label: string; value: number };
 type Design = { concept_title: string; core_loop: string; differentiator: string; build_steps: string[]; risks: string[]; questions: string[]; supporting_fact_ids?: string[]; essential_features?: string[]; excluded_features?: string[]; dependencies?: string[]; validation_tasks?: string[]; counterevidence?: string[]; design_assumptions?: Array<{ kind: string; value: number; unit: string; basis: string }> }
 type Report = {
   report_id: string; selection_rule: string; questions: Question[]; quota_note: string
-  progress: { stop_reason: string; elapsed_seconds: number; errors?: Array<{ stage: string; error: string }> }; api_usage: Record<string, number>
+  progress: { stop_reason: string; elapsed_seconds: number; errors?: Array<{ stage: string; error: string }>;
+    budget_stops?: Array<{ stage: string; error: string }> }; api_usage: Record<string, number>
   abstentions?: Array<{ stage: string; reason: string }>
   comparison: Array<{ candidate_id: string; universe_id: string; niche_relevance: string; omitted_facts?: number; facts: Array<{ id: string; text: string; freshness: string }>; history: History }>
   concepts: Array<{ id: string; candidate_id: string; payload: Design }>
@@ -60,6 +61,8 @@ export function ResearchReport({ runId, status }: { runId: string; status: strin
     <p>{report.selection_rule}</p><p>Elapsed: {Math.round(report.progress.elapsed_seconds)} seconds · Stop: {report.progress.stop_reason}</p>
     <details><summary>API and model attempt usage</summary><ul>{Object.entries(report.api_usage).map(([key, value]) => <li key={key}>{key}: {value}</li>)}</ul><p>{report.quota_note}</p></details>
     {!!report.progress.errors?.length && <div className="warning-box"><strong>Incomplete steps</strong>{report.progress.errors.map((e, i) => <p key={i}>{e.stage}: {e.error}</p>)}</div>}
+    {/* A configured cap stopping further work is the budget holding, not a failure. */}
+    {!!report.progress.budget_stops?.length && <div className="warning-box"><strong>Budget caps reached</strong>{report.progress.budget_stops.map((e, i) => <p key={i}>{e.stage}: {e.error}</p>)}<small>Work stopped at a configured limit; nothing failed.</small></div>}
     {!!report.abstentions?.length && <details><summary>Deliberate abstentions</summary>{report.abstentions.map((a, i) => <p key={i}>{a.stage}: {a.reason}</p>)}</details>}
     <h3>Research questions and limitations</h3><div className="fact-stack">{report.questions.map(q => <div key={q.id}><strong>{q.question}</strong><p>{q.state} — {q.limitation}</p><small>{q.fact_ids.length} supporting fact IDs</small></div>)}</div>
     <h3>Candidate comparison</h3>{report.comparison.map(d => <details key={d.candidate_id}><summary>Universe {d.universe_id} · {d.facts.length} admissible facts · relevance requires review</summary>

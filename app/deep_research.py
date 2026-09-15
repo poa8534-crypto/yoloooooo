@@ -353,6 +353,8 @@ class DeepResearch:
             async with asyncio.timeout(self.b.remaining):
                 stop = await self.investigate()
                 await self.concepts_and_audits()
+                # Only genuine failures downgrade the run. Reaching a configured
+                # cap is recorded in `budget_stops` and reported separately.
                 partial = bool(self.b.state["errors"])
         except asyncio.CancelledError:
             self.b.save(stage="interrupted", stop_reason="service_shutdown")
