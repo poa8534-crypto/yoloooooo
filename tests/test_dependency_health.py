@@ -205,3 +205,45 @@ def test_continuity_is_empty_rather_than_optimistic_when_nothing_is_captured(ses
     assert body["captured_days"] == 0
     assert body["longest_consecutive_days"] == 0
     assert body["first_capture"] is None and body["last_capture"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_connector_marks_quota_exhaustion_as_planned(settings):
+    """The flag has to be set where the refusal happens.
+
+    Asserting on a ConnectorError built by hand proves nothing about the code
+    path that raises it, which is how this survived a mutation.
+    """
+    from app.connectors import ConnectorError, Connectors
+    from app.quotas import QuotaExceeded
+
+    class Exhausted:
+        factory = None
+
+        def reserve(self, provider, cost):
+            raise QuotaExceeded(f"{provider} configured daily allowance exhausted")
+
+    connectors = Connectors(settings, httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))),
+        quota_meter=Exhausted())
+    with pytest.raises(ConnectorError) as caught:
+        await connectors._json("GET", "https://api.tavily.com/search")
+    await connectors.close()
+
+    assert caught.value.planned is True, "an exhausted allowance was raised as a failure"
+
+
+@pytest.mark.asyncio
+async def test_a_transport_failure_is_not_marked_planned(settings):
+    """Positive control for the pairing above."""
+    from app.connectors import ConnectorError, Connectors
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    connectors = Connectors(settings, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(ConnectorError) as caught:
+        await connectors._json("GET", "https://api.tavily.com/search")
+    await connectors.close()
+
+    assert caught.value.planned is False

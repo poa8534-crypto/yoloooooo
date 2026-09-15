@@ -115,7 +115,9 @@ class RunBudget:
         they just no longer claim something failed.
         """
         entry = {"stage": stage, "error": redact(str(exc)), "kind": type(exc).__name__, "at": datetime.now(UTC).isoformat()}
-        if isinstance(exc, BudgetExceeded) and exc.planned:
+        # Any refusal that marks itself planned: a budget cap here, or a
+        # connector's configured daily allowance.
+        if getattr(exc, "planned", False):
             self.state.setdefault("budget_stops", []).append(entry)
         else:
             self.state["errors"].append(entry)

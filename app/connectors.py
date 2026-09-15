@@ -20,7 +20,17 @@ MAX_CAPTURE_REDIRECTS = 3
 
 
 class ConnectorError(RuntimeError):
-    pass
+    """A connector refused or failed a request.
+
+    `planned` marks a refusal the run was configured to reach -- a local daily
+    allowance being exhausted -- as opposed to something going wrong. Reaching
+    a configured allowance is the quota meter working, and recording it as a
+    failure marked an otherwise clean run as degraded.
+    """
+
+    def __init__(self, message, planned: bool = False):
+        super().__init__(message)
+        self.planned = planned
 
 
 def _is_forbidden_address(address: str) -> bool:
@@ -98,7 +108,7 @@ class Connectors:
                 elif "googleapis.com/youtube/" in url:
                     self.quota_meter.reserve("youtube", 100 if url.endswith("/search") else 1)
             except QuotaExceeded as exc:
-                raise ConnectorError(str(exc)) from None
+                raise ConnectorError(str(exc), planned=True) from None
         try:
             response = await self.client.request(method, url, **kwargs)
             response.raise_for_status()

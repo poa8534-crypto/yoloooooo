@@ -571,3 +571,33 @@ def test_facts_order_across_naive_and_aware_timestamps():
     from_session = SimpleNamespace(id="new", created_at=now)
     from_sqlite = SimpleNamespace(id="old", created_at=(now - timedelta(hours=1)).replace(tzinfo=None))
     assert [item.id for item in sorted([from_session, from_sqlite], key=_fact_order)] == ["old", "new"]
+
+
+def test_an_exhausted_daily_allowance_is_a_planned_stop_not_a_failure(session_factory, settings):
+    """Found by a live run: hitting the configured Tavily allowance was
+    recorded as an error, so a run that behaved exactly as configured was
+    reported as partial. A local allowance is a cap the run was set up to
+    reach, like any other budget limit.
+    """
+    from app.connectors import ConnectorError
+
+    run_id, *_ = seed(session_factory)
+    budget = RunBudget(session_factory, run_id)
+    budget.error("discovery", ConnectorError("tavily configured daily allowance exhausted", planned=True))
+
+    assert budget.state["errors"] == [], "a configured allowance was reported as a failure"
+    assert [entry["stage"] for entry in budget.state["budget_stops"]] == ["discovery"]
+    assert "allowance exhausted" in budget.state["budget_stops"][0]["error"]
+
+
+def test_a_genuine_connector_failure_is_still_an_error(session_factory, settings):
+    """Positive control: only refusals that mark themselves planned are
+    exempt. A provider that is down is a failure."""
+    from app.connectors import ConnectorError
+
+    run_id, *_ = seed(session_factory)
+    budget = RunBudget(session_factory, run_id)
+    budget.error("discovery", ConnectorError("request failed for https://api.tavily.com: ReadTimeout"))
+
+    assert budget.state["budget_stops"] == []
+    assert [entry["stage"] for entry in budget.state["errors"]] == ["discovery"]
