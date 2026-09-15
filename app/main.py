@@ -29,6 +29,8 @@ from .evidence import fact_freshness, render_fact
 from .matching import DEFAULT_EMBEDDING_MODEL
 from . import pillars as pillars_module
 from . import scout_queue
+from . import opportunity as opportunity_module
+from . import calibration_outcomes
 from .research_budget import utc as budget_utc
 from .models import (
     AssociationRecord,
@@ -935,6 +937,38 @@ def market_pulse_view(db: Session = Depends(get_db)):
         "note": "A census of what Roblox ranks, not a recommendation. Placement "
                 "on a shelf is Roblox's judgement, not this system's.",
     }
+
+
+@app.get("/api/opportunity/{universe_id}")
+def opportunity_for(universe_id: str, db: Session = Depends(get_db)):
+    """Deterministic ranking for one game, with every component shown.
+
+    No model is consulted. The score is arithmetic over measured pillars, and
+    it is a ranking index rather than a probability until calibration has
+    outcomes to measure against.
+    """
+    ranked = opportunity_module.score(db, universe_id).as_dict()
+    ranked["calibration"] = calibration_outcomes.probability_for(db, universe_id)
+    return ranked
+
+
+@app.get("/api/opportunity")
+def opportunity_ranking(limit: int = 25, db: Session = Depends(get_db)):
+    """Every researched game, best first, unscoreable ones last."""
+    universes = [row for row in db.scalars(select(Candidate.external_id).distinct()) if row]
+    ranked = opportunity_module.rank(db, universes)[:limit]
+    return {"version": opportunity_module.OPPORTUNITY_VERSION,
+            "ranked": [item.as_dict() for item in ranked],
+            "scored": sum(item.score is not None for item in ranked),
+            "note": "A comparable ranking index over measured pillars. Not a "
+                    "probability, and not a recommendation."}
+
+
+@app.get("/api/calibration/outcomes")
+def calibration_outcomes_view(target_ccu: int = calibration_outcomes.DEFAULT_TARGET_CCU,
+                              db: Session = Depends(get_db)):
+    """The observed rate of reaching a CCU target, per score band."""
+    return calibration_outcomes.calibrate(db, target_ccu).as_dict()
 
 
 @app.get("/api/market/game/{universe_id}")

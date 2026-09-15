@@ -230,6 +230,21 @@ class Connectors:
             "GET", "https://games.roblox.com/v1/games", params={"universeIds": ids}
         )
 
+    async def roblox_votes(self, universe_ids: list[str]) -> ConnectorResult:
+        """Up and down votes for games, first-party and without a key.
+
+        The census carries these for the games on Roblox's shelves. Games a
+        run discovered are usually not on a shelf, so without this they would
+        have no reception measurement at all and the pillar would abstain on
+        exactly the games being researched.
+        """
+        if not universe_ids:
+            raise ConnectorError("no universe IDs supplied")
+        ids = ",".join(dict.fromkeys(universe_ids))
+        return await self._json(
+            "GET", "https://games.roblox.com/v1/games/votes", params={"universeIds": ids}
+        )
+
     async def youtube_search(self, query: str) -> ConnectorResult:
         if not self.settings.youtube_api_key:
             raise ConnectorError("YOUTUBE_API_KEY is not configured")

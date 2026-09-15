@@ -782,6 +782,79 @@ type ResultCard = {
   risks: number; cited_facts: number; created_at: string
 }
 
+type OppComponent = {
+  key: string; label: string; weight: number; measured: boolean
+  raw: number | null; normalised: number | null; contribution: number | null
+  meaning: string; detail: string
+}
+type OppCalibration = {
+  universe_id: string; score: number | null; probability: number | null
+  state: string; reason: string; target_ccu?: number
+  band?: { from: number; to: number; games: number; reached: number; rate: number | null } | null
+}
+type Opportunity = {
+  version: string; universe_id: string; score: number | null; state: string
+  reason: string; calibrated: boolean; components: OppComponent[]
+  missing: string[]; note: string; calibration?: OppCalibration
+}
+
+function OpportunityPanel({ universeId }: { universeId: string }) {
+  const [reading, setReading] = useState<Opportunity | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    setReading(null); setError('')
+    if (!universeId) return
+    api<Opportunity>('/api/opportunity/' + encodeURIComponent(universeId))
+      .then(result => { if (!cancelled) setReading(result) })
+      .catch(caught => { if (!cancelled) setError((caught as Error).message) })
+    return () => { cancelled = true }
+  }, [universeId])
+
+  if (error) return <div className="warning-box"><strong>Opportunity unavailable</strong><p>{error}</p></div>
+  if (!reading) return <p>Computing the opportunity score…</p>
+
+  const probability = reading.calibration
+  return <section className="opportunity">
+    <div className="opportunity-head">
+      <div>
+        <span>Deterministic ranking · {reading.version}</span>
+        <strong>{reading.score === null ? 'Not scored' : (reading.score * 100).toFixed(0) + ' / 100'}</strong>
+        <small>{reading.reason}</small>
+      </div>
+      {/* A ranking index is not a chance of anything, and saying so beside the
+          number is the only place a reader will actually read it. */}
+      <Badge tone={reading.score === null ? 'insufficient' : 'proposal'}>
+        {reading.calibrated ? 'calibrated' : 'uncalibrated ranking'}</Badge>
+    </div>
+
+    <div className="opportunity-bars">
+      {reading.components.map(component => <div key={component.key}
+        className={component.measured ? 'opp-row' : 'opp-row unmeasured'}>
+        <span>{component.label}<small>{component.meaning}</small></span>
+        <div className="opp-track" aria-hidden="true">
+          <i style={{ width: `${Math.round((component.normalised ?? 0) * 100)}%` }} />
+        </div>
+        <b>{component.measured
+          ? `${Math.round((component.normalised ?? 0) * 100)}%`
+          : '—'}<small>weight {Math.round(component.weight * 100)}%</small></b>
+      </div>)}
+    </div>
+
+    <div className="opportunity-probability">
+      <span>Probability of reaching {(probability?.target_ccu ?? 5000).toLocaleString()} CCU</span>
+      {probability?.probability === null || probability?.probability === undefined
+        ? <><strong>not measured yet</strong>
+            <small>{probability?.reason || reading.reason}</small></>
+        : <><strong>{(probability.probability * 100).toFixed(0)}%</strong>
+            <small>{probability.band?.reached} of {probability.band?.games} observed games
+              scoring {probability.band?.from}–{probability.band?.to} reached it.
+              A base rate for games already on the platform, not a forecast.</small></>}
+    </div>
+    <small className="opportunity-note">{reading.note}</small>
+  </section>
+}
+
 function ScoutQueuePanel({ queue, chosen, onToggle, onClose, onRun, busy }: {
   queue: QueuedConcept[]; chosen: Set<string>; onToggle: (id: string) => void
   onClose: () => void; onRun: () => void; busy: boolean
@@ -832,6 +905,7 @@ function ResultDetail({ card, onClose }: { card: ResultCard; onClose: () => void
         {audit && <>
           <Badge tone={audit.evidence_state === 'source_backed' ? 'verified' : 'insufficient'}>
             {(audit.evidence_state || 'unknown').replaceAll('_', ' ')}</Badge>
+          <OpportunityPanel universeId={card.universe_id} />
           {audit.proposal && <>
             <section><h2>Core loop</h2><p>{audit.proposal.core_loop}</p></section>
             <section><h2>Differentiator</h2><p>{audit.proposal.differentiator}</p></section>

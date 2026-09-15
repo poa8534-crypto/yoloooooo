@@ -28,6 +28,8 @@ from datetime import UTC, datetime
 from .connectors import ConnectorError, Connectors
 from .db import SessionLocal
 from .evidence import record_artifact
+from sqlalchemy import select
+
 from .models import MarketSample, SystemState
 
 log = logging.getLogger("venture-agents")
@@ -38,6 +40,13 @@ SHELVES = ("top-trending", "up-and-coming", "top-playing-now",
            "fun-with-friends", "top-revisited", "top-earning")
 
 STATE_KEY = "last_market_sample"
+
+# Games a run is researching, measured on the same clock as the census. They
+# are almost never on Roblox's shelves -- 9 of 168 here -- so without this the
+# pillars abstain on precisely the games being studied and the opportunity
+# model has nothing to compute on. Kept out of SHELVES so it never counts as
+# shelf visibility.
+TRACKED_SORT = "tracked"
 
 
 def _rows(payload: dict) -> list[dict]:
@@ -79,6 +88,49 @@ def _rows(payload: dict) -> list[dict]:
     return rows
 
 
+async def _tracked_rows(connectors, universes: list[str]) -> list[dict]:
+    """One row per researched game, shaped exactly like a census row.
+
+    Two first-party calls per batch: the games endpoint for the live player
+    count and genre, the votes endpoint for reception. A batch that fails is
+    skipped rather than defaulted -- a missing count is not a count of zero.
+    """
+    rows: list[dict] = []
+    for start in range(0, len(universes), 50):
+        batch = universes[start:start + 50]
+        try:
+            games = await connectors.roblox_games(batch)
+        except Exception:
+            continue
+        votes: dict[str, tuple[int, int]] = {}
+        try:
+            answer = await connectors.roblox_votes(batch)
+            for entry in answer.payload.get("data") or []:
+                votes[str(entry.get("id"))] = (int(entry.get("upVotes") or 0),
+                                               int(entry.get("downVotes") or 0))
+        except Exception:
+            votes = {}  # reception abstains; the player count is still worth having
+        for item in games.payload.get("data") or []:
+            universe = str(item.get("id") or "")
+            if not universe or item.get("playing") is None:
+                continue
+            up, down = votes.get(universe, (0, 0))
+            try:
+                rows.append({"sort_id": TRACKED_SORT, "rank": len(rows),
+                             "universe_id": universe, "name": str(item.get("name") or ""),
+                             "player_count": int(item["playing"]), "up_votes": up,
+                             "down_votes": down,
+                             "genre": str(item.get("genre_l1") or ""), "sponsored": False})
+            except (TypeError, ValueError):
+                continue
+    return rows
+
+
+def _tracked_universes(db) -> list[str]:
+    from .models import Candidate
+    return sorted({row for row in db.scalars(select(Candidate.external_id)) if row})
+
+
 async def sample_market(connectors: Connectors | None = None) -> dict:
     """Record one census. Returns what was written, never raises upward.
 
@@ -94,6 +146,9 @@ async def sample_market(connectors: Connectors | None = None) -> dict:
     try:
         result = await connectors.roblox_explore_sorts()
         rows = _rows(result.payload)
+        with SessionLocal() as db:
+            tracked = _tracked_universes(db)
+        rows += await _tracked_rows(connectors, tracked)
         if not rows:
             outcome["error"] = "the sample contained no readable shelves"
         with SessionLocal() as db:

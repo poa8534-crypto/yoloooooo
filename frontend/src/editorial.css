@@ -254,3 +254,28 @@ label { text-transform: none; letter-spacing: 0; font-size: 14px; }
 .concept-card-footer { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .concept-card-footer small { color: #5f6368; font-size: 12px; }
 @media (max-width: 760px) { .concept-card { flex-basis: 84%; } }
+
+/* The opportunity score. Each component shows its own bar so a reader can
+   disagree with one input instead of with a single number, and an unmeasured
+   one loses its bar entirely rather than showing an empty-looking zero. */
+.opportunity { border: 1px solid #dadce0; border-radius: 8px; padding: 18px; margin: 4px 0 18px; background: #fff; }
+.opportunity-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.opportunity-head > div > span { display: block; font: 500 11px/1.4 system-ui, sans-serif; color: #5f6368; }
+.opportunity-head strong { display: block; font: 600 28px/1.2 system-ui, sans-serif; color: #202124; margin: 4px 0; }
+.opportunity-head small { color: #5f6368; font-size: 12px; }
+.opportunity-bars { display: grid; gap: 10px; }
+.opp-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) auto; gap: 12px; align-items: center; }
+.opp-row > span { font: 500 13px/1.35 system-ui, sans-serif; color: #202124; min-width: 0; }
+.opp-row > span small { display: block; font-weight: 400; font-size: 11px; color: #5f6368; line-height: 1.45; }
+.opp-track { height: 8px; border-radius: 4px; background: #eceff1; overflow: hidden; }
+.opp-track i { display: block; height: 100%; background: #3c4043; }
+.opp-row > b { font: 600 14px/1.3 system-ui, sans-serif; text-align: right; white-space: nowrap; }
+.opp-row > b small { display: block; font-weight: 400; font-size: 11px; color: #5f6368; }
+.opp-row.unmeasured > span, .opp-row.unmeasured > b { color: #9aa0a6; }
+.opp-row.unmeasured .opp-track { background: repeating-linear-gradient(135deg, #fafafa, #fafafa 5px, #f1f3f4 5px, #f1f3f4 10px); }
+.opportunity-probability { margin-top: 16px; padding-top: 14px; border-top: 1px solid #ecedef; }
+.opportunity-probability > span { display: block; font: 500 12px/1.4 system-ui, sans-serif; color: #5f6368; }
+.opportunity-probability strong { display: block; font: 600 20px/1.3 system-ui, sans-serif; color: #202124; margin: 4px 0; }
+.opportunity-probability small { color: #5f6368; font-size: 12px; line-height: 1.5; }
+.opportunity-note { display: block; margin-top: 12px; color: #5f6368; font-size: 11px; line-height: 1.5; }
+@media (max-width: 760px) { .opp-row { grid-template-columns: 1fr; gap: 4px; } .opp-row > b { text-align: left; } }

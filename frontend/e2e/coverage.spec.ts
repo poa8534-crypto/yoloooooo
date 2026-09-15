@@ -517,3 +517,84 @@ test.describe('the Hunter to Scout queue', () => {
     await expect(dialog).toContainText('Retention is unproven')
   })
 })
+
+test.describe('the opportunity score', () => {
+  const SCORED = {
+    version: 'opportunity-v1', universe_id: '77', score: 0.72, state: 'ranked',
+    reason: '4 of 5 components measured', calibrated: false, missing: ['acceleration'],
+    note: 'A comparable ranking index, not a probability.',
+    components: [
+      { key: 'demand', label: 'Demand', weight: 0.3, measured: true, raw: 20000,
+        normalised: 0.5, contribution: 0.15, meaning: 'how many people are playing', detail: 'd' },
+      { key: 'acceleration', label: 'Acceleration', weight: 0.1, measured: false, raw: null,
+        normalised: null, contribution: null, meaning: 'steepening', detail: 'needs three observations' },
+    ],
+  }
+
+  test('a card shows each component, and an unmeasured one shows no number', async ({ page }) => {
+    await page.route('**/api/scout/results*', route => route.fulfill({ json: { cards: [{
+      audit_id: 'a1', candidate_id: 'c1', proposal_id: 'p1', universe_id: '77', niche: 'n',
+      concept_title: 'Scored Concept', core_loop: 'loop', evidence_state: 'source_backed',
+      risks: 1, cited_facts: 2, created_at: '2026-09-16T00:00:00+00:00' }] } }))
+    await page.route('**/api/audits/a1', route => route.fulfill({ json: {
+      candidate_id: 'c1', audit_id: 'a1', evidence_state: 'source_backed', risks: [],
+      proposal: { concept_title: 'Scored Concept', core_loop: 'loop', differentiator: 'd',
+                  build_steps: ['one'], risks: [], questions: [], supporting_fact_ids: [] } } }))
+    await page.route('**/api/opportunity/77', route => route.fulfill({ json: {
+      ...SCORED,
+      calibration: { universe_id: '77', score: 0.72, probability: null,
+                     state: 'insufficient_outcomes', reason: '0 games watched for a full 24h window' } } }))
+
+    await page.goto('/#/scout')
+    await page.locator('.concept-card', { hasText: 'Scored Concept' }).click()
+    const panel = page.locator('.opportunity')
+    await expect(panel).toBeVisible()
+    await expect(panel).toContainText('72 / 100')
+    await expect(panel).toContainText('uncalibrated ranking')
+    await expect(panel.locator('.opp-row.unmeasured')).toContainText('Acceleration')
+    await expect(panel.locator('.opp-row.unmeasured > b')).toContainText('—')
+  })
+
+  test('an unmeasured probability says so rather than showing a number', async ({ page }) => {
+    // The one number nobody should ever see invented.
+    await page.route('**/api/scout/results*', route => route.fulfill({ json: { cards: [{
+      audit_id: 'a1', candidate_id: 'c1', proposal_id: 'p1', universe_id: '77', niche: 'n',
+      concept_title: 'Scored Concept', core_loop: 'loop', evidence_state: 'source_backed',
+      risks: 1, cited_facts: 2, created_at: '2026-09-16T00:00:00+00:00' }] } }))
+    await page.route('**/api/audits/a1', route => route.fulfill({ json: {
+      candidate_id: 'c1', audit_id: 'a1', evidence_state: 'source_backed', risks: [], proposal: null } }))
+    await page.route('**/api/opportunity/77', route => route.fulfill({ json: {
+      ...SCORED,
+      calibration: { universe_id: '77', score: 0.72, probability: null,
+                     state: 'insufficient_outcomes',
+                     reason: '0 games watched for a full 24h window; 30 are required' } } }))
+
+    await page.goto('/#/scout')
+    await page.locator('.concept-card', { hasText: 'Scored Concept' }).click()
+    const probability = page.locator('.opportunity-probability')
+    await expect(probability).toContainText('not measured yet')
+    await expect(probability).toContainText('30 are required')
+    await expect(probability).not.toContainText('%')
+  })
+
+  test('a measured probability is shown with the cohort behind it', async ({ page }) => {
+    await page.route('**/api/scout/results*', route => route.fulfill({ json: { cards: [{
+      audit_id: 'a1', candidate_id: 'c1', proposal_id: 'p1', universe_id: '77', niche: 'n',
+      concept_title: 'Scored Concept', core_loop: 'loop', evidence_state: 'source_backed',
+      risks: 1, cited_facts: 2, created_at: '2026-09-16T00:00:00+00:00' }] } }))
+    await page.route('**/api/audits/a1', route => route.fulfill({ json: {
+      candidate_id: 'c1', audit_id: 'a1', evidence_state: 'source_backed', risks: [], proposal: null } }))
+    await page.route('**/api/opportunity/77', route => route.fulfill({ json: {
+      ...SCORED,
+      calibration: { universe_id: '77', score: 0.72, probability: 0.4, state: 'measured',
+                     target_ccu: 5000, reason: 'observed rate',
+                     band: { from: 0.5, to: 0.75, games: 25, reached: 10, rate: 0.4 } } } }))
+
+    await page.goto('/#/scout')
+    await page.locator('.concept-card', { hasText: 'Scored Concept' }).click()
+    const probability = page.locator('.opportunity-probability')
+    await expect(probability).toContainText('40%')
+    await expect(probability).toContainText('10 of 25 observed games')
+    await expect(probability).toContainText('not a forecast')
+  })
+})

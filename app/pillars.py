@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
+from .market_pulse import TRACKED_SORT
 from .models import MarketSample
 
 PILLARS_VERSION = "pillars-v1"
@@ -183,11 +184,20 @@ def saturation(db, genre: str) -> Pillar:
                   observations=len(rows))
 
 
-def visibility(points: list[MarketSample]) -> Pillar:
-    """How many of Roblox's own shelves currently carry this game."""
+def visibility(points: list[MarketSample], census_taken: bool = True) -> Pillar:
+    """How many of Roblox's own shelves currently carry this game.
+
+    Zero is a real, measured answer: most games are on no shelf at all, and a
+    census that lists every shelf and does not list this game has established
+    that. With no census to compare against, nothing has been established and
+    it abstains instead.
+    """
     if not points:
-        return _unmeasured("visibility", "Shelf visibility", "shelves",
-                           "this game has not appeared in a sampled shelf")
+        if not census_taken:
+            return _unmeasured("visibility", "Shelf visibility", "shelves",
+                               "no census has been sampled to compare against")
+        return Pillar("visibility", "Shelf visibility", "shelves", 0.0, MEASURED,
+                      "carried by none of Roblox's ranked shelves", observations=0)
     latest_at = _utc(points[-1].captured_at)
     return Pillar("visibility", "Shelf visibility", "shelves", float(len(points)), MEASURED,
                   f"carried by {len(points)} shelf(s) at "
@@ -196,7 +206,12 @@ def visibility(points: list[MarketSample]) -> Pillar:
 
 
 def shelf_placements(db, universe_id: str, at: datetime | None = None) -> list[MarketSample]:
-    """Every shelf carrying this game in one census (not collapsed)."""
+    """Every *shelf* carrying this game in one census.
+
+    Rows recorded because a run is researching the game are measurements, not
+    placements: counting them would report a game nobody has shelved as
+    visible on one shelf.
+    """
     latest = at or db.scalar(select(MarketSample.captured_at)
                              .order_by(MarketSample.captured_at.desc()).limit(1))
     if latest is None:
@@ -204,7 +219,8 @@ def shelf_placements(db, universe_id: str, at: datetime | None = None) -> list[M
     return list(db.scalars(
         select(MarketSample)
         .where(MarketSample.universe_id == str(universe_id),
-               MarketSample.captured_at == latest)
+               MarketSample.captured_at == latest,
+               MarketSample.sort_id != TRACKED_SORT)
         .order_by(MarketSample.rank)))
 
 
@@ -213,8 +229,10 @@ def pillars_for(db, universe_id: str) -> dict:
     points = series(db, universe_id)
     genre = points[-1].genre if points else ""
     placements = shelf_placements(db, universe_id)
+    census_taken = db.scalar(select(MarketSample.id).limit(1)) is not None
     computed = [demand(points), momentum(points), acceleration(points),
-                reception(points), saturation(db, genre), visibility(placements)]
+                reception(points), saturation(db, genre),
+                visibility(placements, census_taken)]
     return {
         "version": PILLARS_VERSION,
         "universe_id": str(universe_id),
