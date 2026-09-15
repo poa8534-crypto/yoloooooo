@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from .association import AssociationService, active_thresholds, is_association_usable
 from .association.materialize import apply_association
 from .association.service import human_confirmation
-from .calibration import calibration_status
+from .calibration import calibration_status, load_artifact
 from .config import ROOT, get_settings
 from .db import SessionLocal, get_db, init_db
 from .evidence import fact_freshness, render_fact
@@ -45,7 +45,12 @@ from .models import (
     SystemState,
 )
 from .research_budget import progress
-from .research_evidence import audit_readiness, evidence_packet, history
+from .research_evidence import (
+    audit_readiness,
+    evidence_packet,
+    history,
+    verified_fact_packet,
+)
 from .scheduler import catch_up_if_needed, start_scheduler
 from .schemas import (
     AuditReadiness,
@@ -139,16 +144,18 @@ def _candidate_view(db: Session, candidate: Candidate) -> CandidateView:
     )
     score = db.get(ScoreRecord, decision.score_id) if decision and decision.score_id else None
     confidence = db.get(ConfidenceRecord, decision.confidence_id) if decision and decision.confidence_id else None
+    active = bool((load_artifact() or {}).get("active"))
     return CandidateView(
         id=candidate.id,
         external_id=candidate.external_id,
         display_name=name,
         facts=fact_views,
         proposal=proposal,
-        decision=decision.kind if decision else "collection_only",
+        proposal_id=proposal_row.id if proposal_row and proposal else None,
+        decision=decision.kind if decision and (active or decision.kind != "recommend") else "collection_only",
         decision_id=decision.id if decision else None,
-        score=score.value if score else None,
-        confidence=confidence.value if confidence else None,
+        score=score.value if active and score else None,
+        confidence=confidence.value if active and confidence else None,
     )
 
 
@@ -239,11 +246,22 @@ def get_report(run_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Report not finalized; see run progress")
     payload = json.loads(json.dumps(row.payload))
     for dossier in payload["comparison"]:
-        verified = {f["id"]: f for f in evidence_packet(db, dossier["candidate_id"], include_stale=True)}
         original = dossier["facts"]
-        dossier["facts"] = [verified[f["id"]] for f in original if f["id"] in verified]
+        dossier["facts"] = [verified for saved in original
+                            if (fact := db.get(Fact, saved["id"])) is not None
+                            and (verified := verified_fact_packet(db, fact)) is not None]
         dossier["omitted_facts"] = len(original) - len(dossier["facts"])
         dossier["history"] = history(db, dossier["candidate_id"])
+    remaining = {f["id"] for dossier in payload["comparison"] for f in dossier["facts"]}
+    for question in payload["questions"]:
+        original_ids = question["fact_ids"]
+        question["fact_ids"] = [fid for fid in original_ids if fid in remaining]
+        if original_ids and not question["fact_ids"]:
+            question["state"] = "limited"
+            question["limitation"] = "Previously cited evidence is no longer admissible."
+        elif question.get("id") == "creators" and question["fact_ids"]:
+            question["limitation"] = "Associated metadata is not watched video or audience sentiment."
+    payload["limitations"] = [question["limitation"] for question in payload["questions"]]
     return {"report_id": row.id, **payload}
 
 

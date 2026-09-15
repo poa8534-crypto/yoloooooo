@@ -85,6 +85,7 @@ class CandidateView(StrictModel):
     display_name: str
     facts: list[FactView]
     proposal: ProposalPayload | None
+    proposal_id: str | None = None
     decision: str
     decision_id: str | None
     score: float | None

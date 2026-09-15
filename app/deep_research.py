@@ -9,7 +9,9 @@ from urllib.parse import urlparse
 
 from sqlalchemy import select
 
+from .association import MatchSubjectView, is_downstream_admissible
 from .association.normalize import word_tokens
+from .association.subjects import SUBJECT_WEB_PAGE
 from .connectors import extract_roblox_place_ids
 from .evidence import (
     accept_web_claim,
@@ -158,8 +160,34 @@ class DeepResearch:
             # Only quote an exact API-sourced description, never infer mechanics
             # from boilerplate, navigation, third-party comments or a search snippet.
             if context.description and context.description in str(result.payload):
-                accept_web_claim(db, candidate_id=context.candidate_id, claim_value=context.description,
-                                 metric="web_description", evidence=[(artifact, context.description)])
+                # A webpage metric is external evidence even when the page is the
+                # experience's own, so it resolves through the association engine
+                # like any other. The place ID in the URL is exact-ID evidence, so
+                # this auto-associates rather than queueing for review.
+                pool = [item.as_match_candidate() for item in self.contexts]
+                subject = MatchSubjectView(
+                    subject_id=f"page:{context.place_ids[0]}",
+                    subject_type=SUBJECT_WEB_PAGE,
+                    external_id=str(context.place_ids[0]),
+                    raw_title=context.display_name,
+                    raw_description=context.description,
+                    raw_url=url,
+                    niche=self.niche,
+                    source_artifact_id=artifact.id,
+                    source_artifact_sha256=artifact.sha256,
+                    extraction_method="page_capture",
+                    source_tier="primary",
+                )
+                decision = self.o.associations.associate(
+                    db, subject, pool, niche=self.niche,
+                    candidate_row_ids={item.candidate_id: item.candidate_id for item in self.contexts},
+                )
+                if is_downstream_admissible(decision.record):
+                    accept_web_claim(db, candidate_id=context.candidate_id, claim_value=context.description,
+                                     metric="web_description", evidence=[(artifact, context.description)],
+                                     association_id=decision.record.id)
+                else:
+                    self.b.abstain("primary_page", f"page claim not admissible: {decision.record.outcome}")
             db.commit()
         self.b.save(processed_pages=list(dict.fromkeys(self.b.state.get("processed_pages", []) + [url])))
 
@@ -180,7 +208,8 @@ class DeepResearch:
             "relevance": "Discovery is provisional; no validated game-to-niche relevance rule or human review yet.",
             "history": "Consecutive captured history is required; no historical data is invented.",
             "mechanics": "Descriptions are developer claims, not independent gameplay observation.",
-            "creators": "No usable creator association; metadata is not watched video or audience sentiment.",
+            "creators": ("Associated metadata is not watched video or audience sentiment." if support["creators"]
+                         else "No usable creator association; metadata is not watched video or audience sentiment."),
             "counterevidence": "No defensible absence-of-competition or market-success conclusion; interpretations remain speculative.",
             "mvp": "Planning estimates are unverified design assumptions, not measured build times.",
             "demand": "Missing fresh source-reported demand measurements.",
@@ -255,7 +284,7 @@ class DeepResearch:
                 if hunter is None:
                     generated = await asyncio.wait_for(self.o.llm.generate(agent="Meta Hunter", niche=self.niche,
                         sourced_name="Selected sourced experience", fact_ids=[f["id"] for f in dossier["facts"]], evidence=dossier["facts"],
-                        comparison=comparison, gaps=gaps, before_attempt=self.b.model_attempt), timeout=self.b.remaining)
+                        comparison=comparison, gaps=gaps, before_attempt=self.b.model_attempt, require_citations=True), timeout=self.b.remaining)
                     with self.factory() as db:
                         titles = [p.payload.get("concept_title", "").casefold() for p in db.scalars(select(Proposal).join(Candidate).where(Candidate.run_id == self.run_id))]
                         if generated.payload.concept_title.casefold() in titles:
@@ -275,6 +304,18 @@ class DeepResearch:
                 with self.factory() as db:
                     audit = db.scalar(select(AuditRecord).where(AuditRecord.proposal_id == hunter.id))
                 if audit is None:
+                    if not self.b.state.get("scout_followup_done") and self.b.remaining > 180 and hunter.payload.get("questions"):
+                        self.b.save(scout_followup_done=True, stage="Scout follow-up: checking remaining evidence gaps")
+                        target = next(c for c in self.contexts if c.candidate_id == cid)
+                        try:
+                            if self.b.state["usage"].get("youtube_search", 0) < self.b.state["limits"]["youtube_search"]:
+                                await asyncio.wait_for(self.o._attach_youtube(self.niche, self.contexts, budget=self.b,
+                                    query=f'Roblox "{target.display_name[:100]}" gameplay review'), timeout=max(.01, self.b.remaining - 180))
+                            await asyncio.wait_for(self.capture_primary(target), timeout=max(.01, self.b.remaining - 180))
+                        except Exception as exc:
+                            self.b.error("scout_followup", exc)
+                        updated = self.questions(self.dossiers())
+                        gaps = [q["limitation"] for q in updated if q["state"] != "answered"]
                     self.b.save(stage="Venture Scout: auditing selected proposal")
                     await self.o.audit(cid, hunter.id, budget=self.b, gaps=gaps)
             except Exception as exc:

@@ -68,6 +68,7 @@ class OllamaProposalClient:
         gaps: list[str] | None = None,
         comparison: list[dict] | None = None,
         before_attempt=None,
+        require_citations: bool = False,
     ) -> GeneratedProposal:
         # The niche comes from the operator and the experience label comes from
         # Roblox, where anyone can name a game anything they like. Both are
@@ -107,6 +108,17 @@ class OllamaProposalClient:
             "known_gaps": gaps or [], "candidate_comparison": comparison or [],
         }, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e")
         prompt = redact(prompt)
+        schema = ProposalPayload.model_json_schema()
+        if require_citations and fact_ids:
+            schema["properties"]["supporting_fact_ids"].update(
+                items={"type": "string", "enum": sorted(set(fact_ids))}, minItems=1,
+            )
+            schema["required"] = list(dict.fromkeys(schema.get("required", []) + ["supporting_fact_ids"]))
+        audit_sections = ["essential_features", "excluded_features", "dependencies", "validation_tasks"]
+        if agent == "Venture Scout" and require_citations:
+            schema["required"] = list(dict.fromkeys(schema.get("required", []) + audit_sections))
+            for key in audit_sections:
+                schema["properties"][key]["minItems"] = 1
         async with self._gpu_gate:
             for model in (self.settings.ollama_primary_model, self.settings.ollama_fallback_model):
                 for _attempt in range(2):
@@ -119,7 +131,7 @@ class OllamaProposalClient:
                                 "model": model,
                                 "stream": False,
                                 "think": False,
-                                "format": ProposalPayload.model_json_schema(),
+                                "format": schema,
                                 "options": {
                                     "num_ctx": self.settings.ollama_context,
                                     "temperature": 0.2,
@@ -138,6 +150,10 @@ class OllamaProposalClient:
                         payload = ProposalPayload.model_validate_json(content)
                         if not set(payload.supporting_fact_ids).issubset(set(fact_ids)):
                             raise ValueError("model returned an unknown evidence ID")
+                        if require_citations and fact_ids and not payload.supporting_fact_ids:
+                            raise ValueError("evidence-informed proposal requires a citation")
+                        if require_citations and agent == "Venture Scout" and any(not getattr(payload, key) for key in audit_sections):
+                            raise ValueError("audit omitted required scope or validation sections")
                         return GeneratedProposal(payload, model)
                     except (httpx.HTTPError, KeyError, json.JSONDecodeError, ValidationError, ValueError) as exc:
                         errors.append(f"{model}: {type(exc).__name__}")

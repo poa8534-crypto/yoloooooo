@@ -463,7 +463,7 @@ class ResearchOrchestrator:
                     "agent": "Venture Scout", "niche": niche,
                     "sourced_name": "Selected sourced experience",
                     "fact_ids": [p["id"] for p in packet], "evidence": packet,
-                    "hunter_proposal": hunter_payload, "gaps": gaps or [],
+                    "hunter_proposal": hunter_payload, "gaps": gaps or [], "require_citations": True,
                 }
                 if budget:
                     kwargs["before_attempt"] = budget.model_attempt

@@ -7,7 +7,7 @@ type Proposal = {
   risks: string[]; questions: string[]; supporting_fact_ids: string[]
 }
 type Candidate = {
-  id: string; external_id: string; display_name: string; facts: Fact[]; proposal: Proposal | null
+  id: string; external_id: string; display_name: string; facts: Fact[]; proposal: Proposal | null; proposal_id?: string | null
   decision: string; decision_id: string | null; score: number | null; confidence: number | null
 }
 type Run = {
@@ -147,7 +147,7 @@ function formatDate(value: string | null | undefined, includeTime = true) {
   return new Intl.DateTimeFormat('en', {
     month: 'short', day: 'numeric', year: includeTime ? undefined : 'numeric',
     hour: includeTime ? '2-digit' : undefined, minute: includeTime ? '2-digit' : undefined,
-  }).format(new Date(value))
+  }).format(new Date(/(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : value + "Z"))
 }
 
 function toneFor(value: string): Tone {
@@ -268,7 +268,7 @@ function CommandCenter({ summary, timeline, sources, runs, health, calibration, 
 
 function IdeasPanel({ runs, selectedId, onSelect, onInspectFact, onAudit, audit, busy }: {
   runs: Run[]; selectedId: string; onSelect: (id: string) => void; onInspectFact: (id: string) => void
-  onAudit: (candidate: Candidate) => void; audit: { candidate_id: string; proposal?: Proposal; risks?: string[]; note?: string } | null; busy: boolean
+  onAudit: (candidate: Candidate) => void; audit: { candidate_id: string; proposal_id?: string; proposal?: Proposal; risks?: string[]; note?: string } | null; busy: boolean
 }) {
   const [filter, setFilter] = useState<'all' | 'research_more' | 'recommend' | 'blocked_conflict'>('all')
   const allIdeas = runs.flatMap(run => run.candidates.map(candidate => ({ candidate, run })))
@@ -276,7 +276,7 @@ function IdeasPanel({ runs, selectedId, onSelect, onInspectFact, onAudit, audit,
   const active = allIdeas.find(item => item.candidate.id === selectedId)
   if (active) {
     const { candidate, run } = active
-    const proposal = (audit?.candidate_id === candidate.id ? audit.proposal : null) || candidate.proposal
+    const proposal = (audit?.candidate_id === candidate.id && audit.proposal_id === candidate.proposal_id ? audit.proposal : null) || candidate.proposal
     return <section className="workspace analyst-brief"><div className="brief-toolbar"><button className="text-button" onClick={() => onSelect('')}>← Back to ideas</button><div><Badge tone={toneFor(candidate.decision)}>{candidate.decision.replaceAll('_', ' ')}</Badge><Badge tone="verified">{candidate.facts.length} verified facts</Badge></div><button className="primary" disabled={busy} onClick={() => onAudit(candidate)}>{busy ? 'Auditing…' : 'Run Venture Scout audit'}</button></div>
       <article className="brief-hero"><span>Research dossier / {run.niche}</span><h2>{proposal?.concept_title || candidate.display_name}</h2><p>{proposal?.core_loop || 'A detailed proposal will appear after the constrained local model completes a schema-valid run.'}</p><div className="metrics-grid compact"><Metric label="Engine decision" value={candidate.decision.replaceAll('_', ' ')} note="Deterministic" /><Metric label="Evidence facts" value={candidate.facts.length} note="Clickable provenance" /><Metric label="Confidence" value={candidate.confidence == null ? '—' : `${candidate.confidence.toFixed(1)}%`} note={candidate.confidence == null ? 'Not computed' : 'Evidence quality'} /><Metric label="Market score" value={candidate.score == null ? 'Locked' : candidate.score.toFixed(1)} note={candidate.score == null ? 'Calibration inactive' : 'Frozen artifact'} /></div></article>
       <div className="brief-layout"><nav className="brief-index"><span>Research brief</span>{['Executive summary', 'Why this idea', 'Demand history', 'Competitors', 'Opportunity gap', 'Twist lab', '72-hour MVP', 'Risk register', 'Provenance'].map((item, index) => <a key={item} href={`#brief-${index + 1}`}>{String(index + 1).padStart(2, '0')}. {item}</a>)}</nav>
@@ -344,12 +344,12 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
       <div className="pipeline-list reference">{stages.map((stage, index) => <div key={stage}><b>{index + 1}</b><span>{stage}</span></div>)}</div>
       <small className="gate-hint">Stage list is documentation of the pipeline order. The live stage and usage below come from persisted backend checkpoints.</small></article>
     <article className="data-panel"><div className="panel-heading"><div><span>Append-only run records</span><h2>Run history</h2></div></div>{runs.length ? <div className="table-scroll"><table><thead><tr><th>Niche</th><th>Status</th><th>Started</th><th>Candidates</th><th>Result</th></tr></thead><tbody>{runs.map(run => <tr key={run.id}><td><strong>{run.niche}</strong><small><code>{run.id}</code></small></td><td><Badge tone={toneFor(run.status)}>{run.status}</Badge></td><td>{formatDate(run.created_at)}</td><td className="numeric">{run.candidates.length}</td><td>{run.message}</td></tr>)}</tbody></table></div> : <EmptyState title="No Meta Hunter runs">Submit the first niche above when you are ready to collect evidence.</EmptyState>}</article>
-    {latest && <><label>Inspect research run<select value={latest.id} onChange={e => setReportId(e.target.value)}>{runs.map(r => <option key={r.id} value={r.id}>{r.niche} — {r.status}</option>)}</select></label>{latest.progress && <article className="data-panel"><h3>{latest.progress.stage}</h3><p>{Math.round(latest.progress.elapsed_seconds)}s elapsed · {Math.round(latest.progress.remaining_seconds)}s remaining</p><div className="metrics-grid compact">{Object.entries(latest.progress.usage).map(([key, value]) => <Metric key={key} label={key.replaceAll("_", " ")} value={value} note="Reserved attempts / captured entities" />)}</div>{latest.progress.questions.map(q => <p key={q.id}>{q.question} — {q.state}</p>)}</article>}<ResearchReport runId={latest.id} status={latest.status} /></>}
+    {latest && <><label>Inspect research run<select value={latest.id} onChange={e => setReportId(e.target.value)}>{runs.map(r => <option key={r.id} value={r.id}>{r.niche} — {r.status}</option>)}</select></label>{latest.progress && <article className="data-panel"><h3>{latest.progress.stage}</h3><p>{Math.round(latest.progress.elapsed_seconds)}s elapsed · {Math.round(latest.progress.remaining_seconds)}s {["queued", "running"].includes(latest.status) ? "remaining" : "unused budget"}</p><div className="metrics-grid compact">{Object.entries(latest.progress.usage).map(([key, value]) => <Metric key={key} label={key.replaceAll("_", " ")} value={value} note="Reserved attempts / captured entities" />)}</div>{latest.progress.questions.map(q => <p key={q.id}>{q.question} — {q.state}</p>)}</article>}<ResearchReport runId={latest.id} status={latest.status} /></>}
     <div className="api-readiness"><span>Tavily <b>{health?.connectors.tavily_configured ? 'Authenticated' : 'Missing key'}</b></span><span>YouTube <b>{health?.connectors.youtube_configured ? 'Authenticated' : 'Missing key'}</b></span><span>Roblox <b>Public interface</b></span><span>Qwen <b>{health?.ollama.primary_present ? '14B ready' : 'Unavailable'}</b></span></div>
   </section>
 }
 
-function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Candidate[]; onAudit: (candidate: Candidate) => void; audit: { candidate_id: string; proposal?: Proposal; risks?: string[]; note?: string } | null; busy: boolean }) {
+function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Candidate[]; onAudit: (candidate: Candidate) => void; audit: { candidate_id: string; proposal_id?: string; proposal?: Proposal; risks?: string[]; note?: string } | null; busy: boolean }) {
   const [candidateId, setCandidateId] = useState(candidates[0]?.id || '')
   const [readiness, setReadiness] = useState<AuditReadiness | null>(null)
   const [readinessError, setReadinessError] = useState('')
@@ -375,7 +375,7 @@ function VentureScoutPage({ candidates, onAudit, audit, busy }: { candidates: Ca
           : readiness ? <><div className="audit-gates">{readiness.gates.map(gate => <div key={gate.label}><i />{gate.label}<small>{gate.detail}</small><Badge tone={gate.passed ? 'verified' : 'insufficient'}>{gate.state.replaceAll('_', ' ')}</Badge></div>)}</div>
             <div className="invariant-note"><span>Always-on pipeline invariants</span>{readiness.invariants.map(item => <div key={item.label}><b>{item.label}</b><small>{item.detail}</small></div>)}</div></>
           : <div className="drawer-loading">Checking gates…</div>}</article></div>
-    {audit?.candidate_id === candidateId && audit.proposal ? <div className="audit-output"><article className="data-panel"><div className="section-number">01</div><h2>{audit.proposal.concept_title}</h2><div className="classified proposal"><Badge tone="proposal">Model proposal</Badge><p>{audit.proposal.core_loop}</p></div><div className="classified inference"><Badge tone="inference">Differentiator</Badge><p>{audit.proposal.differentiator}</p></div></article><article className="data-panel"><div className="section-number">02</div><h2>72-hour milestone plan</h2><div className="milestone-grid">{audit.proposal.build_steps.map((step, index) => <div key={step}><span>Milestone {index + 1}</span><strong>{step}</strong><small>Human scope confirmation required</small></div>)}</div></article><article className="data-panel"><div className="section-number">03</div><h2>Risk and mitigation ledger</h2><div className="risk-list">{audit.proposal.risks.map(risk => <div key={risk}><Badge tone="proposal">Proposed risk</Badge><p>{risk}</p><span>Not a measured probability</span></div>)}</div></article></div> : <article className="data-panel"><EmptyState title="No Venture Scout audit loaded">Select a source-backed candidate and run the audit. Invalid model output will fail closed.</EmptyState></article>}
+    {audit?.candidate_id === candidateId && audit.proposal_id === candidate?.proposal_id && audit.proposal ? <div className="audit-output"><article className="data-panel"><div className="section-number">01</div><h2>{audit.proposal.concept_title}</h2><div className="classified proposal"><Badge tone="proposal">Model proposal</Badge><p>{audit.proposal.core_loop}</p></div><div className="classified inference"><Badge tone="inference">Differentiator</Badge><p>{audit.proposal.differentiator}</p></div></article><article className="data-panel"><div className="section-number">02</div><h2>72-hour milestone plan</h2><div className="milestone-grid">{audit.proposal.build_steps.map((step, index) => <div key={step}><span>Milestone {index + 1}</span><strong>{step}</strong><small>Human scope confirmation required</small></div>)}</div></article><article className="data-panel"><div className="section-number">03</div><h2>Risk and mitigation ledger</h2><div className="risk-list">{audit.proposal.risks.map(risk => <div key={risk}><Badge tone="proposal">Proposed risk</Badge><p>{risk}</p><span>Not a measured probability</span></div>)}</div></article></div> : <article className="data-panel"><EmptyState title="No Venture Scout audit loaded">Select a source-backed candidate and run the audit. Invalid model output will fail closed.</EmptyState></article>}
   </section>
 }
 
@@ -424,7 +424,7 @@ export default function App() {
   const [selectedIdea, setSelectedIdea] = useState('')
   const [sourceDetail, setSourceDetail] = useState<SourceDetail | null>(null)
   const [sourceLoading, setSourceLoading] = useState(false)
-  const [audit, setAudit] = useState<{ candidate_id: string; proposal?: Proposal; risks?: string[]; note?: string } | null>(null)
+  const [audit, setAudit] = useState<{ candidate_id: string; proposal_id?: string; proposal?: Proposal; risks?: string[]; note?: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
@@ -531,7 +531,7 @@ export default function App() {
 
   async function runAudit(candidate: Candidate) {
     setBusy(true); setError(''); setAudit(null)
-    try { setAudit(await api(`/api/candidates/${candidate.id}/audit`, { method: 'POST' })) }
+    try { setAudit(await api(`/api/candidates/${candidate.id}/audit${candidate.proposal_id ? "?proposal_id=" + candidate.proposal_id : ""}`, { method: 'POST' })) }
     catch (caught) { setError((caught as Error).message) }
     finally { setBusy(false) }
   }

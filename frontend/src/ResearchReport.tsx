@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react'
 
 type Question = { id: string; question: string; state: string; limitation: string; fact_ids: string[] }
 type History = { status: string; trend: null | { label: string; value: number }; points: Array<{ day: string; measurements: null | Array<{ metric: string; entity: string; value: number; observation_id: string }> }> }
-type Design = { concept_title: string; core_loop: string; differentiator: string; build_steps: string[]; risks: string[]; questions: string[]; essential_features?: string[]; excluded_features?: string[]; dependencies?: string[]; validation_tasks?: string[]; counterevidence?: string[]; design_assumptions?: Array<{ kind: string; value: number; unit: string; basis: string }> }
+type Design = { concept_title: string; core_loop: string; differentiator: string; build_steps: string[]; risks: string[]; questions: string[]; supporting_fact_ids?: string[]; essential_features?: string[]; excluded_features?: string[]; dependencies?: string[]; validation_tasks?: string[]; counterevidence?: string[]; design_assumptions?: Array<{ kind: string; value: number; unit: string; basis: string }> }
 type Report = {
   report_id: string; selection_rule: string; questions: Question[]; quota_note: string
-  progress: { stop_reason: string; elapsed_seconds: number }; api_usage: Record<string, number>
+  progress: { stop_reason: string; elapsed_seconds: number; errors?: Array<{ stage: string; error: string }> }; api_usage: Record<string, number>
+  abstentions?: Array<{ stage: string; reason: string }>
   comparison: Array<{ candidate_id: string; universe_id: string; niche_relevance: string; omitted_facts?: number; facts: Array<{ id: string; text: string; freshness: string }>; history: History }>
   concepts: Array<{ id: string; candidate_id: string; payload: Design }>
   audits: Array<{ audit_id: string; candidate_id: string; proposal_id: string; evidence_state: string; proposal: Design | null; risks: string[] }>
@@ -13,6 +14,7 @@ type Report = {
 
 export function DesignDetails({ design }: { design: Design }) {
   return <div className="classified proposal"><span className="evidence-badge proposal">Speculative design · human validation required</span>
+    {!!design.supporting_fact_ids?.length && <div><h3>Cited evidence</h3><p>Citations identify inputs; they do not verify the model's interpretation.</p><ul>{design.supporting_fact_ids.map(id => <li key={id}><a href={`/api/evidence/${id}`} target="_blank" rel="noreferrer">Inspect cited fact {id}</a></li>)}</ul></div>}
     {([['Essential features', design.essential_features], ['Excluded features', design.excluded_features], ['Dependencies', design.dependencies], ['Validation tasks', design.validation_tasks], ['Counterevidence / challenges to investigate', design.counterevidence], ['Unanswered questions', design.questions]] as const).map(([label, values]) => values?.length ? <div key={label}><h3>{label}</h3><ul>{values.map((value, i) => <li key={i}>{value}</li>)}</ul></div> : null)}
     {!!design.design_assumptions?.length && <div><h3>Unverified design quantities</h3><ul>{design.design_assumptions.map((a, i) => <li key={i}>{a.kind.replaceAll('_', ' ')}: {a.value} {a.unit} — {a.basis.replaceAll('_', ' ')}</li>)}</ul></div>}
   </div>
@@ -57,6 +59,8 @@ export function ResearchReport({ runId, status }: { runId: string; status: strin
   return <article className="data-panel"><div className="panel-heading"><div><span>Persisted investigation</span><h2>Evidence-backed research report</h2></div><span className="evidence-badge insufficient">Research only</span></div>
     <p>{report.selection_rule}</p><p>Elapsed: {Math.round(report.progress.elapsed_seconds)} seconds · Stop: {report.progress.stop_reason}</p>
     <details><summary>API and model attempt usage</summary><ul>{Object.entries(report.api_usage).map(([key, value]) => <li key={key}>{key}: {value}</li>)}</ul><p>{report.quota_note}</p></details>
+    {!!report.progress.errors?.length && <div className="warning-box"><strong>Incomplete steps</strong>{report.progress.errors.map((e, i) => <p key={i}>{e.stage}: {e.error}</p>)}</div>}
+    {!!report.abstentions?.length && <details><summary>Deliberate abstentions</summary>{report.abstentions.map((a, i) => <p key={i}>{a.stage}: {a.reason}</p>)}</details>}
     <h3>Research questions and limitations</h3><div className="fact-stack">{report.questions.map(q => <div key={q.id}><strong>{q.question}</strong><p>{q.state} — {q.limitation}</p><small>{q.fact_ids.length} supporting fact IDs</small></div>)}</div>
     <h3>Candidate comparison</h3>{report.comparison.map(d => <details key={d.candidate_id}><summary>Universe {d.universe_id} · {d.facts.length} admissible facts · relevance requires review</summary>
       {!!d.omitted_facts && <p>Some saved facts are no longer admissible and were omitted.</p>}

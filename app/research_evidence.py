@@ -6,6 +6,7 @@ from datetime import timedelta
 from sqlalchemy import select
 
 from .association import is_association_usable
+from .association.service import resolved_candidate_id
 from .evidence import (
     _load_artifact,
     candidate_facts,
@@ -14,7 +15,14 @@ from .evidence import (
     render_fact,
     resolve_json_pointer,
 )
-from .models import AssociationRecord, Candidate, Observation, Proposal
+from .models import (
+    AssociationRecord,
+    Candidate,
+    MatchCandidate,
+    Observation,
+    Proposal,
+    SourceArtifact,
+)
 from .schemas import AuditGate, AuditReadiness
 
 
@@ -43,6 +51,11 @@ def admissible_observation(db, row):
         association = db.get(AssociationRecord, row.association_id) if row.association_id else None
         if not association or not is_association_usable(db, association):
             return False
+        resolved = resolved_candidate_id(db, association)
+        match = db.get(MatchCandidate, resolved) if resolved else None
+        owner = db.get(Candidate, row.candidate_id) if row.candidate_id else None
+        if match is None or owner is None or match.universe_id != owner.external_id:
+            return False
     try:
         raw = _load_artifact(row.artifact)
         if row.extraction_method == "json_pointer":
@@ -51,6 +64,28 @@ def admissible_observation(db, row):
         return passage in str(raw) and str(row.value_json) in passage
     except (ValueError, KeyError, IndexError, OSError):
         return False
+
+
+def verified_fact_packet(db, fact):
+    """Validate an exact historical fact, without replacing it with a newer fact."""
+    rows = [db.get(Observation, oid) for oid in fact.slot_observation_ids.values()]
+    if not rows or any(row is None or not admissible_observation(db, row) for row in rows):
+        return None
+    try:
+        for source_id in fact.source_ids:
+            artifact = db.get(SourceArtifact, source_id)
+            if artifact is None or artifact.is_discovery_only:
+                return None
+            _load_artifact(artifact)
+        rendered = render_fact(db, fact)
+    except (ValueError, KeyError, IndexError, OSError):
+        return None
+    return {"id": fact.id, "template_id": fact.template_id, "text": rendered,
+            "source_ids": fact.source_ids, "freshness": fact_freshness(db, fact),
+            "captured_at": max(row.observed_at for row in rows).isoformat(),
+            "slots": [{"observation_id": row.id, "value": row.value_json, "unit": row.unit,
+                       "artifact_id": row.artifact_id, "sha256": row.artifact.sha256, "pointer": row.pointer} for row in rows],
+            "limitations": ["Source-reported measurement or text; not independently verified source accuracy."]}
 
 
 def evidence_packet(db, candidate_id, *, include_stale=False):
@@ -65,23 +100,10 @@ def evidence_packet(db, candidate_id, *, include_stale=False):
             if key not in latest or time > latest[key][0]:
                 latest[key] = (time, fact, rows)
     packet = []
-    for _, fact, rows in latest.values():
-        if any(not admissible_observation(db, row) for row in rows):
-            continue
-        freshness = fact_freshness(db, fact)
-        if not include_stale and freshness != "fresh":
-            continue
-        try:
-            text = render_fact(db, fact)
-        except (ValueError, KeyError, IndexError, OSError):
-            continue
-        packet.append({"id": fact.id, "template_id": fact.template_id, "text": text,
-                       "source_ids": fact.source_ids, "freshness": freshness,
-                       "captured_at": max(row.observed_at for row in rows).isoformat(),
-                       "slots": [{"observation_id": row.id, "value": row.value_json, "unit": row.unit,
-                                  "artifact_id": row.artifact_id, "sha256": row.artifact.sha256,
-                                  "pointer": row.pointer} for row in rows],
-                       "limitations": ["Source-reported measurement or text; not independently verified source accuracy."]})
+    for _, fact, _rows in latest.values():
+        item = verified_fact_packet(db, fact)
+        if item and (include_stale or item["freshness"] == "fresh"):
+            packet.append(item)
     return packet
 
 

@@ -255,6 +255,7 @@ def accept_web_claim(
     claim_value: str,
     metric: str,
     evidence: list[tuple[SourceArtifact, str]],
+    association_id: str | None = None,
 ) -> Fact:
     if not evidence:
         raise EvidenceError("web claim has no evidence")
@@ -273,6 +274,7 @@ def accept_web_claim(
             metric=metric,
             exact_passage=passage,
             value=claim_value,
+            association_id=association_id,
         ))
     if not has_primary and (len(owners) < 2 or len(content_hashes) < 2):
         raise EvidenceError("secondary web claims require two independent sources")

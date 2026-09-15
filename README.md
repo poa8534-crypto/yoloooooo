@@ -5,23 +5,23 @@ A local, evidence-first research dashboard with two constrained agent workflows:
 - **Meta Hunter** discovers Roblox market candidates and collects primary evidence.
 - **Venture Scout** proposes a small MVP and risk checklist for a selected candidate.
 
-The trusted layer guarantees **zero unsupported factual claims**: facts are compiled from hashed source artifacts through JSON pointers or captured exact passages. The language model cannot author URLs, metrics, scores, confidence, or verdicts.
+The trusted layer targets **zero unsupported factual slots**: facts are compiled from hashed source artifacts through JSON pointers or captured exact passages. This is a tested provenance invariant, not a guarantee of source truth or semantic correctness of model prose. The language model cannot author source URLs, observed metrics, scores, confidence, or verdicts; its designs and interpretations remain speculative.
 
 ## Current operating phase
 
 The application begins in **collection mode**. It intentionally emits no composite score and recommends no opportunity until all of these gates pass:
 
-1. At least 200 candidates have complete 30-day observation windows.
+1. At least 200 validated niche clusters have complete consecutive 30-day observation windows.
 2. The chronological held-out benchmark reaches at least 95% recommendation precision.
 3. At least ten held-out examples are automatically recommended.
 4. The frozen provenance and feature-schema checks pass.
 
 The learned model uses only the opening seven-day evidence window to predict the later 30-day outcome. Outcome-period changes are never reused as input features, preventing target leakage.
 
-Splits are grouped by research run and ordered by discovery time. Candidates found in the same
-run are competitors in one niche and two of their features (`active_competitor_count`,
-`market_concentration`) are computed from each other, so cutting a run across a split would let
-held-out rows carry information derived from training rows.
+Automatic calibration activation is currently disabled. The experimental trainer groups by
+research run, but that does not establish validated niche clusters or leakage-safe niche and
+discovery-date splits. Individual game counts and elapsed days are not readiness evidence.
+The validated clustering and benchmark pipeline must exist before activation is allowed.
 
 This is a market-growth signal, not a promise that a game will succeed.
 
@@ -86,6 +86,11 @@ drop the triggers, do the work, and reinstall them.
 **Local only.** No endpoint has authentication, so the service refuses to bind anything but
 loopback rather than quietly exposing the ledger, the review queue and the override controls.
 Put it behind an authenticating proxy if you need remote access.
+
+**Webpage metrics are external evidence too.** A claim captured from an
+experience's own Roblox page still resolves through an association record; the
+place ID in the URL is exact-ID evidence, so it auto-associates rather than
+queueing for review. Nothing external reaches a trusted slot unrecorded.
 
 **The downstream gate.** Only two things let a YouTube or web metric through:
 an `auto_associate` verdict resting on exact verified-ID evidence or coming from a validated
@@ -214,17 +219,16 @@ deliberate, narrow exception to the append-only rule for a credential leak.
 
 ### Rollback
 
-Stop the service and restore the database file and the artifact directory from
-backup — that is the whole rollback, because migrations only add columns and
-tables:
+For a code rollback, stop the service, preserve the current database and artifact
+directory, then restore a known compatible code version and rebuild the frontend.
+The additive tables can remain. Keep the credential-redaction fix: old connector
+code must not resume storing API keys. URL redaction is intentionally not reversed.
 
-```powershell
-Copy-Item .\dataenture_agents.db .\dataenture_agents.db.bak
-```
-
-Downgrading the code with the new tables still present is safe; the older code
-ignores them. The one thing rolling back does not undo is the URL redaction, and
-you would not want it undone. Rotate the keys regardless.
+Before any data rollback, stop every process using this database and take a consistent
+SQLite backup (including WAL state, or using SQLite's backup API). Do not copy only a
+live `.db` file. Restoring an older backup loses subsequent captures and may restore
+credential-bearing URLs; sanitize it before serving it. Rotate previously exposed
+keys regardless. No live evidence database was restored or deleted during this upgrade.
 
 ## Starting everything
 
@@ -343,13 +347,15 @@ Set-Location frontend
 npm run build
 ```
 
-Train the score only after the calibration page reports enough complete windows:
+The following trainer is experimental and cannot activate recommendations. Do not
+treat its game/run-based dataset as the required validated niche-cluster benchmark:
 
 ```powershell
 uv run venture-calibrate
 ```
 
-The resulting transparent JSON artifact records the dataset hash, feature order, learned coefficients, scaler, calibration curve, threshold, and held-out results. Failed benchmarks stay inactive.
+The resulting JSON artifact records experimental training inputs and results. Activation
+stays disabled until the full validated niche-cluster workflow and acceptance gates exist.
 
 ## Source policy
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
@@ -133,6 +133,14 @@ def start_scheduler() -> AsyncIOScheduler:
     return scheduler
 
 
+def snapshot_is_due(local_now: datetime, last: datetime | None, hour: int, minute: int) -> bool:
+    """Catch the latest scheduled slot, including a restart before today's slot."""
+    due = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if local_now < due:
+        due -= timedelta(days=1)
+    return last is None or last < due
+
+
 async def catch_up_if_needed() -> None:
     settings = get_settings()
     local_now = datetime.now(settings.tz)
@@ -141,7 +149,6 @@ async def catch_up_if_needed() -> None:
         last = None
         if state and state.value_json.get("completed_at"):
             last = datetime.fromisoformat(state.value_json["completed_at"]).astimezone(settings.tz)
-    scheduled_has_passed = (local_now.hour, local_now.minute) >= (settings.snapshot_hour, settings.snapshot_minute)
-    if scheduled_has_passed and (last is None or last.date() < local_now.date()):
+    if snapshot_is_due(local_now, last, settings.snapshot_hour, settings.snapshot_minute):
         asyncio.create_task(snapshot_all())
 

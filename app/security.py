@@ -38,8 +38,18 @@ def install_log_redaction() -> None:
         return
     def factory(*args, **kwargs):
         record = previous(*args, **kwargs)
-        record.msg = redact(record.getMessage())
-        record.args = ()
+        # Uvicorn's AccessFormatter unpacks its five original arguments.
+        # Preserve formatting structure and numeric types while redacting text.
+        def clean(value):
+            if isinstance(value, str):
+                return redact(sanitize_url(value) if value.startswith("/") and "?" in value else value)
+            if isinstance(value, tuple):
+                return tuple(clean(item) for item in value)
+            if isinstance(value, dict):
+                return {key: clean(item) for key, item in value.items()}
+            return value
+        record.msg = clean(record.msg)
+        record.args = clean(record.args)
         if record.exc_info:
             record.exc_text = redact("".join(traceback.format_exception(*record.exc_info)))
             record.exc_info = None

@@ -1,8 +1,8 @@
 """Forward-only, idempotent schema migrations.
 
 The ledger is append-only and already holds captured evidence, so migrations
-here may only add tables and nullable columns. Nothing drops, rewrites or
-back-fills an existing row: the stored evidence is exactly what was captured.
+here add tables and nullable columns. Credential URL redaction is a narrow,
+audited security exception; captured payload bytes and evidence IDs never change.
 """
 
 from __future__ import annotations

@@ -253,3 +253,151 @@ def test_the_check_survives_titles_with_no_usable_tokens():
     assert restates_discovered_game("", ["Cheese Escape"]) is None
     assert restates_discovered_game("\U0001f480", ["Cheese Escape"]) is None
     assert restates_discovered_game("Cheese Escape", []) is None
+
+
+# --- 8. The audit must actually contain an audit ---------------------------
+
+SCOUT_SECTIONS = ("essential_features", "excluded_features", "dependencies", "validation_tasks")
+
+
+def _scout_payload(**overrides) -> dict:
+    payload = {
+        **VALID,
+        "essential_features": ["A shared objective board"],
+        "excluded_features": ["Monetisation"],
+        "dependencies": ["A single reusable interaction script"],
+        "validation_tasks": ["Playtest the loop with two people"],
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", SCOUT_SECTIONS)
+async def test_a_scout_audit_missing_a_required_section_fails_closed(settings, missing):
+    """An audit that skips scope or validation is not an audit.
+
+    The guard existed but nothing exercised its rejecting branch, so it could
+    be deleted and the suite would stay green.
+    """
+    cited = str(uuid4())
+    payload = _scout_payload(supporting_fact_ids=[cited], **{missing: []})
+    with pytest.raises(LLMUnavailable):
+        await _llm(payload, settings).generate(
+            agent="Venture Scout", niche="cozy farming",
+            sourced_name="Evidence Garden", fact_ids=[cited],
+            require_citations=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_complete_scout_audit_is_accepted(settings):
+    """Positive control, so the test above cannot pass by rejecting everything."""
+    cited = str(uuid4())
+    generated = await _llm(_scout_payload(supporting_fact_ids=[cited]), settings).generate(
+        agent="Venture Scout", niche="cozy farming",
+        sourced_name="Evidence Garden", fact_ids=[cited],
+        require_citations=True,
+    )
+    for section in SCOUT_SECTIONS:
+        assert getattr(generated.payload, section), f"{section} came back empty"
+    assert generated.payload.supporting_fact_ids == [cited]
+
+
+@pytest.mark.asyncio
+async def test_a_hunter_proposal_without_a_citation_fails_closed(settings):
+    cited = str(uuid4())
+    with pytest.raises(LLMUnavailable):
+        await _llm({**VALID, "supporting_fact_ids": []}, settings).generate(
+            agent="Meta Hunter", niche="cozy farming",
+            sourced_name="Evidence Garden", fact_ids=[cited],
+            require_citations=True,
+        )
+
+
+# --- 9. The pipeline must really ask for citations --------------------------
+
+@pytest.mark.asyncio
+async def test_both_agents_are_invoked_with_citations_required(session_factory, settings):
+    """Guards the flag itself, not just the enforcement behind it.
+
+    Dropping `require_citations=True` at either call site silently removes the
+    whole citation guarantee from the real pipeline while every unit test on
+    the enforcement keeps passing.
+    """
+    from app.models import ResearchCheckpoint, ResearchRun
+    from tests.test_deep_research import FakeConnectors as DeepConnectors
+    from tests.test_deep_research import FakeLLM, orchestrator
+
+    with session_factory() as db:
+        run = ResearchRun(niche="cooperative cozy farming short social sessions")
+        db.add(run)
+        db.flush()
+        run_id = run.id
+        db.add(ResearchCheckpoint(run_id=run_id, state={"mode": "deep"}))
+        db.commit()
+
+    llm = FakeLLM()
+    await orchestrator(session_factory, llm, DeepConnectors()).research(run_id)
+
+    agents = [call["agent"] for call in llm.calls]
+    assert agents == ["Meta Hunter", "Venture Scout"], agents
+    for call in llm.calls:
+        assert call.get("require_citations") is True, (
+            f"{call['agent']} was asked for a proposal without requiring citations"
+        )
+        assert call.get("evidence"), f"{call['agent']} received no evidence packet"
+
+
+# --- 10. A webpage metric is external evidence too --------------------------
+
+@pytest.mark.asyncio
+async def test_a_primary_page_claim_carries_an_association(session_factory, settings):
+    """Found on the live ledger: 33 web_description facts had no association.
+
+    The game's own Roblox page is still a webpage source. The place ID in the
+    URL is exact-ID evidence, so it auto-associates rather than queueing for
+    review, but it must resolve through a record like every other external
+    metric.
+    """
+    from sqlalchemy import select as sa_select
+
+    from app.association import is_association_usable
+    from app.models import (
+        AssociationRecord,
+        Observation,
+        ResearchCheckpoint,
+        ResearchRun,
+    )
+    from tests.test_deep_research import FakeConnectors as DeepConnectors
+    from tests.test_deep_research import FakeLLM, orchestrator
+
+    class PageConnectors(DeepConnectors):
+        async def capture_page(self, url):
+            from app.connectors import ConnectorResult
+
+            # The captured page really contains the API-sourced description.
+            return ConnectorResult(url, "Header. Plant seeds together. Footer.", "text/plain")
+
+    with session_factory() as db:
+        run = ResearchRun(niche="cooperative cozy farming short social sessions")
+        db.add(run)
+        db.flush()
+        run_id = run.id
+        db.add(ResearchCheckpoint(run_id=run_id, state={"mode": "deep"}))
+        db.commit()
+
+    await orchestrator(session_factory, FakeLLM(), PageConnectors()).research(run_id)
+
+    with session_factory() as db:
+        claims = list(db.scalars(
+            sa_select(Observation).where(Observation.metric == "web_description")
+        ))
+        assert claims, "the fixture page should have produced a web claim"
+        for claim in claims:
+            assert claim.association_id, "a webpage metric was stored with no association"
+            record = db.get(AssociationRecord, claim.association_id)
+            assert record is not None
+            assert is_association_usable(db, record)
+            assert record.outcome == "auto_associate"
+            assert "exact_verified_id_evidence" in record.rationale_codes
