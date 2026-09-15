@@ -234,10 +234,22 @@ async def test_deep_run_followups_report_and_distinct_agents(session_factory, se
         assert run.status == "complete", run.message
         assert report.payload["progress"]["stop_reason"] == "no_new_admissible_evidence_two_rounds"
         assert report.payload["passing_recommendations"] == []
-        assert report.payload["concepts"] and report.payload["audits"]
-        assert report.payload["api_usage"]["model_attempts"] == 2
+        # A run drafts concepts and stops. It used to audit each one inline,
+        # which meant every concept was already audited when the run finished
+        # and the queue holding them for a human decision was always empty.
+        assert report.payload["concepts"]
+        assert report.payload["audits"] == [], "the run audited its own concepts again"
+        assert report.payload["api_usage"]["model_attempts"] == 1
         assert any(q["id"] == "creators" and q["state"] == "limited" for q in report.payload["questions"])
-    assert [c["agent"] for c in llm.calls] == ["Meta Hunter", "Venture Scout"]
+    assert [c["agent"] for c in llm.calls] == ["Meta Hunter"]
+
+    # The concept the run drafted is what the Scout queue offers.
+    from app import scout_queue
+    with session_factory() as db:
+        waiting = {row["proposal_id"] for row in scout_queue.pending(db)}
+    with session_factory() as db:
+        drafted = {p["id"] for p in report.payload["concepts"]}
+    assert drafted <= waiting, "a drafted concept never reached the Scout queue"
     assert len({q for name, q in connectors.calls if name == "tavily"}) > 1
     assert any('"Evidence Garden"' in q for name, q in connectors.calls if name == "youtube")
 

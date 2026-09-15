@@ -493,8 +493,13 @@ class DeepResearch:
                             self.b.error("scout_followup", exc)
                         updated = self.questions(self.dossiers())
                         gaps = [q["limitation"] for q in updated if q["state"] != "answered"]
-                    self.b.save(stage="Venture Scout: auditing selected proposal")
-                    await self.o.audit(cid, hunter.id, budget=self.b, gaps=gaps)
+                    # The run stops at the concept. It used to audit each one
+                    # here, inline, which meant every concept was already
+                    # audited by the time the run finished -- so the queue that
+                    # is supposed to hold them for a human decision was empty
+                    # after every run, and the decision was never actually
+                    # offered. Concepts are left for the Scout queue instead.
+                    self.b.save(stage="Concept drafted; waiting for a Venture Scout decision")
             except Exception as exc:
                 self.b.error("concept_or_audit", exc)
 

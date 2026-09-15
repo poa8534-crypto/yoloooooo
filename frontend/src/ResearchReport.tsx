@@ -103,7 +103,7 @@ export function ResearchReport({ runId, status }: { runId: string; status: strin
     <h3>Research concepts and bound audits</h3>{report.concepts.length ? report.concepts.map(c => {
       const audit = report.audits.find(a => a.proposal_id === c.id && a.candidate_id === c.candidate_id)
       return <details key={c.id}><summary>{c.payload.concept_title} · speculative research concept</summary><p>{c.payload.core_loop}</p><p>{c.payload.differentiator}</p><DesignDetails design={c.payload} />
-        {audit ? <div><h3>Venture Scout — {audit.evidence_state.replaceAll('_', ' ')}</h3><a href={`/api/audits/${audit.audit_id}`} target="_blank" rel="noreferrer">Persistent audit record</a>{audit.proposal && <><p>{audit.proposal.core_loop}</p><ol>{audit.proposal.build_steps.map((s, i) => <li key={i}>{s}</li>)}</ol><DesignDetails design={audit.proposal} /></>}<ul>{audit.risks.map((risk, i) => <li key={i}>{risk}</li>)}</ul></div> : <p>Audit not produced within evidence/model budget.</p>}
+        {audit ? <div><h3>Venture Scout — {audit.evidence_state.replaceAll('_', ' ')}</h3><a href={`/api/audits/${audit.audit_id}`} target="_blank" rel="noreferrer">Persistent audit record</a>{audit.proposal && <><p>{audit.proposal.core_loop}</p><ol>{audit.proposal.build_steps.map((s, i) => <li key={i}>{s}</li>)}</ol><DesignDetails design={audit.proposal} /></>}<ul>{audit.risks.map((risk, i) => <li key={i}>{risk}</li>)}</ul></div> : <p>Not audited yet. A run drafts concepts and stops; the Venture Scout runs them from its audit queue when you choose to.</p>}
       </details>
     }) : (() => {
       // Drafting nothing is now a decision with a stated reason, not just an

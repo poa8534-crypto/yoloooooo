@@ -8,6 +8,8 @@ describe('researchPhase', () => {
     expect(researchPhase('Investigating round 4', 'running')).toBe(1)
     expect(researchPhase('Scout follow-up: checking remaining evidence gaps', 'running')).toBe(1)
     expect(researchPhase('Comparing evidence and drafting research concepts', 'running')).toBe(2)
+    expect(researchPhase('Concept drafted; waiting for a Venture Scout decision', 'running')).toBe(3)
+    // A run from before the handoff split must still resolve to a phase.
     expect(researchPhase('Venture Scout: auditing selected proposal', 'running')).toBe(3)
   })
 

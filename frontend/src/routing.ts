@@ -24,7 +24,7 @@ export const RESEARCH_PHASES = [
   { id: 'queued', label: 'Queued', detail: 'Waiting to start' },
   { id: 'investigating', label: 'Investigating', detail: 'Discovering, capturing and answering open questions' },
   { id: 'concepts', label: 'Drafting concepts', detail: 'Comparing evidence and writing research concepts' },
-  { id: 'audit', label: 'Auditing', detail: 'Venture Scout drafts, critiques and revises' },
+  { id: 'handoff', label: 'Handed to Scout', detail: 'Concepts waiting in the audit queue for your decision' },
   { id: 'finished', label: 'Finished', detail: 'Report written to the ledger' },
 ] as const
 
@@ -35,6 +35,9 @@ export function researchPhase(stage: string, status: string): number {
   const text = (stage || '').trim().toLowerCase()
   if (text.startsWith('investigating') || text.startsWith('scout follow-up')) return 1
   if (text.startsWith('comparing evidence')) return 2
+  if (text.startsWith('concept drafted')) return 3
+  // Runs recorded before the handoff split still carry this stage; the phase
+  // strip has to keep rendering their history rather than showing "unknown".
   if (text.startsWith('venture scout')) return 3
   if (status === 'queued' || text === '' || text === 'queued') return 0
   return -1

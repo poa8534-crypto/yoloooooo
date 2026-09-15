@@ -184,25 +184,33 @@ test.describe('meta hunter pipeline', () => {
     await expect(page.locator('.pipeline-list li[aria-current="step"]')).toHaveCount(1)
   })
 
-  test('a running audit marks the audit phase, not the first one', async ({ page }) => {
-    // The complaint this fixes: a run deep in the audit looked identical to one
-    // stuck on stage one. Stubbed so the state is exact and costs no model time.
-    await page.route('**/api/research-runs*', async route => {
-      const response = await route.fetch()
-      const runs = await response.json()
-      runs[0] = {
-        ...runs[0], status: 'running',
-        progress: { ...runs[0].progress, stage: 'Venture Scout: auditing selected proposal', round: 4 },
-      }
-      await route.fulfill({ json: runs })
+  // A run no longer audits; it hands its concepts to the Scout queue. The
+  // legacy stage is still mapped on purpose, so runs recorded before the split
+  // keep rendering a phase instead of showing nothing.
+  for (const [label, stage] of [
+    ['the handoff', 'Concept drafted; waiting for a Venture Scout decision'],
+    ['a run recorded before the split', 'Venture Scout: auditing selected proposal'],
+  ] as const) {
+    test(`${label} marks the last working phase, not the first one`, async ({ page }) => {
+      // The complaint this fixes: a run deep in the pipeline looked identical to
+      // one stuck on stage one. Stubbed so the state is exact and costs no model time.
+      await page.route('**/api/research-runs*', async route => {
+        const response = await route.fetch()
+        const runs = await response.json()
+        runs[0] = {
+          ...runs[0], status: 'running',
+          progress: { ...runs[0].progress, stage, round: 4 },
+        }
+        await route.fulfill({ json: runs })
+      })
+      await page.goto('/#/meta')
+      const current = page.locator('.pipeline-list li.current')
+      await expect(current).toHaveCount(1)
+      await expect(current).toContainText('Handed to Scout')
+      await expect(page.locator('.pipeline-list li.done')).toHaveCount(3)
+      await expect(page.locator('.pipeline-list li').last()).toHaveClass(/pending/)
     })
-    await page.goto('/#/meta')
-    const current = page.locator('.pipeline-list li.current')
-    await expect(current).toHaveCount(1)
-    await expect(current).toContainText('Auditing')
-    await expect(page.locator('.pipeline-list li.done')).toHaveCount(3)
-    await expect(page.locator('.pipeline-list li').last()).toHaveClass(/pending/)
-  })
+  }
 
   test('an investigating run shows which round it is on', async ({ page }) => {
     await page.route('**/api/research-runs*', async route => {

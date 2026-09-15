@@ -347,7 +347,18 @@ async def test_both_agents_are_invoked_with_citations_required(session_factory, 
         db.commit()
 
     llm = FakeLLM()
-    await orchestrator(session_factory, llm, DeepConnectors()).research(run_id)
+    orchestra = orchestrator(session_factory, llm, DeepConnectors())
+    await orchestra.research(run_id)
+
+    # The run drafts; the Scout audits separately, on a human decision. Both
+    # call sites still have to require citations, so both are driven here --
+    # covering only the one the run happens to reach would leave the other
+    # free to drop the flag unnoticed.
+    from app import scout_queue
+    with session_factory() as db:
+        waiting = scout_queue.pending(db)
+    assert waiting, "the run drafted nothing for the Scout to audit"
+    await orchestra.audit(waiting[0]["candidate_id"], waiting[0]["proposal_id"])
 
     agents = [call["agent"] for call in llm.calls]
     assert agents == ["Meta Hunter", "Venture Scout"], agents
