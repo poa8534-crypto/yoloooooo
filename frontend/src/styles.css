@@ -1145,3 +1145,13 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .brief-fold.reasoning > small { display: block; padding: 0 14px 10px; color: var(--text-muted); font-size: 11px; }
+
+/* Which code is answering. A stale service and a restarted one used to look
+   identical on this page. */
+.build-identity {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 22px;
+  margin-bottom: 14px; padding: 12px 16px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg-surface-2);
+}
+.build-identity span { display: block; color: var(--text-muted); font: 500 10.5px var(--mono); text-transform: uppercase; }
+.build-identity strong { color: var(--text-primary); font: 600 12.5px var(--mono); }

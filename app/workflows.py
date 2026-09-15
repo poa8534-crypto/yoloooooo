@@ -481,6 +481,10 @@ class ResearchOrchestrator:
             decision = latest_decision.kind if latest_decision else "collection_only"
         result = {
             "candidate_id": candidate_id, "proposal_id": selected_id, "proposal": None,
+            # Which operation produced this record. Without it, history cannot
+            # tell an evidence-only analysis from a critique of a proposal --
+            # two different claims that look identical once stored.
+            "operation": operation or ("audit_idea" if selected_id else "analyze_game"),
             "gates": [gate.model_dump() for gate in readiness.gates],
             "evidence_state": "blocked", "decision": decision,
             "risks": [], "note": "Speculative design audit, not a prediction of game success.",

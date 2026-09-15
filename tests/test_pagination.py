@@ -146,3 +146,48 @@ def test_review_paging_reaches_the_second_page(client, session_factory):
     assert len(first) == 4 and len(second) == 2
     ids = {row["association_id"] for row in first} | {row["association_id"] for row in second}
     assert len(ids) == 6, "paging returned the same records twice"
+
+
+def _seed_runs(factory, audits: int, concepts: int):
+    from app.models import AuditRecord, Proposal
+    from tests.test_deep_research import VALID, seed
+
+    _, candidate_id, *_ = seed(factory)
+    with factory() as db:
+        for index in range(audits):
+            db.add(AuditRecord(candidate_id=candidate_id, proposal_id=None, payload={
+                "candidate_id": candidate_id, "proposal": None, "gates": [],
+                "risks": [f"r{index}"], "evidence_state": "blocked",
+                "decision": "collection_only", "note": "n"}))
+        for _ in range(concepts):
+            db.add(Proposal(candidate_id=candidate_id, agent="meta_hunter",
+                            payload=VALID, model_name="fake"))
+        db.commit()
+    return candidate_id
+
+
+def test_history_total_counts_the_ledger_not_the_fetched_window(client, session_factory):
+    """A total measured from the rows already fetched reports the page size."""
+    _seed_runs(session_factory, audits=7, concepts=5)
+    body = client.get("/api/agent-runs?paged=true&limit=3").json()
+    # One Hunter proposal comes from the seed itself.
+    assert body["total"] == 13, body["total"]
+    assert len(body["items"]) == 3
+    assert body["next_offset"] == 3
+
+
+def test_history_paging_walks_every_run_once(client, session_factory):
+    _seed_runs(session_factory, audits=4, concepts=4)
+    seen, offset = [], 0
+    while offset is not None:
+        body = client.get(f"/api/agent-runs?paged=true&limit=3&offset={offset}").json()
+        seen += [f"{run['kind']}:{run['id']}" for run in body["items"]]
+        offset = body["next_offset"]
+    assert len(seen) == 9
+    assert len(set(seen)) == 9, "a run appeared on two pages"
+
+
+def test_history_keeps_the_bare_array_for_existing_callers(client, session_factory):
+    _seed_runs(session_factory, audits=2, concepts=0)
+    body = client.get("/api/agent-runs").json()
+    assert isinstance(body, list) and len(body) == 3

@@ -320,6 +320,7 @@ class AgentRunView(StrictModel):
     summary: str = ""
     outcome: str
     model_name: str = ""
+    operation: Literal["analyze_game", "audit_idea"] | None = None
     cited_fact_ids: list[str] = Field(default_factory=list)
     # The claim each citation points at, so history reads as evidence rather
     # than as a column of identical-looking row ids.
@@ -363,6 +364,7 @@ class AuditView(StrictModel):
     # should have answered the critique never landed.
     unresolved_concerns: list[str] = Field(default_factory=list)
     revision_applied: bool = True
+    operation: Literal["analyze_game", "audit_idea"] | None = None
     # What the audit found against its own draft, kept whether or not the
     # revision landed, so a reviewer can see what was raised.
     critique: AuditCritique | None = None

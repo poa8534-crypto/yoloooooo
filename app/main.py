@@ -20,6 +20,7 @@ from .association import AssociationService, active_thresholds, is_association_u
 from .association.materialize import apply_association
 from .association.service import human_confirmation
 from . import audit_activity, dependency_health
+from .build_identity import build_identity
 from .audit_jobs import AuditJobs, JobConflict, ACTIVE as ACTIVE_AUDIT_STATES
 from .calibration import calibration_status, load_artifact
 from .config import ROOT, get_settings
@@ -425,22 +426,40 @@ def count_agent_runs(kind: str = "all", db: Session = Depends(get_db)):
     return {"total": total, "venture_scout": audits, "meta_hunter": concepts}
 
 
-@app.get("/api/agent-runs", response_model=list[AgentRunView])
-def list_agent_runs(limit: int = 100, kind: str = "all", db: Session = Depends(get_db)):
-    """Every Meta Hunter concept and Venture Scout audit, newest first."""
+@app.get("/api/agent-runs")
+def list_agent_runs(limit: int = 100, offset: int = 0, kind: str = "all", paged: bool = False,
+                    db: Session = Depends(get_db)):
+    """Every Meta Hunter concept and Venture Scout audit, newest first.
+
+    Both kinds are queried in their own descending order and merged, so paging
+    happens after the merge: an offset applied per-kind would interleave the
+    two lists differently on every page.
+    """
     safe_limit = max(1, min(limit, 500))
+    safe_offset = max(0, offset)
+    # Enough of each kind that the merged window certainly covers this page,
+    # whichever kind happens to dominate it.
+    window = safe_offset + safe_limit
+    audits = concepts = 0
     rows: list[tuple] = []
     if kind in {"all", "venture_scout"}:
+        audits = db.scalar(select(func.count(AuditRecord.id))) or 0
         rows += [("venture_scout", row) for row in db.scalars(
-            select(AuditRecord).order_by(AuditRecord.created_at.desc()).limit(safe_limit)
+            select(AuditRecord).order_by(AuditRecord.created_at.desc()).limit(window)
         )]
     if kind in {"all", "meta_hunter"}:
+        concepts = db.scalar(
+            select(func.count(Proposal.id)).where(Proposal.agent == "meta_hunter")
+        ) or 0
         rows += [("meta_hunter", row) for row in db.scalars(
             select(Proposal).where(Proposal.agent == "meta_hunter")
-            .order_by(Proposal.created_at.desc()).limit(safe_limit)
+            .order_by(Proposal.created_at.desc()).limit(window)
         )]
     rows.sort(key=lambda item: item[1].created_at, reverse=True)
-    rows = rows[:safe_limit]
+    # Counted in the database. Measuring the fetched window instead would
+    # report the page size and call it the total.
+    total = audits + concepts
+    rows = rows[safe_offset:safe_offset + safe_limit]
     labels = _candidate_labels(db, {row.candidate_id for _, row in rows})
     # Several runs usually share a candidate, and building the packet is the
     # expensive part, so resolve each candidate once for the whole page.
@@ -479,6 +498,7 @@ def list_agent_runs(limit: int = 100, kind: str = "all", db: Session = Depends(g
             outcome=("design" if design else "blocked") if row_kind == "venture_scout" else (
                 "concept" if design else "unreadable"),
             model_name=getattr(row, "model_name", "") or "",
+            operation=stored.get("operation") if row_kind == "venture_scout" else None,
             cited_fact_ids=cited,
             cited_facts=[
                 FactView(id=fact_id, text=live[fact_id]["text"], source_ids=live[fact_id]["source_ids"],
@@ -489,7 +509,10 @@ def list_agent_runs(limit: int = 100, kind: str = "all", db: Session = Depends(g
             blocking_reasons=list(stored.get("risks", [])) if row_kind == "venture_scout" and not design else [],
             payload=design,
         ))
-    return views
+    if not paged:
+        return views
+    return {"items": views, "total": total, "offset": safe_offset, "limit": safe_limit,
+            "next_offset": safe_offset + len(views) if safe_offset + len(views) < total else None}
 
 
 @app.get("/api/candidates/{candidate_id}/audit-activity")
@@ -1217,6 +1240,9 @@ async def health(db: Session = Depends(get_db)):
     return {
         "status": "ok",
         "database": "connected",
+        # Which code is answering, so a stale service is distinguishable from a
+        # freshly restarted one.
+        "build": build_identity(),
         "quotas": {row.key: row.value_json for row in db.scalars(select(SystemState).where(SystemState.key.like("quota:%:" + str(datetime.now(UTC).date()))))},
         "ollama": {**ollama, "base_url": settings.ollama_base_url},
         "embeddings": {

@@ -39,6 +39,8 @@ type Health = {
   scheduler: { timezone: string; daily_at: string; last_snapshot: null | { completed_at?: string; counts?: Record<string, number> } }
   calibration: Calibration
   dependencies?: DependencyReport[]
+  build?: { commit: string; short_commit: string; dirty: boolean | null; branch: string;
+    committed_at: string | null; started_at: string; source: string }
 }
 type DashboardSummary = {
   service_started_at: string; uptime_seconds: number; collection_started_at: string | null
@@ -333,11 +335,21 @@ function useAuditJob(candidateId: string) {
     catch (caught) { setJobError((caught as Error).message) }
   }
 
-  return { job, jobError, running, workOpen, setWorkOpen, stored, start, cancel }
+  // A job interrupted by a restart keeps its original deadline and attempt
+  // count. Resuming stays a decision rather than something the service does on
+  // startup, so it needs a control.
+  async function resume() {
+    if (!job) return
+    try { setJob(await api<AuditJob>(`/api/audit-jobs/${job.id}/resume`, { method: 'POST' })) }
+    catch (caught) { setJobError((caught as Error).message) }
+  }
+
+  return { job, jobError, running, workOpen, setWorkOpen, stored, start, cancel, resume }
 }
 
-function BackgroundWorkDrawer({ job, events, open, onClose, onCancel }: {
-  job: AuditJob | null; events: JobEvent[]; open: boolean; onClose: () => void; onCancel: () => void
+function BackgroundWorkDrawer({ job, events, open, onClose, onCancel, onResume }: {
+  job: AuditJob | null; events: JobEvent[]; open: boolean
+  onClose: () => void; onCancel: () => void; onResume?: () => void
 }) {
   const panel = useRef<HTMLElement>(null)
   const close = useRef(onClose)
@@ -360,6 +372,7 @@ function BackgroundWorkDrawer({ job, events, open, onClose, onCancel }: {
         <div><span>Background work</span><strong>{job ? `${job.status}${running ? ` · ${Math.round(job.remaining_seconds)}s left` : ''}` : 'Nothing running'}</strong></div>
         <div className="drawer-header-actions">
           {running && <button className="text-button" onClick={onCancel}>Cancel run</button>}
+          {job?.status === 'interrupted' && onResume && <button className="text-button" onClick={onResume}>Resume</button>}
           <button aria-label="Close background work" onClick={onClose}>×</button>
         </div>
       </header>
@@ -418,7 +431,7 @@ function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFa
   // An audit costs minutes and is already in the ledger. Without this the
   // brief came back empty after a reload, which reads as the audit never
   // having run.
-  const { job, jobError, running, workOpen, setWorkOpen, stored, start, cancel } = useAuditJob(candidateId)
+  const { job, jobError, running, workOpen, setWorkOpen, stored, start, cancel, resume } = useAuditJob(candidateId)
   // The audit is bound to the Hunter proposal when the game has one, and works
   // from the evidence alone when it does not. The button used to do only the
   // first and refuse everything else.
@@ -434,7 +447,7 @@ function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFa
     return <section className="workspace analyst-brief"><div className="brief-toolbar"><button className="text-button" onClick={() => onSelect('')}>← Back to ideas</button><div><Badge tone={toneFor(candidate.decision)}>{candidate.decision.replaceAll('_', ' ')}</Badge><Badge tone="verified">{candidate.facts.length} verified facts</Badge></div><button className="primary" disabled={running || blocking.length > 0} onClick={() => start(operation, candidate.proposal_id)} title={blocking.length ? blocking.map(gate => `${gate.label}: ${gate.detail}`).join(' · ') : 'Scout reads the evidence, drafts, critiques its own draft and revises. This takes several minutes.'}>{running ? 'Scout is deliberating…' : blocking.length ? 'Audit blocked by gates' : operation === 'audit_idea' ? 'Audit this idea' : 'Analyze this game'}</button><button className="text-button" onClick={() => setWorkOpen(true)}>See what it is doing{running ? ' ●' : ''}</button>{running && <button className="text-button" onClick={cancel}>Cancel</button>}</div>
       {jobError && <div className="warning-box"><strong>The run could not be started</strong><span>{jobError}</span></div>}
       <BackgroundWorkDrawer job={job} events={job?.events || []} open={workOpen}
-        onClose={() => setWorkOpen(false)} onCancel={cancel} />
+        onClose={() => setWorkOpen(false)} onCancel={cancel} onResume={resume} />
       {!running && shown?.proposal && <div className={`audit-result-banner${shown.unresolved_concerns?.length ? ' incomplete' : ''}`}>
         <div><strong>{shown.unresolved_concerns?.length ? 'Venture Scout audit incomplete' : 'Venture Scout audit complete'}</strong><span>{shown.proposal.concept_title} · {(shown.cited_fact_ids || []).length} cited fact(s){shown.withdrawn_fact_ids?.length ? `, ${shown.withdrawn_fact_ids.length} withdrawn` : ''}</span></div>
         <div><a href="#brief-1" onClick={event => { event.preventDefault(); document.getElementById("brief-1")?.scrollIntoView() }}>Read the brief</a>{shown.audit_id && <a href={`/api/audits/${shown.audit_id}`} target="_blank" rel="noreferrer">Audit record</a>}<button type="button" className="text-button" onClick={() => setWorkOpen(true)}>How it ran</button></div>
@@ -586,7 +599,7 @@ function MetaHunterPage({ runs, health, onStart, busy }: { runs: Run[]; health: 
 function VentureScoutPage({ candidates }: { candidates: Candidate[] }) {
   const [candidateId, setCandidateId] = useState(candidates[0]?.id || '')
   const [operation, setOperation] = useState<ScoutOperation>('analyze_game')
-  const { job, jobError, running, workOpen, setWorkOpen, stored, start, cancel } = useAuditJob(candidateId)
+  const { job, jobError, running, workOpen, setWorkOpen, stored, start, cancel, resume } = useAuditJob(candidateId)
   const [readiness, setReadiness] = useState<AuditReadiness | null>(null)
   const [readinessError, setReadinessError] = useState('')
   // Only a candidate carrying a selected Meta Hunter proposal can be audited;
@@ -611,13 +624,13 @@ function VentureScoutPage({ candidates }: { candidates: Candidate[] }) {
   const cancelJob = cancel
   return <section className="workspace">
     <BackgroundWorkDrawer job={job} events={job?.events || []} open={workOpen}
-      onClose={() => setWorkOpen(false)} onCancel={cancelJob} />
+      onClose={() => setWorkOpen(false)} onCancel={cancelJob} onResume={resume} />
     <div className="scout-guard"><div><strong>Venture Scout audit guardrail</strong><span>Fail-closed enforced</span></div><p>Scout does two different things. <strong>Analyze game</strong> works from the captured evidence alone and needs no Meta Hunter proposal. <strong>Audit idea</strong> critiques one exact Hunter proposal. Both are scoped to a solo beginner and a three-day MVP, and neither can invent facts or override a deterministic decision.</p></div>
     <div className="agent-columns"><article className="data-panel"><div className="panel-heading"><div><span>Solo MVP configuration</span><h2>Scout operation</h2></div></div>{candidates.length ? <><label>Operation<select value={operation} onChange={event => setOperation(event.target.value as ScoutOperation)}>
       <option value="analyze_game">Analyze game — from captured evidence alone</option>
       <option value="audit_idea">Audit idea — critique this game's Hunter proposal</option>
     </select></label><label>Candidate<select value={candidateId} onChange={event => setCandidateId(event.target.value)}>{candidates.map(item => <option key={item.id} value={item.id}>{item.display_name}{item.proposal_id ? '' : ' — no Hunter proposal'}</option>)}</select></label>
-    {operation === 'audit_idea' && !candidate?.proposal_id && <small className="gate-hint">This game has no Meta Hunter proposal, so there is nothing to audit. Analyze game works from the evidence instead.</small>}<div className="form-grid"><label>Builder experience<input value="Beginner" disabled /></label><label>Team capacity<input value="Solo" disabled /></label><label>MVP scope<input value="72 hours" disabled /></label><label>Monetization<input value="Excluded from MVP" disabled /></label></div><div className="scout-actions"><button className="primary" disabled={running || !candidate || (operation === 'audit_idea' && !candidate?.proposal_id)} onClick={startJob}>{running ? 'Scout is deliberating…' : operation === 'audit_idea' ? 'Audit this idea' : 'Analyze this game'}</button><button type="button" className="text-button" onClick={() => setWorkOpen(true)}>See what it is doing{running ? ' ●' : ''}</button>{running && <button type="button" className="text-button" onClick={cancelJob}>Cancel</button>}</div>{jobError && <div className="warning-box"><strong>The run could not be started</strong><span>{jobError}</span></div>}{job && !running && job.status !== 'complete' && <div className="warning-box"><strong>Run ended as {job.status}</strong><span>{job.error || 'No completed result was produced. Nothing was written as a finding.'}</span></div>}{readiness && !readiness.ready && <small className="gate-hint">Some gates are not met. The backend will record a blocked audit without invoking the model.</small>}</> : <EmptyState title="No game captured yet">Start a Meta Hunter research run; Scout analyses what it captures.</EmptyState>}</article>
+    {operation === 'audit_idea' && !candidate?.proposal_id && <small className="gate-hint">This game has no Meta Hunter proposal, so there is nothing to audit. Analyze game works from the evidence instead.</small>}<div className="form-grid"><label>Builder experience<input value="Beginner" disabled /></label><label>Team capacity<input value="Solo" disabled /></label><label>MVP scope<input value="72 hours" disabled /></label><label>Monetization<input value="Excluded from MVP" disabled /></label></div><div className="scout-actions"><button className="primary" disabled={running || !candidate || (operation === 'audit_idea' && !candidate?.proposal_id)} onClick={startJob}>{running ? 'Scout is deliberating…' : operation === 'audit_idea' ? 'Audit this idea' : 'Analyze this game'}</button><button type="button" className="text-button" onClick={() => setWorkOpen(true)}>See what it is doing{running ? ' ●' : ''}</button>{running && <button type="button" className="text-button" onClick={cancelJob}>Cancel</button>}</div>{jobError && <div className="warning-box"><strong>The run could not be started</strong><span>{jobError}</span></div>}{job?.status === 'interrupted' && <div className="warning-box"><strong>This run was interrupted</strong><span>The service stopped while it was working. Its original deadline and attempt count were kept; nothing was replayed automatically. <button type="button" className="text-button" onClick={resume}>Resume it</button></span></div>}{job && !running && job.status !== 'complete' && job.status !== 'interrupted' && <div className="warning-box"><strong>Run ended as {job.status}</strong><span>{job.error || 'No completed result was produced. Nothing was written as a finding.'}</span></div>}{readiness && !readiness.ready && <small className="gate-hint">Some gates are not met. The backend will record a blocked audit without invoking the model.</small>}</> : <EmptyState title="No game captured yet">Start a Meta Hunter research run; Scout analyses what it captures.</EmptyState>}</article>
       <article className="data-panel"><div className="panel-heading"><div><span>Measured against the ledger</span><h2>Audit gates</h2></div>{readiness && <Badge tone={readiness.ready ? 'verified' : 'insufficient'}>{readiness.ready ? 'All gates pass' : 'Gates outstanding'}</Badge>}</div>
         {readinessError && <div className="warning-box"><strong>Readiness unavailable</strong><span>{readinessError}</span></div>}
         {!candidateId ? <EmptyState title="No candidate selected">Gate state is computed per candidate; nothing is assumed.</EmptyState>
@@ -631,11 +644,12 @@ function VentureScoutPage({ candidates }: { candidates: Candidate[] }) {
 type AgentRun = {
   id: string; kind: 'meta_hunter' | 'venture_scout'; created_at: string
   run_id: string | null; niche: string; candidate_id: string; candidate_name: string
-  title: string; summary: string; outcome: string; model_name: string
+  title: string; summary: string; outcome: string; model_name: string; operation?: string | null
   cited_fact_ids: string[]; cited_facts: Fact[]; withdrawn_fact_ids: string[]; blocking_reasons: string[]
   payload: Proposal | null
 }
 
+const HISTORY_PAGE = 25
 const AGENT_LABEL: Record<string, string> = { meta_hunter: 'Meta Hunter', venture_scout: 'Venture Scout' }
 const OUTCOME_TONE: Record<string, Tone> = { design: 'verified', concept: 'proposal', blocked: 'insufficient', unreadable: 'conflict' }
 
@@ -644,16 +658,25 @@ const OUTCOME_TONE: Record<string, Tone> = { design: 'verified', concept: 'propo
 // it belonged to and opening that brief.
 function AgentHistoryPage({ onInspectFact, onOpenCandidate }: { onInspectFact: (id: string) => void; onOpenCandidate: (id: string) => void }) {
   const [runs, setRuns] = useState<AgentRun[] | null>(null)
+  const [total, setTotal] = useState(0)
+  const [nextOffset, setNextOffset] = useState<number | null>(null)
+  const [offset, setOffset] = useState(0)
   const [error, setError] = useState('')
   const [kind, setKind] = useState<'all' | 'venture_scout' | 'meta_hunter'>('all')
   const [query, setQuery] = useState('')
   const [openId, setOpenId] = useState('')
+  // The page asked for two hundred runs and reported "N of N", which counted
+  // only what it had been handed. It pages now, and the total comes from the
+  // ledger.
   const reload = useCallback(() => {
     setRuns(null); setError('')
-    api<AgentRun[]>(`/api/agent-runs?limit=200&kind=${kind}`)
-      .then(setRuns).catch(caught => setError((caught as Error).message))
-  }, [kind])
+    api<{ items: AgentRun[]; total: number; next_offset: number | null }>(
+      `/api/agent-runs?paged=true&limit=${HISTORY_PAGE}&offset=${offset}&kind=${kind}`)
+      .then(page => { setRuns(page.items); setTotal(page.total); setNextOffset(page.next_offset) })
+      .catch(caught => setError((caught as Error).message))
+  }, [kind, offset])
   useEffect(() => { reload() }, [reload])
+  useEffect(() => { setOffset(0) }, [kind])
   const term = query.trim().toLowerCase()
   const shown = (runs || []).filter(run => !term
     || run.title.toLowerCase().includes(term)
@@ -670,7 +693,9 @@ function AgentHistoryPage({ onInspectFact, onOpenCandidate }: { onInspectFact: (
     <div className="history-toolbar">
       <input aria-label="Filter agent history" placeholder="Filter by concept, experience or niche" value={query} onChange={event => setQuery(event.target.value)} />
       <button className="text-button" onClick={reload}>Refresh</button>
-      {runs && <span>{shown.length} of {runs.length} run(s)</span>}
+      {runs && <span>{runs.length ? `${offset + 1}–${offset + runs.length}` : '0'} of {total} run(s){term ? ` · ${shown.length} shown` : ''}</span>}
+      <button className="text-button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - HISTORY_PAGE))}>← Previous</button>
+      <button className="text-button" disabled={nextOffset === null} onClick={() => setOffset(nextOffset!)}>Next →</button>
     </div>
     {error && <div className="warning-box"><strong>History unavailable</strong><span>{error}</span></div>}
     {!runs ? <div className="drawer-loading">Loading agent history…</div>
@@ -679,6 +704,7 @@ function AgentHistoryPage({ onInspectFact, onOpenCandidate }: { onInspectFact: (
           <div>
             <Badge tone={run.kind === 'venture_scout' ? 'inference' : 'proposal'}>{AGENT_LABEL[run.kind]}</Badge>
             <Badge tone={OUTCOME_TONE[run.outcome] || 'proposal'}>{run.outcome}</Badge>
+            {run.operation && <Badge tone="inference">{run.operation.replaceAll('_', ' ')}</Badge>}
             <strong>{run.title || run.candidate_name}</strong>
           </div>
           <div><span>{run.candidate_name}</span><span>{run.niche || 'no niche recorded'}</span><span>{formatDate(run.created_at)}</span><b>{openId === run.id ? 'Hide ▴' : 'Open ▾'}</b></div>
@@ -764,7 +790,15 @@ function HealthPage({ health, summary, matching }: { health: Health | null; summ
     ['Daily snapshot scheduler', Boolean(health?.scheduler.daily_at), health ? `${health.scheduler.daily_at} ${health.scheduler.timezone}` : 'Checking'],
     ['Local embedding model', health?.embeddings.package_installed, health?.embeddings.package_installed ? `${health.embeddings.model_name}${health.embeddings.last_association_used_embeddings === false ? ' · last run used lexical fallback' : ''}` : 'fastembed not installed · lexical retrieval only'],
   ] as const
+  const build = health?.build
   return <section className="workspace">
+    {build && <div className="build-identity">
+      <div><span>Running code</span><strong>{build.source === 'git' ? `${build.branch} @ ${build.short_commit}` : 'Unknown — not a git checkout'}</strong></div>
+      <div><span>Committed</span><strong>{build.committed_at ? formatDate(build.committed_at) : '—'}</strong></div>
+      <div><span>Service started</span><strong>{formatDate(build.started_at)}</strong></div>
+      {build.dirty && <Badge tone="conflict">Uncommitted changes</Badge>}
+      {build.dirty === false && <Badge tone="verified">Clean checkout</Badge>}
+    </div>}
     {!!failing.length && <div className="warning-box"><strong>{failing.length} dependency check{failing.length > 1 ? 's are' : ' is'} failing</strong>{failing.map(item => <p key={item.name}>{item.name}: {item.detail}{item.checked_at ? ` (observed ${formatDate(item.checked_at)})` : ''}</p>)}</div>}
     <article className="data-panel"><div className="panel-heading"><div><span>Observed, not configured</span><h2>Dependency status</h2></div></div>
       <p className="body-copy">A configured credential is not evidence that a dependency works. Each row below is the last thing actually observed, with when it was observed. Metered APIs are not probed, because a probe would spend quota.</p>

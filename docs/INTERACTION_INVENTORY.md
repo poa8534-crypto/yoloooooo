@@ -9,9 +9,9 @@ Automated coverage behind this table:
 
 | Suite | Count | What it exercises |
 | --- | --- | --- |
-| `pytest` | 410 | API behaviour, evidence rules, agent guarantees |
+| `pytest` | 417 | API behaviour, evidence rules, agent guarantees |
 | `vitest` | 8 | Routing helpers, run phases and the evidence drawer component |
-| `playwright` | 174 | Real browser, three viewports, including actions that change data |
+| `playwright` | 234 | Real browser, three viewports, including actions that change data |
 
 Browser tests run against an isolated ledger created by
 `scripts/e2e_fixture.py`: a temporary database and artifact directory, a stub
@@ -29,19 +29,19 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 | `aria-current` on the active item | Exactly one item marked | passed | `navigation.spec.ts` |
 | Keyboard navigation | Focus and Enter operate the sidebar | passed | `responsive.spec.ts` |
 | Focus ring | Visible on focused controls | passed | `responsive.spec.ts` |
-| Refresh data | Reloads every panel, surfacing per-panel errors | not tested | manual only |
-| Theme toggle | Switches light/dark | not tested | manual only |
+| Refresh data | Reloads every panel | passed | `coverage.spec.ts` |
+| Theme toggle | Removed; the editorial direction commits to one look | unavailable | `coverage.spec.ts` asserts it is absent |
 | Application zoom control | Removed in favour of browser zoom | unavailable | removed by design |
-| Global alert dismissal | Clears the alert | not tested | — |
+| Global alert dismissal | A failed panel says so and the alert clears | passed | `coverage.spec.ts` |
 
 ## Home
 
 | Control | Expected | Result | Evidence |
 | --- | --- | --- | --- |
 | Collection totals | Match the ledger, refresh coherently | passed (API) | `test_dashboard_api.py` |
-| Timeline 7D / 30D / All | Filters captured days | not tested | single-day fixture only |
+| Timeline 7D / 30D / All | Filters captured days | passed | `coverage.spec.ts` (multi-day fixture with a gap) |
 | Candidate "Inspect" | Opens that exact game | passed | `navigation.spec.ts` |
-| Recent source links | Open that artifact's provenance | not tested | — |
+| Recent source links | Open that artifact's provenance | passed | `coverage.spec.ts` |
 
 ## Ideas and game dossiers
 
@@ -53,7 +53,7 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 | Open a brief | Loads that candidate, survives reload | passed | `navigation.spec.ts` |
 | Fact button | Opens that exact claim | passed | `interactions.spec.ts` |
 | Brief disclosures | Open and close, including by keyboard | passed | `responsive.spec.ts` |
-| Brief section anchors | Jump without losing the route | not tested | — |
+| Brief section anchors | Jump without losing the route | passed | `coverage.spec.ts` |
 | Run Venture Scout audit | Starts a durable job; label matches the operation | passed | `mutations.spec.ts` |
 | Watch and cancel from a brief | Same drawer and job as the Scout page | passed | `mutations.spec.ts` |
 
@@ -75,7 +75,7 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 | Escape | Closes | passed | `interactions.spec.ts`, `EvidenceDrawer.test.tsx` |
 | Focus restoration | Returns focus to the opener | passed | `interactions.spec.ts` |
 | Dialog semantics | Labelled region | passed | `responsive.spec.ts` |
-| Tab trapping | Focus stays inside while open | not tested | implemented, unverified |
+| Tab trapping | Focus stays inside while open | passed | `coverage.spec.ts` |
 
 ## Agent History
 
@@ -85,7 +85,8 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 | Expand a run | Shows that exact stored output | passed | `mutations.spec.ts` |
 | Citations | Re-verified now, shown as claims | passed | `test_scout_deliberation.py` |
 | Blocked runs | Listed with the reason | passed | `test_scout_deliberation.py` |
-| Agent filter / search | Narrows the list | not tested (browser) | API covered |
+| Operation recorded | An analysis is distinguishable from a critique | passed | `coverage.spec.ts` |
+| Agent filter / search | Each filter shows only its agent; the two partition the list | passed | `coverage.spec.ts` |
 
 ## Matching Engine
 
@@ -93,7 +94,7 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 | --- | --- | --- | --- |
 | Placeholder laboratory tabs | Absent, not disabled decoration | passed | `interactions.spec.ts` |
 | Disabled controls | Explain themselves | passed | `interactions.spec.ts` |
-| Review selection and comparison | Shows the right record | not tested (browser) | API covered |
+| Review selection and comparison | Shows the right record | passed | `coverage.spec.ts` |
 | Approve / reject / reassign | Requires a reason; original immutable | not tested | deliberately not exercised |
 | Queue totals | Count the queue, not the page | passed | `test_pagination.py` |
 
@@ -104,8 +105,8 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 | Start a run | Bounded, durable | not tested (browser) | backend covered; a live run is the real check |
 | Empty niche | Refused | passed | `mutations.spec.ts` |
 | Progress and stage | Reflects the current stage | passed | `interactions.spec.ts`, `research-phase.test.ts` |
-| Report selection | Opens that run's report | not tested | — |
-| Interrupt / resume | Durable, budgets retained | not tested (browser) | `test_audit_jobs*.py` |
+| Report selection | Opens that run's report | passed | `coverage.spec.ts` |
+| Interrupt / resume | Explained, resumable, budgets retained | passed | `coverage.spec.ts`, `test_audit_jobs*.py` |
 
 ## Venture Scout
 
@@ -115,7 +116,7 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 | Audit idea without a proposal | Disabled, with the reason | passed | `interactions.spec.ts` |
 | Run an audit | Starts a durable job, stores, restores after reload | passed | `mutations.spec.ts` |
 | Double submission | Cannot submit twice; records one run | passed | `mutations.spec.ts` |
-| Background work drawer | Shows each pass and the model's own reasoning | passed | `mutations.spec.ts` |
+| Background work drawer | Streams each pass and the model's own reasoning | passed | `mutations.spec.ts`, `coverage.spec.ts` |
 | Cancel a running audit | Reaches a cancelled terminal state | passed | `mutations.spec.ts`, `test_audit_jobs*.py` |
 | Readiness gates | Computed server-side per candidate | passed | `interactions.spec.ts` |
 
@@ -132,8 +133,9 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 | Control | Expected | Result | Evidence |
 | --- | --- | --- | --- |
 | Dependency status | Observation separate from configuration | passed | `test_dependency_health.py`, `interactions.spec.ts` |
+| Build identity | Says which commit is answering | passed | `test_build_identity.py`, `coverage.spec.ts` |
 | Failing dependencies | Listed first | passed | `interactions.spec.ts` |
-| Quota display | Local reservations, not remote balance | not tested (browser) | API covered |
+| Quota display | Local reservations, not remote balance | passed | `coverage.spec.ts` |
 
 ## Administration
 
@@ -150,14 +152,14 @@ reach the operator's ledger or spend quota. Two tests assert that directly.
 | Keyboard-only navigation, filters, disclosures | passed | `responsive.spec.ts` |
 | Labelled inputs | passed | `responsive.spec.ts` |
 | Screen-reader audit | not tested | no assistive-technology pass has been run |
-| Colour-contrast audit | not tested | — |
+| Contrast of visible body text | passed | `coverage.spec.ts` (programmatic ratio check, not a full audit) |
 
 ## Open findings
 
-1. **`source_backed_design_incomplete` has never been produced live.** The path
-   is unit-tested and mutation-checked, but no real audit has yet failed its
-   revision, so the banner and history rendering for it are unverified against
-   real data.
+1. **`source_backed_design_incomplete` has never occurred in a live run.** The
+   path is unit-tested and mutation-checked, and its rendering is now checked
+   against a stubbed record in `coverage.spec.ts`. What remains unobserved is
+   the state arising naturally: no real audit has yet failed its revision.
 2. **Matching review mutations are deliberately not exercised.** Approving,
    rejecting or reassigning an association changes what downstream metrics are
    allowed to resolve through. Those paths are covered by backend tests against

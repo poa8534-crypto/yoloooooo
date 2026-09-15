@@ -115,6 +115,8 @@ def seed(database_url: str, artifact_dir: Path) -> None:
     from app.db import Base, SessionLocal, engine
     from app.evidence import add_json_observation, create_fact, record_artifact
     from app.migrations import install_append_only_triggers
+    from sqlalchemy import select
+
     from app.models import Candidate, Proposal, ResearchRun
 
     Base.metadata.create_all(engine)
@@ -153,6 +155,29 @@ def seed(database_url: str, artifact_dir: Path) -> None:
             if index == 0:
                 db.add(Proposal(candidate_id=candidate.id, agent="meta_hunter",
                                 payload=STUB_PROPOSAL, model_name="fixture"))
+        db.commit()
+
+    # Earlier days, so the timeline has something to filter and continuity has
+    # a run to measure. One day is skipped: a gap must not be interpolated.
+    with SessionLocal() as db:
+        candidates = list(db.scalars(select(Candidate)))
+        for days_ago in (1, 2, 4):
+            when = captured - timedelta(days=days_ago)
+            history = {"data": [{"id": 101, "playing": 400 - days_ago, "visits": 90000 - days_ago},
+                                {"id": 202, "playing": 80 - days_ago, "visits": 4000 - days_ago}]}
+            artifact = record_artifact(
+                db, url=f"https://games.roblox.com/v1/games?day={days_ago}",
+                retrieval_method="scheduled_roblox_snapshot", content_type="application/json",
+                payload=history, source_tier="primary", owner="roblox.com", captured_at=when,
+            )
+            for index, candidate in enumerate(candidates[:2]):
+                for field, metric, unit in (("playing", "roblox_playing", "players"),
+                                            ("visits", "roblox_visits", "visits")):
+                    observation = add_json_observation(
+                        db, artifact=artifact, candidate_id=candidate.id, metric=metric,
+                        pointer=f"/data/{index}/{field}", unit=unit, observed_at=when,
+                    )
+                    create_fact(db, template_id=metric, slots={"value": observation})
         db.commit()
 
 
