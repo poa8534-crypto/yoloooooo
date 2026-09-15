@@ -469,18 +469,25 @@ export default function App() {
     setSelectedMatch(current => reviews.some(item => item.association_id === current) ? current : reviews[0]?.association_id || '')
   }, [])
 
+  // Each panel renders as its own response lands. Awaiting all six together
+  // meant the slowest call held every counter at an em dash, which reads as
+  // lost data rather than a slow request -- and the runs list is by far the
+  // heaviest, since it carries every candidate and its facts.
   const loadAll = useCallback(async () => {
     setRefreshing(true); setError('')
-    try {
-      const [nextSummary, nextTimeline, nextSources, nextRuns, nextCalibration, nextHealth] = await Promise.all([
-        api<DashboardSummary>('/api/dashboard/summary'), api<{ points: TimelinePoint[] }>('/api/dashboard/timeline'),
-        api<Source[]>('/api/sources?limit=100'), api<Run[]>('/api/research-runs?limit=25'),
-        api<Calibration>('/api/calibration/status'), api<Health>('/api/health'),
-      ])
-      setSummary(nextSummary); setTimeline(nextTimeline.points); setSources(nextSources); setRuns(nextRuns)
-      setCalibration(nextCalibration); setHealth(nextHealth)
-      await loadMatching()
-    } catch (caught) { setError((caught as Error).message) } finally { setRefreshing(false) }
+    const fill = async <T,>(url: string, apply: (value: T) => void) => apply(await api<T>(url))
+    const results = await Promise.allSettled([
+      fill<DashboardSummary>('/api/dashboard/summary', setSummary),
+      fill<{ points: TimelinePoint[] }>('/api/dashboard/timeline', value => setTimeline(value.points)),
+      fill<Source[]>('/api/sources?limit=100', setSources),
+      fill<Run[]>('/api/research-runs?limit=25', setRuns),
+      fill<Calibration>('/api/calibration/status', setCalibration),
+      fill<Health>('/api/health', setHealth),
+      loadMatching(),
+    ])
+    const failed = results.find(result => result.status === 'rejected')
+    setError(failed ? (failed.reason as Error).message : '')
+    setRefreshing(false)
   }, [loadMatching])
 
   useEffect(() => { void loadAll() }, [loadAll])

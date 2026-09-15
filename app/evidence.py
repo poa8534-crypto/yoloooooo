@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import tldextract
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
@@ -287,16 +287,53 @@ def accept_web_claim(
     )
 
 
+def _fact_index(db: Session) -> dict[str, list[Fact]]:
+    """Map observation id to the facts built from it, once per session.
+
+    `candidate_facts` used to read every `Fact` row and filter in Python, so
+    one dashboard request covering 149 candidates loaded the whole fact table
+    189 times: roughly 240,000 rows and five seconds for a single response,
+    growing with the ledger. The ledger is append-only, so within a session
+    the only way this index can go stale is a fact appended after it was
+    built, which the row count detects.
+    """
+    total = db.scalar(select(func.count(Fact.id))) or 0
+    cached = db.info.get("fact_index")
+    if cached is not None and cached[0] == total:
+        return cached[1]
+    index: dict[str, list[Fact]] = {}
+    for fact in db.scalars(select(Fact)):
+        for observation_id in fact.slot_observation_ids.values():
+            index.setdefault(observation_id, []).append(fact)
+    db.info["fact_index"] = (total, index)
+    return index
+
+
 def candidate_facts(db: Session, candidate_id: str) -> list[Fact]:
     observation_ids = set(db.scalars(
         select(Observation.id).where(Observation.candidate_id == candidate_id)
     ))
     if not observation_ids:
         return []
-    return [
-        fact for fact in db.scalars(select(Fact).order_by(Fact.created_at))
-        if set(fact.slot_observation_ids.values()) & observation_ids
-    ]
+    index = _fact_index(db)
+    matched = {
+        fact.id: fact
+        for observation_id in observation_ids
+        for fact in index.get(observation_id, ())
+    }
+    return sorted(matched.values(), key=_fact_order)
+
+
+def _fact_order(fact: Fact) -> tuple[datetime, str]:
+    """Order facts stably, whatever their timestamps came from.
+
+    A row read back from SQLite is naive UTC, while a fact created earlier in
+    the same session is still timezone-aware; comparing the two raises. The id
+    breaks ties, which the clock alone does not: facts written in the same
+    batch can share a timestamp to the microsecond.
+    """
+    created = fact.created_at
+    return (created if created.tzinfo else created.replace(tzinfo=UTC), fact.id)
 
 
 def latest_metric(db: Session, candidate_id: str, metric: str) -> Observation | None:

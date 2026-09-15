@@ -473,3 +473,93 @@ def test_a_run_that_only_hit_caps_is_not_reported_as_partial(session_factory, se
         reported = progress(db, db.get(ResearchRun, run_id))
     assert reported["errors"] == []
     assert len(reported["budget_stops"]) == 1, "the cap must reach the report, not vanish"
+
+
+# --- 12. The fact index must not serve a stale answer ----------------------
+
+
+def test_a_fact_appended_after_the_index_was_built_is_still_returned(session_factory):
+    """The per-session cache is only safe if it notices new facts.
+
+    `candidate_facts` reads through an index built once per session. A fact
+    written after that index exists must still appear, or the dashboard would
+    quietly show an outdated evidence packet for the rest of the session.
+    """
+    from app.evidence import add_json_observation, candidate_facts, create_fact, record_artifact
+    from app.models import Candidate
+
+    run_id, candidate_id, *_ = seed(session_factory)
+    with session_factory() as db:
+        before = {fact.id for fact in candidate_facts(db, candidate_id)}
+        assert before, "the seeded candidate should already have facts"
+
+        candidate = db.get(Candidate, candidate_id)
+        artifact = record_artifact(
+            db, url="https://games.roblox.com/v1/games?later=1", retrieval_method="test",
+            content_type="application/json",
+            payload={"data": [{"name": "Evidence Garden", "playing": 43}]},
+            source_tier="primary",
+        )
+        observation = add_json_observation(
+            db, artifact=artifact, candidate_id=candidate.id, metric="roblox_playing",
+            pointer="/data/0/playing", unit="players",
+        )
+        fresh = create_fact(db, template_id="roblox_playing", slots={"value": observation})
+        db.commit()
+
+        after = {fact.id for fact in candidate_facts(db, candidate_id)}
+
+    assert fresh.id in after, "a fact appended after the index was built went missing"
+    assert before < after
+
+
+def test_candidate_facts_returns_only_that_candidates_facts(session_factory):
+    """Positive control: the index must not widen the result.
+
+    Serving every fact in the ledger for every candidate would also make the
+    staleness test above pass, so this pins the other side.
+    """
+    from app.evidence import candidate_facts
+
+    _, first, *_ = seed(session_factory, universe="77")
+    _, second, *_ = seed(session_factory, universe="88")
+    with session_factory() as db:
+        first_facts = {fact.id for fact in candidate_facts(db, first)}
+        second_facts = {fact.id for fact in candidate_facts(db, second)}
+
+    assert first_facts and second_facts
+    assert not (first_facts & second_facts), "facts leaked across candidates"
+
+
+def test_facts_sharing_a_timestamp_are_ordered_by_id():
+    """This machine writes batched facts with identical microsecond stamps.
+
+    Leaving those ties to set-iteration order made the evidence packet reorder
+    itself between processes, so one candidate rendered its facts in a
+    different order on each restart. The ledger is append-only, so the tie
+    cannot be fixed up after the fact -- the ordering rule has to break it.
+    """
+    from types import SimpleNamespace
+
+    from app.evidence import _fact_order
+
+    stamp = datetime.now(UTC)
+    tied = [SimpleNamespace(id="b-second", created_at=stamp),
+            SimpleNamespace(id="a-first", created_at=stamp)]
+    assert [item.id for item in sorted(tied, key=_fact_order)] == ["a-first", "b-second"]
+
+
+def test_facts_order_across_naive_and_aware_timestamps():
+    """A fact created in this session is aware; one read back from SQLite is not.
+
+    Sorting them together raised TypeError and took the whole runs endpoint
+    with it, so ordering must normalise before comparing.
+    """
+    from types import SimpleNamespace
+
+    from app.evidence import _fact_order
+
+    now = datetime.now(UTC)
+    from_session = SimpleNamespace(id="new", created_at=now)
+    from_sqlite = SimpleNamespace(id="old", created_at=(now - timedelta(hours=1)).replace(tzinfo=None))
+    assert [item.id for item in sorted([from_session, from_sqlite], key=_fact_order)] == ["old", "new"]
