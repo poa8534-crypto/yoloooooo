@@ -822,3 +822,122 @@ def test_history_withdraws_a_citation_that_no_longer_resolves(session_factory, s
     assert scout["cited_fact_ids"] == [], "a citation that no longer resolves was listed as verified"
     assert scout["cited_facts"] == []
     assert scout["withdrawn_fact_ids"] == [invented]
+
+
+# --- 12. A retained draft carries its unanswered critique -----------------
+
+
+@pytest.mark.asyncio
+async def test_a_draft_kept_after_a_failed_revision_carries_its_concerns(settings):
+    """The critique was computed, used to decide nothing, and thrown away, so
+    an unrevised draft was indistinguishable from a revised one."""
+    draft = _scout(concept_title="Unrevised")
+    critique = {"weaknesses": ["Scope is too wide for three days"],
+                "missing_dependencies": ["A save system nobody scoped"],
+                "scope_risks": [], "unsupported_claims": ["Assumes players want co-op"]}
+    broken = {**_scout(), "core_loop": "Visit https://example.com for details"}
+    client, _ = _client(settings, [draft, critique, broken])
+
+    generated = await client.generate(
+        agent="Venture Scout", niche="farming", sourced_name="garden", fact_ids=[],
+    )
+
+    assert generated.payload.concept_title == "Unrevised"
+    assert generated.revision_applied is False, "a failed revision was reported as applied"
+    assert generated.critique == critique, "the critique was discarded"
+
+
+@pytest.mark.asyncio
+async def test_a_revised_design_reports_its_revision_applied(settings):
+    """Positive control: a design that answered its critique is finished work."""
+    critique = {"weaknesses": ["Too wide"], "missing_dependencies": [],
+                "scope_risks": [], "unsupported_claims": []}
+    client, _ = _client(settings, [_scout(concept_title="Draft"), critique, _scout(concept_title="Revised")])
+    generated = await client.generate(
+        agent="Venture Scout", niche="farming", sourced_name="garden", fact_ids=[],
+    )
+    assert generated.payload.concept_title == "Revised"
+    assert generated.revision_applied is True
+    assert generated.critique == critique
+
+
+def test_unresolved_concerns_are_empty_once_the_revision_lands():
+    from types import SimpleNamespace
+
+    from app.workflows import unresolved_concerns
+
+    critique = {"weaknesses": ["w"], "unsupported_claims": ["u"],
+                "missing_dependencies": ["m"], "scope_risks": ["s"]}
+    assert unresolved_concerns(SimpleNamespace(critique=critique, revision_applied=True)) == []
+    assert unresolved_concerns(SimpleNamespace(critique=None, revision_applied=False)) == []
+    assert unresolved_concerns(SimpleNamespace(critique=critique, revision_applied=False)) == ["w", "u", "m", "s"]
+
+
+@pytest.mark.asyncio
+async def test_an_audit_with_unanswered_concerns_is_recorded_as_incomplete(session_factory, settings):
+    """A schema-valid draft is not a completed quality audit, and the stored
+    record is what every later view reads."""
+    from app.llm import GeneratedProposal
+    from app.schemas import ProposalPayload
+
+    critique = {"weaknesses": ["Scope is too wide"], "missing_dependencies": [],
+                "scope_risks": [], "unsupported_claims": ["Assumes co-op demand"]}
+
+    class UnrevisedLLM:
+        async def generate(self, **kwargs):
+            return GeneratedProposal(ProposalPayload(**_scout()), "fake", critique, revision_applied=False)
+
+        async def close(self):
+            pass
+
+    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    result = await orchestrator(session_factory, UnrevisedLLM()).audit(candidate_id)
+
+    assert result["evidence_state"] == "source_backed_design_incomplete", result["evidence_state"]
+    assert result["revision_applied"] is False
+    assert result["unresolved_concerns"] == ["Scope is too wide", "Assumes co-op demand"]
+    assert result["proposal"], "the design itself should still be kept and shown"
+
+
+@pytest.mark.asyncio
+async def test_an_answered_audit_is_recorded_as_speculative_not_incomplete(session_factory, settings):
+    """Positive control: marking everything incomplete would also pass above."""
+    from app.llm import GeneratedProposal
+    from app.schemas import ProposalPayload
+
+    class RevisedLLM:
+        async def generate(self, **kwargs):
+            return GeneratedProposal(ProposalPayload(**_scout()), "fake",
+                                     {"weaknesses": ["w"], "missing_dependencies": [],
+                                      "scope_risks": [], "unsupported_claims": []},
+                                     revision_applied=True)
+
+        async def close(self):
+            pass
+
+    _, candidate_id, *_ = seed(session_factory, hunter=False)
+    result = await orchestrator(session_factory, RevisedLLM()).audit(candidate_id)
+    assert result["evidence_state"] == "source_backed_design_speculative"
+    assert result["unresolved_concerns"] == []
+
+
+@pytest.mark.asyncio
+async def test_two_pass_deliberation_still_carries_the_unanswered_critique(settings):
+    """With two passes the audit criticises its draft and never revises it, so
+    the concerns are unresolved by construction. That branch had no test, and a
+    mutation making it claim the revision landed went unnoticed.
+    """
+    critique = {"weaknesses": ["Scope is too wide for three days"],
+                "missing_dependencies": [], "scope_risks": [],
+                "unsupported_claims": ["Assumes players want co-op"]}
+    two_pass = settings.model_copy(update={"scout_deliberation_passes": 2})
+    client, seen = _client(two_pass, [_scout(concept_title="Draft only"), critique])
+
+    generated = await client.generate(
+        agent="Venture Scout", niche="farming", sourced_name="garden", fact_ids=[],
+    )
+
+    assert len(seen) == 2, "a two-pass audit should draft and critique, and stop"
+    assert generated.payload.concept_title == "Draft only"
+    assert generated.revision_applied is False, "no revision ran, yet one was reported"
+    assert generated.critique == critique, "the critique was discarded"

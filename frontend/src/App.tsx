@@ -18,6 +18,7 @@ interface AuditResult {
   candidate_id: string; proposal_id?: string | null; proposal?: Proposal | null
   risks?: string[]; note?: string; audit_id?: string | null; evidence_state?: string
   gates?: AuditGate[]; cited_fact_ids?: string[]; withdrawn_fact_ids?: string[]
+  unresolved_concerns?: string[]; revision_applied?: boolean
 }
 
 type Run = {
@@ -374,12 +375,16 @@ function IdeaPanelBody({ active, ideas, filter, setFilter, onSelect, onInspectFa
     const withdrawnIds = shown?.proposal ? shown.withdrawn_fact_ids : candidate.withdrawn_fact_ids
     return <section className="workspace analyst-brief"><div className="brief-toolbar"><button className="text-button" onClick={() => onSelect('')}>← Back to ideas</button><div><Badge tone={toneFor(candidate.decision)}>{candidate.decision.replaceAll('_', ' ')}</Badge><Badge tone="verified">{candidate.facts.length} verified facts</Badge></div><button className="primary" disabled={busy || blocking.length > 0} onClick={() => onAudit(candidate)} title={blocking.length ? blocking.map(gate => `${gate.label}: ${gate.detail}`).join(' · ') : 'Scout reads the evidence, drafts, critiques its own draft and revises. This takes several minutes.'}>{busy ? 'Scout is deliberating…' : blocking.length ? 'Audit blocked by gates' : 'Run Venture Scout audit'}</button><button className="text-button" onClick={() => setActivityOpen(true)}>Show activity{busy ? ' ●' : ''}</button></div>
       <AuditActivityDrawer candidateId={candidateId} open={activityOpen} onClose={() => setActivityOpen(false)} />
-      {!busy && shown?.proposal && <div className="audit-result-banner">
-        <div><strong>Venture Scout audit complete</strong><span>{shown.proposal.concept_title} · {(shown.cited_fact_ids || []).length} cited fact(s){shown.withdrawn_fact_ids?.length ? `, ${shown.withdrawn_fact_ids.length} withdrawn` : ''}</span></div>
+      {!busy && shown?.proposal && <div className={`audit-result-banner${shown.unresolved_concerns?.length ? ' incomplete' : ''}`}>
+        <div><strong>{shown.unresolved_concerns?.length ? 'Venture Scout audit incomplete' : 'Venture Scout audit complete'}</strong><span>{shown.proposal.concept_title} · {(shown.cited_fact_ids || []).length} cited fact(s){shown.withdrawn_fact_ids?.length ? `, ${shown.withdrawn_fact_ids.length} withdrawn` : ''}</span></div>
         <div><a href="#brief-1" onClick={event => { event.preventDefault(); document.getElementById("brief-1")?.scrollIntoView() }}>Read the brief</a>{shown.audit_id && <a href={`/api/audits/${shown.audit_id}`} target="_blank" rel="noreferrer">Audit record</a>}<button type="button" className="text-button" onClick={() => setActivityOpen(true)}>How it ran</button></div>
       </div>}
       {busy && <div className="warning-box"><strong>Venture Scout is running</strong><span>Reading the evidence, drafting, critiquing its own draft and revising it. Several minutes on a local model. <button className="text-button" onClick={() => setActivityOpen(true)}>Watch it work</button></span></div>}
       {blocking.length > 0 && <div className="warning-box"><strong>Audit cannot run yet</strong>{blocking.map(gate => <p key={gate.label}>{gate.label}: {gate.detail}</p>)}</div>}
+      {!busy && !!shown?.unresolved_concerns?.length && <div className="warning-box">
+        <strong>The audit raised concerns it never answered</strong>
+        <span>It criticised its own draft and the revision that should have addressed the critique did not arrive, so this design is the unrevised draft. Treat it as work in progress.</span>
+        {shown.unresolved_concerns.map(concern => <p key={concern}>{concern}</p>)}</div>}
       {blockedAudit && blocking.length === 0 && <div className="warning-box"><strong>Last audit was recorded without a proposal</strong>{(blockedAudit.risks || []).map(risk => <p key={risk}>{risk}</p>)}</div>}
       <article className="brief-hero"><span>Research dossier / {run.niche}</span><h2>{proposal?.concept_title || candidate.display_name}</h2><p>{proposal?.core_loop || 'A detailed proposal will appear after the constrained local model completes a schema-valid run.'}</p><div className="metrics-grid compact"><Metric label="Engine decision" value={candidate.decision.replaceAll('_', ' ')} note="Deterministic" /><Metric label="Evidence facts" value={candidate.facts.length} note="Clickable provenance" /><Metric label="Confidence" value={candidate.confidence == null ? '—' : `${candidate.confidence.toFixed(1)}%`} note={candidate.confidence == null ? 'Not computed' : 'Evidence quality'} /><Metric label="Market score" value={candidate.score == null ? 'Locked' : candidate.score.toFixed(1)} note={candidate.score == null ? 'Calibration inactive' : 'Frozen artifact'} /></div></article>
       <div className="brief-layout"><nav className="brief-index"><span>Research brief</span>{['Executive summary', 'Why this idea', 'Demand history', 'Competitors', 'Opportunity gap', 'Twist lab', '72-hour MVP', 'Risk register', 'Provenance'].map((item, index) => <a key={item} href={`#brief-${index + 1}`} onClick={event => { event.preventDefault(); document.getElementById(`brief-${index + 1}`)?.scrollIntoView() }}>{String(index + 1).padStart(2, '0')}. {item}</a>)}</nav>

@@ -1123,3 +1123,6 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
 .history-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 12px; }
 .history-actions a { color: var(--blue); font-size: 11.5px; font-weight: 600; }
 .history-actions span { color: var(--text-muted); font: 500 11px var(--mono); }
+
+/* An audit that could not answer its own critique is not a finished one. */
+.audit-result-banner.incomplete { border-color: var(--amber); background: var(--amber-soft); }

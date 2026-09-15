@@ -359,3 +359,10 @@ class AuditView(StrictModel):
     note: str
     cited_fact_ids: list[str] = Field(default_factory=list)
     withdrawn_fact_ids: list[str] = Field(default_factory=list)
+    # Non-empty when the audit criticised its own draft and the revision that
+    # should have answered the critique never landed.
+    unresolved_concerns: list[str] = Field(default_factory=list)
+    revision_applied: bool = True
+    # What the audit found against its own draft, kept whether or not the
+    # revision landed, so a reviewer can see what was raised.
+    critique: AuditCritique | None = None

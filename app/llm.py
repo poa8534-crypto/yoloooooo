@@ -96,6 +96,13 @@ def grammar_safe(schema: dict) -> dict:
 class GeneratedProposal:
     payload: ProposalPayload
     model: str
+    # What the audit said about its own draft, and whether the revision that
+    # was supposed to answer it actually landed. A draft kept because the
+    # revision failed is not the same artefact as a revised one, and the
+    # difference used to be invisible: the critique was computed, used to
+    # decide nothing, and thrown away.
+    critique: dict | None = None
+    revision_applied: bool = False
 
 
 class OllamaProposalClient:
@@ -229,11 +236,11 @@ class OllamaProposalClient:
                 )
             except LLMUnavailable:
                 say("critique_skipped", "No usable critique; keeping the draft that already passed every check")
-                return GeneratedProposal(draft, model)
+                return GeneratedProposal(draft, model)  # nothing was found against it
             say("critique_ready",
                 f"{len(critique.weaknesses)} weakness(es), {len(critique.unsupported_claims)} unsupported claim(s)")
             if self.settings.scout_deliberation_passes < 3:
-                return GeneratedProposal(draft, model)
+                return GeneratedProposal(draft, model, critique.model_dump(), revision_applied=False)
             say("revision_started", "Pass three: correcting the draft against its own critique")
             try:
                 revised, revised_model = await self._complete(
@@ -243,10 +250,14 @@ class OllamaProposalClient:
                     schema, ProposalPayload, check, errors, before_attempt, say,
                 )
             except LLMUnavailable:
-                say("revision_skipped", "No usable revision; keeping the draft that already passed every check")
-                return GeneratedProposal(draft, model)
+                # The critique found real problems and the revision meant to
+                # answer them never arrived. Returning the draft silently
+                # presented an unrevised design as a finished audit.
+                say("revision_skipped",
+                    "No usable revision; keeping the draft and carrying its unresolved concerns forward")
+                return GeneratedProposal(draft, model, critique.model_dump(), revision_applied=False)
             say("revision_ready", f"Revision accepted from {revised_model}", model=revised_model)
-            return GeneratedProposal(revised, revised_model)
+            return GeneratedProposal(revised, revised_model, critique.model_dump(), revision_applied=True)
 
     async def _complete(self, prompt, schema, model_type, check, errors, before_attempt, say=None):
         """One schema-constrained completion, with retry and model fallback.

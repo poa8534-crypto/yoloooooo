@@ -128,6 +128,23 @@ def evidence_confidence(db: Session, candidate_id: str) -> tuple[float, dict[str
     return round(100.0 * min(parts.values()), 3), parts, failures
 
 
+def unresolved_concerns(generated) -> list[str]:
+    """Concerns the audit raised against its own draft and never answered.
+
+    Only meaningful when the revision did not land. A revised design is the
+    model's own answer to the critique; an unrevised one still carries it, and
+    returning that draft silently presented it as a finished audit.
+    """
+    critique = getattr(generated, "critique", None) or {}
+    if getattr(generated, "revision_applied", False) or not critique:
+        return []
+    return [
+        concern
+        for key in ("weaknesses", "unsupported_claims", "missing_dependencies", "scope_risks")
+        for concern in critique.get(key, [])
+    ]
+
+
 class ResearchOrchestrator:
     def __init__(
         self,
@@ -505,7 +522,16 @@ class ResearchOrchestrator:
                     )
                 result["proposal"] = generated.payload.model_dump()
                 result["risks"] = generated.payload.risks
-                result["evidence_state"] = "source_backed_design_speculative"
+                result["critique"] = generated.critique
+                result["revision_applied"] = generated.revision_applied
+                # An audit that criticised its own draft and then could not
+                # revise it is not finished work, and the record has to say so.
+                unresolved = unresolved_concerns(generated)
+                result["unresolved_concerns"] = unresolved
+                result["evidence_state"] = (
+                    "source_backed_design_incomplete" if unresolved
+                    else "source_backed_design_speculative"
+                )
                 emit(candidate_id, "proposal_accepted", f"Design accepted from {generated.model}")
             except (LLMUnavailable, TimeoutError) as exc:
                 # Saying "within the budget" for a schema rejection sent every
