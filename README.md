@@ -226,6 +226,32 @@ Downgrading the code with the new tables still present is safe; the older code
 ignores them. The one thing rolling back does not undo is the URL redaction, and
 you would not want it undone. Rotate the keys regardless.
 
+## Starting everything
+
+Double-click **`start.bat`** in the project root. It checks the virtual
+environment, builds the dashboard the first time, starts the server if nothing
+is already listening, waits for it to answer, and opens the browser.
+
+If the `Roblox Venture Agents` scheduled task is already serving port 8742 —
+the normal case, since it starts at logon — the script detects that, leaves it
+alone and just opens the dashboard.
+
+The backend serves the built dashboard from `frontend/dist` at the same origin,
+so one server *is* the whole application; there is no second front-end process
+to start. Use a different port with:
+
+```bat
+set VENTURE_PORT=8799
+start.bat
+```
+
+For front-end development with hot reload, run Vite separately on 5173; it
+proxies `/api` to the backend:
+
+```powershell
+Set-Location frontend; npm run dev
+```
+
 ## Running a deep run
 
 ```powershell
