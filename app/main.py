@@ -114,7 +114,24 @@ async def lifespan(app: FastAPI):
         orphaned = list(db.scalars(select(ResearchRun).where(
             ResearchRun.status.in_([RunStatus.QUEUED.value, RunStatus.RUNNING.value])
         )))
+        # A deep run keeps a checkpoint, so an interruption is recoverable and
+        # leaving it stopped throws away everything it already paid for. This
+        # has cost two real runs: both died on their last step -- 29 games
+        # inspected, concepts about to be written -- because the service was
+        # restarted underneath them, and both then sat waiting for someone to
+        # notice and press a button.
+        #
+        # A run with no checkpoint, or a quick run, cannot resume and is still
+        # recorded as interrupted rather than pretended over.
+        resumable = []
         for run in orphaned:
+            checkpoint = db.get(ResearchCheckpoint, run.id)
+            if checkpoint and checkpoint.state.get("mode") == "deep":
+                run.status = RunStatus.QUEUED.value
+                run.message = "Resuming after a service restart; the checkpoint was kept."
+                run.completed_at = None
+                resumable.append(run.id)
+                continue
             run.status = "interrupted"
             run.message = "Interrupted by a previous service shutdown; no evidence was fabricated."
             run.completed_at = datetime.now(UTC)
@@ -148,6 +165,12 @@ async def lifespan(app: FastAPI):
     app.state.association_service = app.state.orchestrator.associations
     app.state.scheduler = start_scheduler()
     await catch_up_if_needed()
+    # Started after the orchestrator exists, and not awaited: a run takes
+    # minutes and startup must not block on it.
+    for run_id in resumable:
+        task = asyncio.create_task(app.state.orchestrator.research(run_id))
+        TASKS.add(task)
+        task.add_done_callback(TASKS.discard)
     yield
     app.state.scheduler.shutdown(wait=False)
     await app.state.audit_jobs.close()
