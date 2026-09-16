@@ -22,6 +22,7 @@ from .association import AssociationService, active_thresholds, is_association_u
 from .association.materialize import apply_association
 from .association.service import human_confirmation
 from . import access, audit_activity, dependency_health
+from .binding import wait_for_address
 from .build_identity import build_identity
 from .audit_jobs import AuditJobs, JobConflict, ACTIVE as ACTIVE_AUDIT_STATES
 from .calibration import calibration_status, load_artifact
@@ -1645,6 +1646,17 @@ if frontend_dist.exists():
 def run() -> None:
     settings = get_settings()
     assert_local_only(settings.host)
+    # At logon the tailnet interface is usually seconds behind us. Binding
+    # before it exists kills the service outright, and the task does not come
+    # back on its own. See app/binding.py.
+    waited = wait_for_address(
+        settings.host,
+        on_wait=lambda host: print(
+            f"Waiting for {host} to come up before binding.", flush=True
+        ),
+    )
+    if waited:
+        print(f"{settings.host} came up after {waited:.1f}s.", flush=True)
     uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=False)
 
 
