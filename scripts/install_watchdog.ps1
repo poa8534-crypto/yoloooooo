@@ -28,9 +28,17 @@ $Action = New-ScheduledTaskAction `
 # The duration is left unset on purpose. `[TimeSpan]::MaxValue` serialises to
 # `P99999999DT23H59M59S`, which the task scheduler rejects outright; an absent
 # duration is what "repeat indefinitely" actually means here.
-$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
-$Trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
-    -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
+#
+# Two triggers, not one. A logon trigger's repetition is armed by the logon,
+# so installing the watchdog mid-session would leave it dormant until the next
+# one -- which is exactly the window somebody installs it to cover. The Once
+# trigger starts the five-minute cycle now; the logon trigger restarts it after
+# every reboot.
+$Repeating = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 5)
+$AtLogon = New-ScheduledTaskTrigger -AtLogOn -User $UserId
+$AtLogon.Repetition = $Repeating.Repetition
+$Trigger = @($Repeating, $AtLogon)
 
 $Principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel Limited
 $Settings = New-ScheduledTaskSettingsSet `
