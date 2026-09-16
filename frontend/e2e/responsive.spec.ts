@@ -114,6 +114,31 @@ test.describe('the shell uses the width it has', () => {
     expect(gap, 'a dead strip between the sidebar and the content').toBeLessThanOrEqual(2)
   })
 
+  test('below 820px the sidebar stops being a column', async ({ page }) => {
+    // The single-column rule sat earlier in the stylesheet than the two rules
+    // that set fixed sidebar columns, lost to them on equal specificity, and
+    // never took effect. At 420px the sidebar still claimed 232px, the content
+    // column was 135px, and a card rendered 113px across.
+    await page.setViewportSize({ width: 420, height: 880 })
+    await page.goto('/#/scout')
+    await page.locator('.app-content').waitFor()
+    const width = await page.evaluate(() =>
+      document.querySelector('.app-content')!.getBoundingClientRect().width)
+    expect(width, 'the sidebar is still eating the window').toBeGreaterThan(420 * 0.9)
+  })
+
+  test('the sidebar sits above the content on a phone, not beside it', async ({ page }) => {
+    await page.setViewportSize({ width: 420, height: 880 })
+    await page.goto('/#/scout')
+    await page.locator('.app-sidebar').waitFor()
+    const stacked = await page.evaluate(() => {
+      const side = document.querySelector('.app-sidebar')!.getBoundingClientRect()
+      const content = document.querySelector('.app-content')!.getBoundingClientRect()
+      return content.top >= side.bottom - 2
+    })
+    expect(stacked, 'the navigation is still a side column').toBe(true)
+  })
+
   test('the workspace is centred on a wide screen, not pinned left', async ({ page }) => {
     await page.setViewportSize({ width: 1920, height: 900 })
     await page.goto('/#/meta')

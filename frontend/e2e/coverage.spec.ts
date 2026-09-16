@@ -481,7 +481,7 @@ test.describe('the Hunter to Scout queue', () => {
         created_at: '2026-09-15T00:00:00+00:00' })) } })
     })
     await page.goto('/#/scout')
-    const strip = page.locator('.card-strip')
+    const strip = page.locator(".data-panel", { hasText: "Audited concepts" }).locator(".card-strip")
     await expect(strip).toBeVisible()
     await expect(strip.locator('.concept-card')).toHaveCount(8)
     // The strip scrolls; the document must not.
@@ -789,5 +789,147 @@ test.describe('a checkbox is not a text field', () => {
     // the eyebrow and the count must occupy separate lines.
     const lines = await heading.evaluate(node => (node as HTMLElement).innerText.trim().split(String.fromCharCode(10)).length)
     expect(lines, 'the eyebrow and the count ran together').toBeGreaterThan(1)
+  })
+})
+
+test.describe('audits from a run are cards, not a list of identifiers', () => {
+  // This was three lines of truncated job id in a grey box, none of them
+  // clickable. The operator had asked for the audits by concept name, and the
+  // only route back to what one produced was to find it again further down.
+  const base = {
+    candidate_id: 'c1', operation: 'audit_idea', created_at: '2026-09-16T00:00:00+00:00',
+    completed_at: null, model_attempts: 1, error: null, remaining_seconds: 300,
+    game_name: 'Alpha', niche: 'cooperative fishing', universe_id: '77', events: [],
+  }
+  const JOBS = [
+    { ...base, id: '2681a175-one', proposal_id: 'p1', status: 'complete', audit_id: 'audit-9',
+      concept_title: 'Lantern Bay', core_loop: 'Fish at dusk with shared nets.' },
+    { ...base, id: 'ebfe5596-two', proposal_id: 'p2', status: 'running', audit_id: null,
+      concept_title: 'Tide Market', core_loop: 'Trade the morning catch.',
+      events: [{ sequence: 1, stage: 'critique_started', detail: 'Reading its own draft back',
+                 at: '2026-09-16T00:01:00+00:00' }] },
+    { ...base, id: '1d49fdda-three', proposal_id: 'p3', status: 'queued', audit_id: null,
+      concept_title: 'Reef Wardens', core_loop: 'Defend the reef overnight.' },
+  ]
+  const strip = (page: import('@playwright/test').Page) =>
+    page.locator('.data-panel', { hasText: 'Audit runs' }).locator('.card-strip')
+
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/api/audit-jobs', route =>
+      route.fulfill({ json: { jobs: JOBS, resumable: [], restartable: [] } }))
+  })
+
+  test('every started audit gets its own card', async ({ page }) => {
+    await page.goto('/#/scout')
+    await expect(strip(page).locator('.concept-card')).toHaveCount(3)
+  })
+
+  test('a card is named by its concept, not by a truncated identifier', async ({ page }) => {
+    await page.goto('/#/scout')
+    const cards = strip(page).locator('.concept-card')
+    await expect(cards).toHaveCount(3)
+    await expect(strip(page)).toContainText('Lantern Bay')
+    await expect(strip(page)).toContainText('Tide Market')
+    await expect(strip(page)).toContainText('Reef Wardens')
+    await expect(strip(page)).not.toContainText('2681a175')
+  })
+
+  test('the cards read in the order the audits were started', async ({ page }) => {
+    // The endpoint answers newest first, which puts the audit you started last
+    // on the left and reads backwards against the order you chose them in.
+    await page.goto('/#/scout')
+    const cards = strip(page).locator('.concept-card')
+    await expect(cards.nth(0)).toContainText('Reef Wardens')
+    await expect(cards.nth(2)).toContainText('Lantern Bay')
+  })
+
+  test('every card is clickable', async ({ page }) => {
+    // The original complaint: the three lines could not be opened at all.
+    await page.goto('/#/scout')
+    await expect(strip(page).locator('button.concept-card')).toHaveCount(3)
+    for (const card of await strip(page).locator('.concept-card').all()) {
+      await expect(card).toBeEnabled()
+    }
+  })
+
+  test('a running card says which pass it is on', async ({ page }) => {
+    await page.goto('/#/scout')
+    const card = strip(page).locator('.concept-card', { hasText: 'Tide Market' })
+    await expect(card).toContainText('Pass 2')
+    await expect(card).toContainText('running')
+  })
+
+  test('opening a finished card shows the whole brief', async ({ page }) => {
+    await page.route('**/api/scout/results*', route => route.fulfill({ json: { cards: [{
+      audit_id: 'audit-9', candidate_id: 'c1', proposal_id: 'p1', universe_id: '77',
+      niche: 'cooperative fishing', concept_title: 'Lantern Bay', core_loop: 'Fish at dusk.',
+      evidence_state: 'source_backed', risks: 1, cited_facts: 2,
+      created_at: '2026-09-16T00:00:00+00:00' }] } }))
+    await page.route('**/api/audits/audit-9', route => route.fulfill({ json: {
+      candidate_id: 'c1', audit_id: 'audit-9', evidence_state: 'source_backed',
+      risks: ['Retention is unproven'],
+      proposal: { concept_title: 'Lantern Bay', core_loop: 'Fish at dusk.',
+                  differentiator: 'Shared nets.', build_steps: ['Build the dock'],
+                  risks: [], questions: [], supporting_fact_ids: [] } } }))
+    await page.goto('/#/scout')
+    await strip(page).locator('.concept-card', { hasText: 'Lantern Bay' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Lantern Bay' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toContainText('Shared nets')
+    await expect(dialog).toContainText('Build the dock')
+    await expect(dialog).toContainText('Retention is unproven')
+  })
+
+  test('opening a running card shows what it is doing right now', async ({ page }) => {
+    await page.goto('/#/scout')
+    await strip(page).locator('.concept-card', { hasText: 'Tide Market' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Audit progress' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toContainText('Pass 2')
+    await expect(dialog).toContainText('Reading its own draft back')
+  })
+
+  test('a card stays wide enough to read at every window size', async ({ page }) => {
+    // As a share of the row, not as pixels: on a phone a card is meant to take
+    // most of the width with the next one peeking, and the number that would
+    // catch a real regression is the one where it becomes a sliver.
+    await page.goto('/#/scout')
+    const box = await strip(page).locator('.concept-card').first().boundingBox()
+    const row = await strip(page).boundingBox()
+    expect(box!.width).toBeGreaterThanOrEqual(Math.min(300, row!.width * 0.7))
+  })
+
+  test('three cards share a wide row instead of leaving a third of it empty',
+    async ({ page }, testInfo) => {
+      test.skip(testInfo.project.name !== 'desktop', 'about the widest layout only')
+      await page.goto('/#/scout')
+      const box = await strip(page).locator('.concept-card').first().boundingBox()
+      const row = await strip(page).boundingBox()
+      expect(box!.width).toBeGreaterThan(320)
+      expect(box!.width * 3).toBeGreaterThan(row!.width * 0.85)
+    })
+
+  test('restarting one audit does not take the others off the page', async ({ page }) => {
+    // The handler replaced the whole list with the single job it got back, so
+    // a restart hid the two audits that had finished beside it.
+    // Restart is refused while anything is in flight, so this run is finished.
+    const finished = JOBS.map(job => ({ ...job, status: 'complete', audit_id: 'audit-9' }))
+    await page.route('**/api/audit-jobs', route => route.fulfill({ json: {
+      jobs: finished, resumable: [], restartable: ['2681a175-one'] } }))
+    await page.route('**/api/audit-jobs/*/restart', route => route.fulfill({ json: {
+      ...JOBS[0], id: 'restarted-one', status: 'queued', audit_id: null } }))
+    await page.goto('/#/scout')
+    await expect(strip(page).locator('.concept-card')).toHaveCount(3)
+    await page.getByRole('button', { name: 'Restart last audit' }).click()
+    await expect(strip(page)).toContainText('Tide Market')
+    await expect(strip(page)).toContainText('Reef Wardens')
+  })
+
+  test('the page itself does not scroll sideways because of the strip', async ({ page }) => {
+    await page.goto('/#/scout')
+    await expect(strip(page).locator('.concept-card').first()).toBeVisible()
+    const pageScrolls = await page.evaluate(() =>
+      document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)
+    expect(pageScrolls).toBe(false)
   })
 })

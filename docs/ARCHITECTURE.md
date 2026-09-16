@@ -20,6 +20,22 @@ with a Roblox theme.
 These run whether or not anybody is looking at the dashboard.
 
 ```
+  +--------------------------------------------------------------+
+  | WATCHDOG   scripts/watchdog.ps1, every 5 minutes              |
+  |                                                               |
+  | The census only runs while the service runs, and a gap cannot |
+  | be backfilled: nobody can ask Roblox what the player counts   |
+  | were two hours ago. The ledger carries two such holes, 7.7h   |
+  | and 2.3h.                                                     |
+  |                                                               |
+  | Checks two different claims:                                  |
+  |   1. is the scheduled task running at all                     |
+  |   2. is its process listening on a socket                     |
+  | Restarts on either. Nothing is logged unless something was    |
+  | wrong, so every line in data/watchdog.log is an outage.       |
+  +--------------------------------------------------------------+
+         |
+         v
    SERVICE START  (Task Scheduler, at logon -- app/service.py)
          |
          v

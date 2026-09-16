@@ -131,6 +131,16 @@ type AuditJob = {
   audit_id: string | null; error: string | null; remaining_seconds: number; events: JobEvent[]
 }
 const JOB_ACTIVE = ['queued', 'running']
+// What a job is called on its card. The backend attaches this to the list
+// endpoints; the per-job poll leaves it off, so the page keeps what it was
+// given rather than letting a refresh blank the titles.
+type JobLabel = { concept_title: string; core_loop: string; game_name: string; niche: string; universe_id: string }
+type LabelledJob = AuditJob & Partial<JobLabel>
+const JOB_TONE: Record<string, Tone> = {
+  complete: 'verified', running: 'proposal', queued: 'proposal',
+  interrupted: 'conflict', cancelled: 'insufficient', blocked: 'insufficient',
+  failed: 'conflict', timed_out: 'conflict',
+}
 // The backend refuses a shorter reason; the form now says so before you try.
 const REVIEW_REASON_MIN = 10
 
@@ -366,9 +376,13 @@ function useAuditJob(candidateId: string) {
   return { job, jobError, running, workOpen, setWorkOpen, stored, start, cancel, resume }
 }
 
-function BackgroundWorkDrawer({ job, events, open, onClose, onCancel, onResume }: {
+// `label` names the drawer for assistive technology and for tests. The Scout
+// page carries two of these -- the manual audit's and the queue's -- and two
+// dialogs answering to the same name on one page is ambiguous for a screen
+// reader before it is ambiguous for anything else.
+function BackgroundWorkDrawer({ job, events, open, onClose, onCancel, onResume, label = 'Background work' }: {
   job: AuditJob | null; events: JobEvent[]; open: boolean
-  onClose: () => void; onCancel: () => void; onResume?: () => void
+  onClose: () => void; onCancel: () => void; onResume?: () => void; label?: string
 }) {
   const panel = useRef<HTMLElement>(null)
   const close = useRef(onClose)
@@ -386,13 +400,13 @@ function BackgroundWorkDrawer({ job, events, open, onClose, onCancel, onResume }
 
   const running = job ? JOB_ACTIVE.includes(job.status) : false
   return <div className={`drawer-scrim ${open ? 'open' : ''}`} onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
-    <aside className="evidence-drawer" ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Background work">
+    <aside className="evidence-drawer" ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={label}>
       <header>
-        <div><span>Background work</span><strong>{job ? `${job.status}${running ? ` · ${Math.round(job.remaining_seconds)}s left` : ''}` : 'Nothing running'}</strong></div>
+        <div><span>{label}</span><strong>{job ? `${job.status}${running ? ` · ${Math.round(job.remaining_seconds)}s left` : ''}` : 'Nothing running'}</strong></div>
         <div className="drawer-header-actions">
           {running && <button className="text-button" onClick={onCancel}>Cancel run</button>}
           {job?.status === 'interrupted' && onResume && <button className="text-button" onClick={onResume}>Resume</button>}
-          <button aria-label="Close background work" onClick={onClose}>×</button>
+          <button aria-label={`Close ${label.toLowerCase()}`} onClick={onClose}>×</button>
         </div>
       </header>
       <div className="drawer-body">
@@ -993,6 +1007,42 @@ function ResultStrip({ cards, onOpen }: { cards: ResultCard[]; onOpen: (card: Re
   </div>
 }
 
+// One card per audit this run started.
+//
+// These were three lines of truncated job id and a status word, stacked in a
+// grey box and not clickable, so the only way to reach what an audit actually
+// produced was to find it again in another strip. A card carries the concept's
+// name, says what the audit is doing right now, and opens.
+function JobStrip({ jobs, labels, onOpen }: {
+  jobs: AuditJob[]; labels: Record<string, JobLabel>; onOpen: (job: AuditJob) => void
+}) {
+  return <div className="card-strip" role="list" aria-label="Audits started from this queue">
+    {jobs.map(job => {
+      const label = labels[job.id]
+      const active = JOB_ACTIVE.includes(job.status)
+      const latest = job.events?.length ? job.events[job.events.length - 1] : null
+      const step = latest ? (STAGE_LABEL[latest.stage] || latest.stage.replaceAll('_', ' ')) : ''
+      // Never the model's own text: the feed carries descriptions of the work,
+      // and a card is not the place to start rendering untrusted output.
+      const line = job.error
+        || (active ? (step || 'Waiting for the model; it takes one audit at a time.') : '')
+        || label?.core_loop
+        || 'Open for the full brief.'
+      return <button key={job.id} role="listitem" className="concept-card" onClick={() => onOpen(job)}>
+        <span className="concept-card-niche">
+          {[label?.game_name, label?.niche].filter(Boolean).join(' · ') || 'Venture Scout audit'}</span>
+        <strong>{label?.concept_title || `Audit ${job.id.slice(0, 8)}`}</strong>
+        <p>{line}</p>
+        <div className="concept-card-footer">
+          <Badge tone={JOB_TONE[job.status] || 'insufficient'}>{job.status.replaceAll('_', ' ')}</Badge>
+          <small>{job.audit_id ? 'Open the brief'
+            : active ? 'Open live progress' : 'Open what happened'}</small>
+        </div>
+      </button>
+    })}
+  </div>
+}
+
 function ScoutQueueSection() {
   const [queue, setQueue] = useState<ScoutQueue | null>(null)
   const [cards, setCards] = useState<ResultCard[]>([])
@@ -1000,19 +1050,44 @@ function ScoutQueueSection() {
   const [panelOpen, setPanelOpen] = useState(false)
   const [detail, setDetail] = useState<ResultCard | null>(null)
   const [jobs, setJobs] = useState<AuditJob[]>([])
+  const [labels, setLabels] = useState<Record<string, JobLabel>>({})
+  const [openJobId, setOpenJobId] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [history, setHistory] = useState<{ resumable: string[]; restartable: string[] }>(
     { resumable: [], restartable: [] })
 
+  // Labels arrive with the list endpoints and are kept by job id. The per-job
+  // poll does not carry them, so merging rather than replacing is what stops a
+  // running card losing its name every 1.5 seconds.
+  const remember = useCallback((incoming: LabelledJob[]) => {
+    setLabels(previous => {
+      const next = { ...previous }
+      incoming.forEach(job => {
+        if (job.concept_title === undefined) return
+        next[job.id] = {
+          concept_title: job.concept_title || '', core_loop: job.core_loop || '',
+          game_name: job.game_name || '', niche: job.niche || '',
+          universe_id: job.universe_id || '',
+        }
+      })
+      return next
+    })
+  }, [])
+
   const load = useCallback(async () => {
     try {
-      const [next, results, jobs] = await Promise.all([
+      const [next, results, recent] = await Promise.all([
         api<ScoutQueue>('/api/scout/queue'),
         api<{ cards: ResultCard[] }>('/api/scout/results'),
-        api<{ resumable: string[]; restartable: string[] }>('/api/audit-jobs'),
+        api<{ jobs: LabelledJob[]; resumable: string[]; restartable: string[] }>('/api/audit-jobs'),
       ])
-      setQueue(next); setCards(results.cards); setHistory(jobs); setError('')
+      setQueue(next); setCards(results.cards); setHistory(recent); setError('')
+      remember(recent.jobs || [])
+      // A reload used to empty this strip, so an audit that finished while the
+      // page was closed left nothing to open. The jobs are on the server;
+      // show the ones this queue started, newest last.
+      setJobs(previous => previous.length ? previous : [...(recent.jobs || [])].reverse())
       // Everything routed is selected by default; the panel is for removing,
       // not for opting in. A concept the operator already cleared stays
       // cleared across refreshes.
@@ -1020,7 +1095,7 @@ function ScoutQueueSection() {
         ? previous
         : new Set(next.queued.filter(entry => entry.available).map(entry => entry.proposal_id)))
     } catch (caught) { setError((caught as Error).message) }
-  }, [])
+  }, [remember])
   useEffect(() => { load() }, [load])
 
   const active = jobs.filter(job => JOB_ACTIVE.includes(job.status))
@@ -1038,8 +1113,9 @@ function ScoutQueueSection() {
   async function run() {
     setBusy(true); setError('')
     try {
-      const response = await api<{ started: AuditJob[]; skipped: Array<{ proposal_id: string; reason: string }> }>(
+      const response = await api<{ started: LabelledJob[]; skipped: Array<{ proposal_id: string; reason: string }> }>(
         '/api/scout/queue/run', { method: 'POST', body: JSON.stringify({ proposal_ids: [...chosen] }) })
+      remember(response.started)
       setJobs(response.started)
       setPanelOpen(false)
       if (response.skipped.length) {
@@ -1052,7 +1128,10 @@ function ScoutQueueSection() {
   async function act(path: string, label: string) {
     setBusy(true); setError('')
     try {
-      setJobs([await api<AuditJob>(path, { method: 'POST' })])
+      // Replacing the list with the one job dropped the rest of the run off
+      // the page: a restart hid the two audits that had finished beside it.
+      const updated = await api<AuditJob>(path, { method: 'POST' })
+      setJobs(previous => [...previous.filter(job => job.id !== updated.id), updated])
     } catch (caught) { setError(`${label} failed: ${(caught as Error).message}`) }
     finally { setBusy(false); await load() }
   }
@@ -1060,6 +1139,27 @@ function ScoutQueueSection() {
     act(`/api/audit-jobs/${history.restartable[0]}/restart`, 'Restart')
   const resumeJob = () => history.resumable[0] &&
     act(`/api/audit-jobs/${history.resumable[0]}/resume`, 'Resume')
+
+  // Read from `jobs` rather than copied into state, so an open drawer keeps
+  // following the job as it polls instead of freezing on the click.
+  const watched = jobs.find(job => job.id === openJobId) || null
+
+  async function openJob(job: AuditJob) {
+    if (!job.audit_id) { setOpenJobId(job.id); return }
+    const known = cards.find(card => card.audit_id === job.audit_id)
+    if (known) { setDetail(known); return }
+    // The results list has not caught up with an audit that just landed.
+    // Ask again rather than synthesising a card: every field in the brief is
+    // read back from the ledger, and inventing one here would put a number on
+    // the page that nothing wrote.
+    try {
+      const fresh = await api<{ cards: ResultCard[] }>('/api/scout/results')
+      setCards(fresh.cards)
+      const found = fresh.cards.find(card => card.audit_id === job.audit_id)
+      if (found) { setDetail(found); return }
+    } catch { /* fall through to the job's own record */ }
+    setOpenJobId(job.id)
+  }
 
   const selectable = queue?.queued.filter(entry => entry.available) || []
   const selected = selectable.filter(entry => chosen.has(entry.proposal_id)).length
@@ -1099,13 +1199,18 @@ function ScoutQueueSection() {
               : 'Start audits the concepts you selected. Restart runs the last audit again on a fresh budget. Resume continues an interrupted one on its original deadline, without re-spending it.'}
             {!!queue?.blocked && ` ${queue.blocked} cannot run yet.`}
           </small></>}
-      {!!jobs.length && <div className="queue-progress">
-        <strong>{done} of {jobs.length} finished</strong>
-        <small>The model takes one audit at a time; the rest are queued behind it.</small>
-        {jobs.map(job => <p key={job.id}><code>{job.id.slice(0, 8)}</code> — {job.status}
-          {job.error ? ` · ${job.error}` : ''}</p>)}
-      </div>}
     </article>
+
+    {!!jobs.length && <article className="data-panel"><div className="panel-heading"><div>
+      <span>{active.length ? `${active.length} running · ${done} finished`
+        : `${done} finished`}</span>
+      <h2>Audit runs</h2></div>
+      <Badge tone={active.length ? 'proposal' : 'verified'}>
+        {active.length ? 'working' : 'idle'}</Badge></div>
+      <p className="body-copy">The model takes one audit at a time; the rest are queued
+        behind it. Open a card for the full brief, or for what the audit is doing right now.</p>
+      <JobStrip jobs={jobs} labels={labels} onOpen={openJob} />
+    </article>}
 
     <article className="data-panel"><div className="panel-heading"><div>
       <span>Scroll sideways; open one for the full brief</span><h2>Audited concepts</h2></div>
@@ -1121,6 +1226,10 @@ function ScoutQueueSection() {
       })}
       onClose={() => setPanelOpen(false)} onRun={run} />}
     {detail && <ResultDetail card={detail} onClose={() => setDetail(null)} />}
+    <BackgroundWorkDrawer job={watched} events={watched?.events || []} open={!!watched}
+      label="Audit progress" onClose={() => setOpenJobId('')}
+      onCancel={() => watched && act(`/api/audit-jobs/${watched.id}/cancel`, 'Cancel')}
+      onResume={() => watched && act(`/api/audit-jobs/${watched.id}/resume`, 'Resume')} />
   </>
 }
 

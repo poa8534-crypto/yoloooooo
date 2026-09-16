@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from .models import AuditRecord, Candidate, Proposal, ResearchRun
+from .models import AuditRecord, Candidate, Observation, Proposal, ResearchRun
 from .research_evidence import evidence_packet
 
 HUNTER = "meta_hunter"
@@ -79,6 +79,48 @@ def pending(db, *, active_candidates: set[str] | None = None) -> list[dict]:
             ),
         })
     return rows
+
+
+def _observed_name(db, candidate) -> str:
+    """The candidate's name as it was captured, never as anyone typed it.
+
+    The name lives on an observation pointing into a hashed artifact, so this
+    reads that row rather than accepting a string from anywhere else. An
+    unnamed candidate stays unnamed: inventing a label here would put an
+    unsourced name on a card that everything else on the page traces.
+    """
+    if candidate is None or not candidate.display_name_observation_id:
+        return ""
+    observation = db.get(Observation, candidate.display_name_observation_id)
+    value = observation.value_json if observation else None
+    return str(value) if isinstance(value, str) else ""
+
+
+def label(db, jobs: list[dict]) -> list[dict]:
+    """Name each Scout job by the concept it is auditing.
+
+    A job listed as `2681a175 — complete` is unreadable: it is a truncated
+    identifier for work the operator asked for by name, and three of them in a
+    column say nothing about which concept did what. The title already exists
+    on the Hunter proposal the job points at, so the card can carry it.
+
+    A job whose proposal or candidate has gone reports empty fields rather
+    than a placeholder, and the page shows the identifier it does have.
+    """
+    labelled: list[dict] = []
+    for job in jobs:
+        proposal = db.get(Proposal, job["proposal_id"]) if job.get("proposal_id") else None
+        candidate = db.get(Candidate, job["candidate_id"]) if job.get("candidate_id") else None
+        run = db.get(ResearchRun, candidate.run_id) if candidate and candidate.run_id else None
+        labelled.append({
+            **job,
+            "concept_title": _title(proposal.payload) if proposal else "",
+            "core_loop": _summary(proposal.payload) if proposal else "",
+            "game_name": _observed_name(db, candidate),
+            "niche": run.niche if run else "",
+            "universe_id": candidate.external_id if candidate else "",
+        })
+    return labelled
 
 
 def audited(db, limit: int = 60) -> list[dict]:

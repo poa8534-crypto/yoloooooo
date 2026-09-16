@@ -470,7 +470,10 @@ async def run_scout_queue(selection: ScoutQueueRun, db: Session = Depends(get_db
             started.append(app.state.audit_jobs.start(entry["candidate_id"], "audit_idea", proposal_id))
         except (JobConflict, ValueError, KeyError) as exc:
             skipped.append({"proposal_id": proposal_id, "reason": str(exc) or "Could not start"})
-    return {"started": started, "skipped": skipped}
+    # Labelled here rather than on the polling endpoint: the page shows one
+    # card per job and a card needs the concept's name, but the per-job poll
+    # runs every 1.5 seconds and must stay cheap.
+    return {"started": scout_queue.label(db, started), "skipped": skipped}
 
 
 @app.get("/api/scout/results")
@@ -487,9 +490,13 @@ def get_audit_job(job_id: str):
 
 
 @app.get("/api/audit-jobs")
-def list_audit_jobs(limit: int = 20):
-    """Recent Scout jobs, so the page can offer Resume or Restart."""
-    jobs = app.state.audit_jobs.recent(limit)
+def list_audit_jobs(limit: int = 20, db: Session = Depends(get_db)):
+    """Recent Scout jobs, so the page can offer Resume or Restart.
+
+    Labelled with the concept each job is auditing, so a reload still shows
+    readable cards instead of truncated identifiers.
+    """
+    jobs = scout_queue.label(db, app.state.audit_jobs.recent(limit))
     return {"jobs": jobs,
             "resumable": [job["id"] for job in jobs if job.get("status") == "interrupted"],
             "restartable": [job["id"] for job in jobs
