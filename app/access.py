@@ -26,8 +26,13 @@ from fastapi import HTTPException, Request
 LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 # Paths that must answer before a caller can prove anything: a load balancer's
-# health probe has no token and its failure would take the service down.
-OPEN_PATHS = {"/api/health/live"}
+# health probe has no token and its failure would take the service down, and
+# the sign-in page cannot ask for a credential from behind the credential.
+#
+# `/api/session` is open by necessity -- it is where the token is presented --
+# and is the one place a wrong guess is cheap to make, so it answers slowly and
+# identically either way.
+OPEN_PATHS = {"/api/health/live", "/login", "/api/session"}
 
 MINIMUM_TOKEN_LENGTH = 24
 
@@ -59,6 +64,17 @@ def assert_bindable(host: str, token: str) -> None:
         )
 
 
+def same_secret(offered: str, expected: str) -> bool:
+    """Constant-time comparison that cannot raise.
+
+    `hmac.compare_digest` refuses a non-ASCII `str`, so a token carrying a
+    stray byte -- a BOM from a text editor, an accented character pasted in --
+    turned a failed credential check into a 500 with a stack trace. Comparing
+    the UTF-8 bytes keeps the timing property and answers False instead.
+    """
+    return hmac.compare_digest(offered.encode("utf-8"), expected.encode("utf-8"))
+
+
 def _offered(request: Request) -> str:
     """The token the caller presented, from a header or a cookie.
 
@@ -72,6 +88,11 @@ def _offered(request: Request) -> str:
     return request.headers.get("x-dashboard-token", "") or request.cookies.get("dashboard_token", "")
 
 
+def wants_html(request: Request) -> bool:
+    """A browser typing the address deserves a sign-in page, not a JSON 401."""
+    return "text/html" in request.headers.get("accept", "")
+
+
 def check(request: Request, token: str) -> None:
     """Refuse anything that cannot prove it holds the token.
 
@@ -83,7 +104,7 @@ def check(request: Request, token: str) -> None:
         return
     if request.url.path in OPEN_PATHS:
         return
-    if not hmac.compare_digest(_offered(request), token):
+    if not same_secret(_offered(request), token):
         # The same answer either way: which of "absent" or "wrong" it was is
         # information an attacker does not need.
         raise HTTPException(401, "authentication required")

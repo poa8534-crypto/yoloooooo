@@ -8,9 +8,11 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import hmac
+
 import httpx
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Text, func, select
@@ -170,7 +172,11 @@ async def require_token(request, call_next):
     try:
         access.check(request, get_settings().dashboard_token)
     except HTTPException as exc:
-        from fastapi.responses import JSONResponse
+        from fastapi.responses import JSONResponse, RedirectResponse
+        # A browser typing the address gets the sign-in page; an API caller
+        # gets the status code, because a redirect would look like success.
+        if access.wants_html(request) and not request.url.path.startswith("/api/"):
+            return RedirectResponse("/login", status_code=303)
         return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
     return await call_next(request)
 
@@ -179,6 +185,56 @@ async def require_token(request, call_next):
 def liveness():
     """Unauthenticated on purpose: a platform health probe holds no token."""
     return {"status": "ok"}
+
+
+LOGIN_PAGE = """<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Sign in</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;background:#f8f9fa;color:#202124;
+display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:24px}
+form{background:#fff;border:1px solid #dadce0;border-radius:8px;padding:28px;max-width:360px;width:100%}
+h1{font-size:18px;margin:0 0 6px}p{color:#5f6368;font-size:13px;margin:0 0 18px}
+input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #dadce0;border-radius:4px;font:inherit}
+button{margin-top:12px;width:100%;padding:10px;border:0;border-radius:4px;background:#202124;color:#fff;font:inherit;cursor:pointer}
+.err{color:#c5221f;font-size:13px;margin-top:10px;min-height:18px}</style>
+<form onsubmit="go(event)"><h1>Roblox Venture Agents</h1>
+<p>This dashboard is reachable from your tailnet. Enter the access token.</p>
+<input id=t type=password autocomplete=current-password placeholder="Access token" autofocus>
+<button>Sign in</button><div class=err id=e></div></form>
+<script>async function go(ev){ev.preventDefault();document.getElementById('e').textContent='';
+const r=await fetch('/api/session',{method:'POST',headers:{'content-type':'application/json'},
+body:JSON.stringify({token:document.getElementById('t').value})});
+if(r.ok){location.href='/';}else{document.getElementById('e').textContent='That token was not accepted.';}}</script>"""
+
+
+@app.get("/login")
+def login_page():
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(LOGIN_PAGE)
+
+
+@app.post("/api/session")
+async def create_session(request: Request):
+    """Exchange the token for a cookie the browser can carry.
+
+    Deliberately slow and identical on failure: this is the one endpoint that
+    has to be open, so a wrong guess must cost the guesser something and tell
+    them nothing.
+    """
+    from fastapi.responses import JSONResponse
+
+    configured = get_settings().dashboard_token
+    if not configured:
+        raise HTTPException(404, "no token is configured; this service is loopback-only")
+    body = await request.json()
+    offered = str(body.get("token", "")) if isinstance(body, dict) else ""
+    if not access.same_secret(offered, configured):
+        await asyncio.sleep(1.0)
+        raise HTTPException(401, "authentication required")
+    response = JSONResponse({"status": "ok"})
+    response.set_cookie("dashboard_token", configured, httponly=True, samesite="lax",
+                        max_age=60 * 60 * 24 * 30, path="/")
+    return response
 
 
 def _audited_candidate_ids(db: Session) -> set[str]:

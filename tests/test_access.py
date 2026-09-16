@@ -142,3 +142,51 @@ def test_comparison_does_not_leak_through_an_exception_message():
         access.check(request(headers={"x-dashboard-token": "guess"}), TOKEN)
     assert TOKEN not in str(caught.value.detail)
     assert "guess" not in str(caught.value.detail)
+
+
+def test_the_sign_in_page_is_reachable_without_a_credential():
+    """It cannot ask for a token from behind the token."""
+    assert access.check(request(path="/login"), TOKEN) is None
+    assert access.check(request(path="/api/session"), TOKEN) is None
+
+
+def test_the_open_set_stays_exactly_three_paths():
+    """Every entry here is a hole by design. Growing this set by accident is
+    how an app ends up unauthenticated without anyone deciding to."""
+    assert access.OPEN_PATHS == {"/api/health/live", "/login", "/api/session"}
+
+
+def test_a_browser_is_told_apart_from_an_api_caller():
+    """A browser typing the address should land on the sign-in page; an API
+    caller must get the status code, because a redirect reads as success."""
+    assert access.wants_html(request(headers={"accept": "text/html,application/xhtml+xml"}))
+    assert not access.wants_html(request(headers={"accept": "application/json"}))
+    assert not access.wants_html(request())
+
+
+def test_a_near_miss_on_an_open_path_is_still_gated():
+    """`/login` is open; `/login/../api/research-runs` style guessing is not."""
+    for path in ("/login/extra", "/api/session/new", "/api/health/live/x", "/LOGIN"):
+        with pytest.raises(HTTPException):
+            access.check(request(path=path), TOKEN)
+
+
+def test_a_configured_token_with_a_stray_byte_refuses_instead_of_crashing():
+    """Found live. PowerShell's `-Encoding utf8` writes a BOM, so the token in
+    the environment began with ﻿. `hmac.compare_digest` refuses a
+    non-ASCII str outright, which turned sign-in into a 500 with a stack trace
+    rather than a clean refusal."""
+    configured = "﻿" + TOKEN
+    with pytest.raises(HTTPException):
+        access.check(request(headers={"x-dashboard-token": TOKEN}), configured)
+    assert access.same_secret(configured, configured) is True
+
+
+def test_a_non_ascii_configured_token_still_compares():
+    assert access.same_secret("café", "café") is True
+    assert access.same_secret("café", "cafe") is False
+
+
+def test_the_comparison_never_raises_whatever_it_is_given():
+    for offered, expected in (("", TOKEN), (TOKEN, ""), ("﻿", "﻿"), ("", "")):
+        assert isinstance(access.same_secret(offered, expected), bool)
