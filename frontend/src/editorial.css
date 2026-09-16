@@ -313,3 +313,11 @@ th { white-space: normal; }
    measure now and line up. */
 .topbar > *, .page-title { max-width: 1420px; margin-inline: auto; width: 100%; box-sizing: border-box; }
 .topbar { padding-inline: 40px; }
+
+/* Three actions that are not the same action. Start is primary; Restart and
+   Resume sit beside it rather than under it, so the choice is visible without
+   reading. */
+.agent-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 4px 0 8px; }
+.agent-actions button { min-height: 38px; }
+.agent-actions + .gate-hint { display: block; margin-bottom: 4px; color: #5f6368; line-height: 1.5; }
+@media (max-width: 760px) { .agent-actions { flex-direction: column; align-items: stretch; } }

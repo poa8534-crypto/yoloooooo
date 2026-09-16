@@ -138,6 +138,30 @@ class AuditJobs:
                 await asyncio.gather(task, return_exceptions=True)
         return self.get(job_id)
 
+    def recent(self, limit=20):
+        """Recent jobs, newest first, so a page can offer resume or restart.
+
+        Without this the Scout page had no way to know an audit had been
+        interrupted, so the only route back to it was to notice by accident.
+        """
+        with self.factory() as db:
+            jobs = [row.value_json for row in
+                    db.scalars(select(SystemState).where(SystemState.key.like(PREFIX + "%")))]
+        return sorted(jobs, key=lambda job: job.get("created_at") or "", reverse=True)[:limit]
+
+    def restart(self, job_id):
+        """Start the same audit over from the beginning.
+
+        Resume continues on the original deadline and attempt count, which is
+        right for an interruption and wrong for a job that failed or ran out
+        of them. Restart is a new job with a fresh budget, and it is a separate
+        button because spending that budget again is a decision.
+        """
+        job = self.get(job_id)
+        if job["status"] in ACTIVE:
+            raise JobConflict("That audit is still running; cancel it before restarting")
+        return self.start(job["candidate_id"], job["operation"], job.get("proposal_id"))
+
     def resume(self, job_id):
         job = self.get(job_id)
         if job["status"] != "interrupted" or job["remaining_seconds"] <= 0 or job["model_attempts"] >= 24:

@@ -743,7 +743,7 @@ function MatchingEnginePage({ status, reviews, selectedId, onSelect, onReload, o
   </section>
 }
 
-function MetaHunterPage({ runs, health, onStart, busy, onInspectFact }: { onInspectFact: (id: string) => void; runs: Run[]; health: Health | null; onStart: (niche: string) => void; busy: boolean }) {
+function MetaHunterPage({ runs, health, onStart, onResume, busy, onInspectFact }: { onInspectFact: (id: string) => void; runs: Run[]; health: Health | null; onStart: (niche: string) => void; onResume: (id: string) => void; busy: boolean }) {
   const [niche, setNiche] = useState('')
   const active = runs.find(run => ['queued', 'running'].includes(run.status))
   function submit(event: FormEvent) { event.preventDefault(); onStart(niche) }
@@ -755,7 +755,29 @@ function MetaHunterPage({ runs, health, onStart, busy, onInspectFact }: { onInsp
   const [reportId, setReportId] = useState("")
   const latest = runs.find(r => r.id === reportId) || runs[0]
   return <section className="workspace"><div className="agent-boundary"><Badge tone="proposal">Agent authority: proposal only</Badge><p>Meta Hunter can suggest concepts and search heuristics. It cannot create URLs, platform metrics, scores, confidence values or verdicts.</p><strong>Invariant enforced</strong></div>
-    <div className="agent-columns"><article className="data-panel"><div className="panel-heading"><div><span>Research configuration</span><h2>Meta Hunter parameters</h2></div><Badge tone={active ? 'inference' : 'insufficient'}>{active ? active.status : 'Idle'}</Badge></div><form onSubmit={submit}><label>Research niche or question<input value={niche} minLength={3} required onChange={event => setNiche(event.target.value)} placeholder="e.g. cooperative cozy farming" /></label><div className="form-grid"><label>Region<input value="Global" disabled /></label><label>Corpus language<input value="English" disabled /></label><label>Candidate cap<input value="30 unique games · up to 3 concepts" disabled /></label><label>Search policy<input value="Discovery → primary evidence" disabled /></label></div><button className="primary" disabled={busy || Boolean(active)}>{busy ? 'Starting…' : active ? 'Research already running' : 'Start research run'}</button></form></article>
+    <div className="agent-columns"><article className="data-panel"><div className="panel-heading"><div><span>Research configuration</span><h2>Meta Hunter parameters</h2></div><Badge tone={active ? 'inference' : 'insufficient'}>{active ? active.status : 'Idle'}</Badge></div><form onSubmit={submit}><label>Research niche or question<input value={niche} minLength={3} required onChange={event => setNiche(event.target.value)} placeholder="e.g. cooperative cozy farming" /></label><div className="form-grid"><label>Region<input value="Global" disabled /></label><label>Corpus language<input value="English" disabled /></label><label>Candidate cap<input value="30 unique games · up to 3 concepts" disabled /></label><label>Search policy<input value="Discovery → primary evidence" disabled /></label></div>{(() => {
+      // Three actions, and the difference between them matters: Start is a new
+      // niche, Restart re-runs the last one from nothing, Resume continues an
+      // interrupted run from its checkpoint without re-spending what it paid.
+      const interrupted = runs.find(run => run.status === 'interrupted')
+      const previous = runs[0]
+      const why = (blocked: string) => blocked || ''
+      const startWhy = why(active ? 'A run is already going.' : !niche.trim() ? 'Type a niche above first.' : '')
+      const restartWhy = why(active ? 'A run is already going.' : !previous ? 'No earlier run to repeat.' : '')
+      const resumeWhy = why(active ? 'A run is already going.' : !interrupted ? 'No interrupted run to continue.' : '')
+      return <><div className="agent-actions">
+        <button className="primary" type="submit" title={startWhy} disabled={busy || !!startWhy}>
+          {busy ? 'Starting…' : 'Start research run'}</button>
+        <button className="secondary" type="button" title={restartWhy} disabled={busy || !!restartWhy}
+          onClick={() => previous && onStart(previous.niche)}>Restart last run</button>
+        <button className="secondary" type="button" title={resumeWhy} disabled={busy || !!resumeWhy}
+          onClick={() => interrupted && onResume(interrupted.id)}>Resume interrupted</button>
+      </div>
+      <small className="gate-hint">
+        {active ? 'A run is going; the buttons wake up when it finishes.'
+          : `Start uses the niche above. Restart repeats “${previous ? previous.niche.slice(0, 40) : '—'}” from nothing. Resume continues an interrupted run from its checkpoint, without paying for the work it already did.`}
+      </small></>
+    })()}</form></article>
       <article className="data-panel"><div className="panel-heading"><div><span>Immutable safety rules</span><h2>Protected invariants</h2></div></div><div className="invariant-list">{[['Evidence firewall', true], ['URLs from model', false], ['Platform metrics from model', false], ['Model-authored verdicts', false], ['Strict JSON schema', true], ['Fail-closed mode', true]].map(([label, enabled]) => <div key={String(label)}><span>{label}</span><Badge tone={enabled ? 'verified' : 'conflict'}>{enabled ? 'Enabled · locked' : 'Disabled · locked'}</Badge></div>)}</div></article></div>
     <article className="data-panel"><div className="panel-heading"><div><span>Reported run state</span><h2>Pipeline</h2></div>{latest && <Badge tone={toneFor(latest.status)}>{latest.status}</Badge>}</div>
       {latest ? <div className="run-state"><strong>{latest.niche}</strong><p className="mono">{latest.message}</p><small>{active ? 'This run is still in progress.' : `Finished ${formatDate(latest.completed_at || latest.created_at)}`}</small></div> : <EmptyState title="No run reported yet">Start a research run to see its reported state.</EmptyState>}
@@ -979,14 +1001,17 @@ function ScoutQueueSection() {
   const [jobs, setJobs] = useState<AuditJob[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [history, setHistory] = useState<{ resumable: string[]; restartable: string[] }>(
+    { resumable: [], restartable: [] })
 
   const load = useCallback(async () => {
     try {
-      const [next, results] = await Promise.all([
+      const [next, results, jobs] = await Promise.all([
         api<ScoutQueue>('/api/scout/queue'),
         api<{ cards: ResultCard[] }>('/api/scout/results'),
+        api<{ resumable: string[]; restartable: string[] }>('/api/audit-jobs'),
       ])
-      setQueue(next); setCards(results.cards); setError('')
+      setQueue(next); setCards(results.cards); setHistory(jobs); setError('')
       // Everything routed is selected by default; the panel is for removing,
       // not for opting in. A concept the operator already cleared stays
       // cleared across refreshes.
@@ -1023,8 +1048,27 @@ function ScoutQueueSection() {
     } catch (caught) { setError((caught as Error).message) } finally { setBusy(false) }
   }
 
+  async function act(path: string, label: string) {
+    setBusy(true); setError('')
+    try {
+      setJobs([await api<AuditJob>(path, { method: 'POST' })])
+    } catch (caught) { setError(`${label} failed: ${(caught as Error).message}`) }
+    finally { setBusy(false); await load() }
+  }
+  const restartJob = () => history.restartable[0] &&
+    act(`/api/audit-jobs/${history.restartable[0]}/restart`, 'Restart')
+  const resumeJob = () => history.resumable[0] &&
+    act(`/api/audit-jobs/${history.resumable[0]}/resume`, 'Resume')
+
   const selectable = queue?.queued.filter(entry => entry.available) || []
   const selected = selectable.filter(entry => chosen.has(entry.proposal_id)).length
+  // Each button says what it is waiting for rather than going quietly dead.
+  const startWhy = active.length ? 'An audit is already running.'
+    : !selected ? 'Nothing selected. Use “Choose which to run”.' : ''
+  const restartWhy = active.length ? 'An audit is already running.'
+    : !history.restartable.length ? 'No earlier audit to run again.' : ''
+  const resumeWhy = active.length ? 'An audit is already running.'
+    : !history.resumable.length ? 'No interrupted audit to continue.' : ''
   const done = jobs.filter(job => !JOB_ACTIVE.includes(job.status)).length
   return <>
     <article className="data-panel"><div className="panel-heading"><div>
@@ -1038,13 +1082,22 @@ function ScoutQueueSection() {
       {queue && !queue.queued.length
         ? <EmptyState title="Nothing waiting">Every Hunter concept has been audited.
             The next Meta Hunter run puts its concepts here on its own.</EmptyState>
-        : <div className="queue-actions">
-            <button className="primary" disabled={busy || !selected || !!active.length} onClick={run}>
-              {active.length ? 'Running…' : `Yes, run ${selected} idea${selected === 1 ? '' : 's'}`}</button>
-            <button className="secondary" disabled={!queue?.queued.length} onClick={() => setPanelOpen(true)}>
-              Choose which to run</button>
-            {!!queue?.blocked && <small>{queue.blocked} cannot run yet</small>}
-          </div>}
+        : <><div className="agent-actions">
+            <button className="primary" title={startWhy} disabled={busy || !!startWhy} onClick={run}>
+              {active.length ? 'Running…' : `Start ${selected} audit${selected === 1 ? '' : 's'}`}</button>
+            <button className="secondary" title={restartWhy} disabled={busy || !!restartWhy}
+              onClick={restartJob}>Restart last audit</button>
+            <button className="secondary" title={resumeWhy} disabled={busy || !!resumeWhy}
+              onClick={resumeJob}>Resume interrupted</button>
+            <button className="secondary" onClick={() => setPanelOpen(true)}
+              title={queue?.queued.length ? '' : 'The queue is empty, so there is nothing to choose from.'}
+              disabled={!queue?.queued.length}>Choose which to run</button>
+          </div>
+          <small className="gate-hint">
+            {active.length ? 'An audit is going; the model takes one at a time.'
+              : 'Start audits the concepts you selected. Restart runs the last audit again on a fresh budget. Resume continues an interrupted one on its original deadline, without re-spending it.'}
+            {!!queue?.blocked && ` ${queue.blocked} cannot run yet.`}
+          </small></>}
       {!!jobs.length && <div className="queue-progress">
         <strong>{done} of {jobs.length} finished</strong>
         <small>The model takes one audit at a time; the rest are queued behind it.</small>
@@ -1399,6 +1452,15 @@ export default function App() {
     } catch (caught) { setError((caught as Error).message) } finally { setBusy(false) }
   }
 
+  async function resumeResearch(runId: string) {
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const run = await api<Run>(`/api/research-runs/${runId}/resume`, { method: 'POST' })
+      setRuns(current => [run, ...current.filter(item => item.id !== run.id)])
+      setNotice(`Resumed “${run.niche}” from its checkpoint; the work it already did is kept.`)
+    } catch (caught) { setError((caught as Error).message) } finally { setBusy(false) }
+  }
+
   async function openSourceById(artifactId: string) {
     const generation = ++sourceGeneration.current
     setSourceLoading(true); setSourceDetail(null); setError('')
@@ -1451,7 +1513,7 @@ export default function App() {
         {page === 'history' && <AgentHistoryPage onInspectFact={inspectFact} onOpenCandidate={id => setSelectedIdea(id)} />}
         {page === 'matching' && <MatchingEnginePage status={matchingStatus} reviews={matchingReviews} selectedId={selectedMatch} onSelect={setSelectedMatch} onReload={loadMatching} onReview={reviewMatch} busy={busy} />}
         {page === 'market' && <MarketPulsePage />}
-        {page === 'meta' && <MetaHunterPage runs={runs} health={health} onStart={startResearch} busy={busy} onInspectFact={inspectFact} />}
+        {page === 'meta' && <MetaHunterPage runs={runs} health={health} onStart={startResearch} onResume={resumeResearch} busy={busy} onInspectFact={inspectFact} />}
         {page === 'scout' && <VentureScoutPage candidates={candidates} />}
         {page === 'calibration' && <CalibrationPage calibration={calibration} summary={summary} />}
         {page === 'health' && <HealthPage health={health} summary={summary} matching={matchingStatus} />}

@@ -485,6 +485,29 @@ def get_audit_job(job_id: str):
         raise HTTPException(404, "audit job not found")
 
 
+@app.get("/api/audit-jobs")
+def list_audit_jobs(limit: int = 20):
+    """Recent Scout jobs, so the page can offer Resume or Restart."""
+    jobs = app.state.audit_jobs.recent(limit)
+    return {"jobs": jobs,
+            "resumable": [job["id"] for job in jobs if job.get("status") == "interrupted"],
+            "restartable": [job["id"] for job in jobs
+                            if job.get("status") in {"failed", "timed_out", "cancelled",
+                                                     "interrupted", "blocked"}]}
+
+
+@app.post("/api/audit-jobs/{job_id}/restart", status_code=202)
+def restart_audit_job(job_id: str):
+    try:
+        return app.state.audit_jobs.restart(job_id)
+    except KeyError:
+        raise HTTPException(404, "job not found")
+    except JobConflict as exc:
+        raise HTTPException(409, str(exc))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
 @app.post("/api/audit-jobs/{job_id}/cancel")
 async def cancel_audit_job(job_id: str):
     get_audit_job(job_id)

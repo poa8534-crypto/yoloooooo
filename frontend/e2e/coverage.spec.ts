@@ -406,10 +406,10 @@ test.describe('the Hunter to Scout queue', () => {
     await page.goto('/#/scout')
     const panel = page.locator('.data-panel', { hasText: 'Audit queue' })
     await expect(panel).toBeVisible()
-    const run = panel.getByRole('button', { name: /Yes, run \d+ idea/ })
+    const run = panel.getByRole('button', { name: /Start \d+ audit/ })
     await expect(run).toBeVisible()
     await expect(run).toBeEnabled()
-    await expect(run).toContainText(/Yes, run [1-9]/)
+    await expect(run).toContainText(/Start [1-9]/)
   })
 
   test('nothing runs until the button is pressed', async ({ page }) => {
@@ -427,17 +427,17 @@ test.describe('the Hunter to Scout queue', () => {
     await page.route('**/api/scout/queue', route => route.fulfill({ json: QUEUE }))
     await page.goto('/#/scout')
     const panel = page.locator('.data-panel', { hasText: 'Audit queue' })
-    const runButton = panel.getByRole('button', { name: /Yes, run/ })
+    const runButton = panel.getByRole('button', { name: /Start \d+ audit/ })
     // Wait for the queue to actually load; reading the count while it still
     // says zero compares nothing against nothing.
-    await expect(runButton).toContainText(/Yes, run [1-9]/)
+    await expect(runButton).toContainText(/Start [1-9]/)
     const before = Number((await runButton.innerText()).match(/\d+/)![0])
     await panel.getByRole('button', { name: 'Choose which to run' }).click()
     const dialog = page.getByRole('dialog', { name: /Choose which concepts/i })
     await expect(dialog).toBeVisible()
     await dialog.locator('input[type=checkbox]:not([disabled])').first().uncheck()
     await dialog.getByRole('button', { name: 'Cancel' }).click()
-    await expect(runButton).toContainText(`Yes, run ${before - 1}`)
+    await expect(runButton).toContainText(`Start ${before - 1} audit`)
   })
 
   test('an empty queue says so instead of offering a dead button', async ({ page }) => {
@@ -448,7 +448,7 @@ test.describe('the Hunter to Scout queue', () => {
     await page.goto('/#/scout')
     const panel = page.locator('.data-panel', { hasText: 'Audit queue' })
     await expect(panel).toContainText('Nothing waiting')
-    await expect(panel.getByRole('button', { name: /Yes, run/ })).toHaveCount(0)
+    await expect(panel.getByRole('button', { name: /Start \d+ audit/ })).toHaveCount(0)
   })
 
   test('a concept that cannot run is shown with its reason, not hidden', async ({ page }) => {
@@ -662,5 +662,60 @@ test.describe('the interface reads as English, not as data', () => {
     await reason.fill('This is a long enough explanation.')
     await expect(page.locator('main label', { hasText: 'Required reason' }))
       .toContainText('Long enough')
+  })
+})
+
+test.describe('start, restart and resume', () => {
+  for (const [page, names] of [
+    ['meta', ['Start research run', 'Restart last run', 'Resume interrupted']],
+    ['scout', [/Start \d+ audit/, 'Restart last audit', 'Resume interrupted']],
+  ] as const) {
+    test(`${page} offers all three actions`, async ({ page: browser }) => {
+      await browser.goto(`/#/${page}`)
+      await browser.locator('.agent-actions').first().waitFor()
+      for (const name of names) {
+        await expect(browser.getByRole('button', { name }).first()).toBeVisible()
+      }
+    })
+
+    test(`${page} says why a disabled action is disabled`, async ({ page: browser }) => {
+      // A dead button with an invisible precondition is the complaint this
+      // whole pattern exists to answer.
+      await browser.goto(`/#/${page}`)
+      await browser.locator('.agent-actions').first().waitFor()
+      const buttons = browser.locator('.agent-actions button')
+      for (let i = 0; i < await buttons.count(); i++) {
+        const button = buttons.nth(i)
+        if (await button.isDisabled()) {
+          const why = await button.getAttribute('title')
+          expect(why, 'a disabled action gave no reason').toBeTruthy()
+        }
+      }
+    })
+
+    test(`${page} explains how the three differ`, async ({ page: browser }) => {
+      await browser.goto(`/#/${page}`)
+      await browser.locator('.agent-actions').first().waitFor()
+      const hint = browser.locator('.agent-actions + .gate-hint').first()
+      await expect(hint).toBeVisible()
+    })
+  }
+
+  test('resume is offered only when something was interrupted', async ({ page }) => {
+    await page.route('**/api/audit-jobs', route => route.fulfill({
+      json: { jobs: [], resumable: [], restartable: ['job-1'] } }))
+    await page.goto('/#/scout')
+    await page.locator('.agent-actions').first().waitFor()
+    const resume = page.getByRole('button', { name: 'Resume interrupted' })
+    await expect(resume).toBeDisabled()
+    await expect(resume).toHaveAttribute('title', /No interrupted audit/)
+  })
+
+  test('resume wakes up when an audit was interrupted', async ({ page }) => {
+    await page.route('**/api/audit-jobs', route => route.fulfill({
+      json: { jobs: [], resumable: ['job-9'], restartable: ['job-9'] } }))
+    await page.goto('/#/scout')
+    await page.locator('.agent-actions').first().waitFor()
+    await expect(page.getByRole('button', { name: 'Resume interrupted' })).toBeEnabled()
   })
 })
