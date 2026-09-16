@@ -719,3 +719,75 @@ test.describe('start, restart and resume', () => {
     await expect(page.getByRole('button', { name: 'Resume interrupted' })).toBeEnabled()
   })
 })
+
+test.describe('a checkbox is not a text field', () => {
+  test('the selection panel shows readable options, not one giant tick box',
+    async ({ page }) => {
+    // `input, select, textarea { width: 100% }` stretched every checkbox to
+    // the width of its row -- 665px with 10px of padding -- and squashed the
+    // concept name beside it to 72px. The panel rendered as a single enormous
+    // tick and no options at all.
+    await page.route('**/api/scout/queue', route => route.fulfill({ json: {
+      queued: [1, 2, 3].map(n => ({
+        proposal_id: `p${n}`, candidate_id: `c${n}`, universe_id: String(n),
+        game_name: `Game ${n}`, concept_title: `Concept number ${n}`,
+        core_loop: 'loop', niche: 'pets', created_at: '2026-09-16T00:00:00+00:00',
+        facts: 6, available: true, unavailable_reason: '' })),
+      runnable: 3, blocked: 0, note: 'note' } }))
+    await page.goto('/#/scout')
+    await page.locator('.agent-actions').first().waitFor()
+    const choose = page.getByRole('button', { name: 'Choose which to run' })
+    await choose.click()
+    const rows = page.locator('.queue-row')
+    await expect(rows.first()).toBeVisible()
+
+    const sizes = await page.evaluate(() => [...document.querySelectorAll('.queue-row')]
+      .map(row => ({
+        box: Math.round(row.querySelector('input')!.getBoundingClientRect().width),
+        text: Math.round(row.querySelector('div')!.getBoundingClientRect().width),
+        label: (row.querySelector('strong')?.textContent || '').trim(),
+      })))
+
+    expect(sizes.length).toBeGreaterThan(0)
+    for (const row of sizes) {
+      expect(row.box, 'the checkbox swallowed the row').toBeLessThan(40)
+      expect(row.text, 'the concept name was squashed').toBeGreaterThan(row.box * 4)
+      expect(row.label, 'a row with no readable name').not.toBe('')
+    }
+  })
+
+  test('no checkbox anywhere is stretched by the form field rule', async ({ page }) => {
+    for (const slug of ['scout', 'matching', 'meta', 'ideas']) {
+      await page.goto(`/#/${slug}`)
+      await page.locator('main').waitFor()
+      await page.waitForTimeout(600)
+      const wide = await page.evaluate(() =>
+        [...document.querySelectorAll('input[type=checkbox], input[type=radio]')]
+          .map(el => Math.round(el.getBoundingClientRect().width))
+          .filter(width => width > 40))
+      expect(wide, `a stretched checkbox on ${slug}`).toEqual([])
+    }
+  })
+
+  test('the panel heading is two lines, not one run-on', async ({ page }) => {
+    await page.route('**/api/scout/queue', route => route.fulfill({ json: {
+      queued: [1, 2, 3].map(n => ({
+        proposal_id: `p${n}`, candidate_id: `c${n}`, universe_id: String(n),
+        game_name: `Game ${n}`, concept_title: `Concept number ${n}`,
+        core_loop: 'loop', niche: 'pets', created_at: '2026-09-16T00:00:00+00:00',
+        facts: 6, available: true, unavailable_reason: '' })),
+      runnable: 3, blocked: 0, note: 'note' } }))
+    await page.goto('/#/scout')
+    await page.locator('.agent-actions').first().waitFor()
+    const choose = page.getByRole('button', { name: 'Choose which to run' })
+    await choose.click()
+    const dialog = page.getByRole('dialog', { name: /Choose which concepts/i })
+    const heading = dialog.locator('header > div').first()
+    await expect(heading).toBeVisible()
+    // It read "Routed from Meta Hunter3 of 3 selected" on one line. Text
+    // content always concatenates, so the check is on the rendered layout:
+    // the eyebrow and the count must occupy separate lines.
+    const lines = await heading.evaluate(node => (node as HTMLElement).innerText.trim().split(String.fromCharCode(10)).length)
+    expect(lines, 'the eyebrow and the count ran together').toBeGreaterThan(1)
+  })
+})

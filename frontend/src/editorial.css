@@ -321,3 +321,25 @@ th { white-space: normal; }
 .agent-actions button { min-height: 38px; }
 .agent-actions + .gate-hint { display: block; margin-bottom: 4px; color: #5f6368; line-height: 1.5; }
 @media (max-width: 760px) { .agent-actions { flex-direction: column; align-items: stretch; } }
+
+/* A checkbox is not a text field.
+   `input, select, textarea { width: 100% }` stretched it to the full width of
+   its row -- 665px, with 10px of padding -- while the concept name beside it
+   collapsed to 72px. The row rendered as one enormous tick box and no
+   readable options. Checkboxes and radios opt out of the form-field sizing. */
+input[type="checkbox"], input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  flex: 0 0 16px;
+  padding: 0;
+  margin: 0;
+  accent-color: #202124;
+}
+.queue-row input[type="checkbox"] { margin-top: 3px; }
+/* The label beside it takes the space the checkbox gave back. */
+.queue-row > div { flex: 1 1 auto; min-width: 0; }
+/* The drawer's eyebrow and its title ran together on one line -- "Routed from
+   Meta Hunter3 concept(s) selected". They are two lines. */
+.evidence-drawer header > div > span { display: block; font-size: 12px; color: #5f6368; line-height: 1.4; }
+.evidence-drawer header > div > strong { display: block; line-height: 1.3; }

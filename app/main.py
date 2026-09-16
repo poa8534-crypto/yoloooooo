@@ -1622,7 +1622,24 @@ async def health(db: Session = Depends(get_db)):
 
 frontend_dist = ROOT / "frontend" / "dist"
 if frontend_dist.exists():
-    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="dashboard")
+    class FreshIndex(StaticFiles):
+        """Never let a browser cache `index.html`.
+
+        The built asset filenames carry a content hash, so they are safe to
+        cache forever -- but `index.html` is what names them. Cached, it keeps
+        pointing at the previous build, and the dashboard silently stays on old
+        code after every deploy. This was live: the page was still serving
+        buttons that had been renamed two commits earlier, and the only visible
+        symptom was that a fix "had not worked".
+        """
+
+        async def get_response(self, path, scope):
+            response = await super().get_response(path, scope)
+            if path in {".", "index.html"} or path.endswith("index.html"):
+                response.headers["cache-control"] = "no-cache, must-revalidate"
+            return response
+
+    app.mount("/", FreshIndex(directory=frontend_dist, html=True), name="dashboard")
 
 
 def run() -> None:

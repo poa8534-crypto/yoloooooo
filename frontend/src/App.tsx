@@ -914,7 +914,8 @@ function ScoutQueuePanel({ queue, chosen, onToggle, onClose, onRun, busy }: {
   const runnable = queue.filter(entry => entry.available)
   return <div className="drawer-scrim open" onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
     <aside role="dialog" aria-modal="true" aria-label="Choose which concepts to audit" className="evidence-drawer">
-      <header><div><span>Routed from Meta Hunter</span><strong>{runnable.length} concept(s) selected</strong></div>
+      <header><div><span>Routed from Meta Hunter</span>
+        <strong>{queue.filter(entry => chosen.has(entry.proposal_id)).length} of {runnable.length} selected</strong></div>
         <button aria-label="Close selection" onClick={onClose}>×</button></header>
       <div className="drawer-body">
         <p>Every Hunter concept arrives here on its own. Clear the ones you do not
