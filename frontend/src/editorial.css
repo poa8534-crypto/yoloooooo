@@ -37,7 +37,12 @@ code { overflow-wrap: anywhere; }
 .nav-group button.active { background: #eaf0ff; color: #234bad; box-shadow: none; border: 0; }
 .nav-group button:hover { background: #edeef0; }
 .sidebar-footer { border-color: #e2e3e0; color: #62656b; display: grid; gap: 6px; font-size: 13px; }
-.app-content { margin-left: 232px; min-width: 0; }
+/* No margin. `.app-shell` is a grid and the sidebar already occupies its own
+   column, so a margin the width of the sidebar offset the content a second
+   time: the sidebar ended at 232px and the content began at 441px, leaving a
+   dead strip down the middle and squeezing every panel. The margin is left
+   over from when the sidebar was positioned rather than laid out. */
+.app-content { min-width: 0; }
 .topbar { position: static; min-height: 70px; height: auto; background: transparent; border-bottom: 1px solid #e2e3e0; padding: 16px 40px; justify-content: space-between; gap: 20px; }
 .topbar > span { color: #62656b; font-size: 13px; }
 .page-title { padding: 32px 40px 10px; align-items: center; }
@@ -98,7 +103,7 @@ label { text-transform: none; letter-spacing: 0; font-size: 14px; }
 .module-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
 @media (max-width: 1100px) {
   .app-sidebar { width: 195px; }
-  .app-content { margin-left: 195px; }
+  /* Same double offset at this breakpoint. */
   main { padding: 0 24px 32px; }
   .page-title, .topbar { padding-left: 24px; padding-right: 24px; }
   .dashboard-columns, .agent-columns, .health-bottom, .calibration-grid, .review-layout { grid-template-columns: 1fr; }
@@ -297,3 +302,14 @@ label { text-transform: none; letter-spacing: 0; font-size: 14px; }
 .activity-list p { overflow: visible; text-overflow: clip; white-space: normal; }
 /* A header that cannot wrap forces its whole table wider than the container. */
 th { white-space: normal; }
+
+/* The shell's first column has to be the sidebar's actual width, or the gap
+   between them is whatever the two happen to disagree by -- 14px, here. */
+.app-shell { grid-template-columns: 232px minmax(0, 1fr); }
+@media (max-width: 1280px) { .app-shell { grid-template-columns: 195px minmax(0, 1fr); } }
+
+/* On a wide screen the workspace centres itself but the heading above it did
+   not, so the title sat left of the content it belonged to. They share a
+   measure now and line up. */
+.topbar > *, .page-title { max-width: 1420px; margin-inline: auto; width: 100%; box-sizing: border-box; }
+.topbar { padding-inline: 40px; }

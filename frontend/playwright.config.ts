@@ -30,7 +30,8 @@ export default defineConfig({
     // cwd is the repository root, so the interpreter path resolves from there.
     command: `.venv\\Scripts\\python.exe -m scripts.e2e_fixture --port ${PORT}`,
     cwd: '..',
-    url: `http://127.0.0.1:${PORT}/api/health`,
+    // The liveness probe, which never needs a credential.
+    url: `http://127.0.0.1:${PORT}/api/health/live`,
     reuseExistingServer: false,
     timeout: 120_000,
     stdout: 'pipe',

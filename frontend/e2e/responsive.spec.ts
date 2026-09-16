@@ -96,3 +96,49 @@ test.describe('accessible labels', () => {
     await expect(page.locator('.drawer-scrim.open')).toHaveCount(0)
   })
 })
+
+test.describe('the shell uses the width it has', () => {
+  test('the content starts where the sidebar ends', async ({ page }) => {
+    // `.app-shell` is a grid whose first column holds the sidebar, and
+    // `.app-content` also carried a margin the width of that sidebar. The
+    // content was offset twice: the sidebar ended at 195px and the content
+    // began at 441px, leaving a 246px dead strip and squeezing every panel.
+    await page.goto('/#/meta')
+    await page.locator('.app-content').waitFor()
+    const gap = await page.evaluate(() => {
+      const side = document.querySelector('.app-sidebar')?.getBoundingClientRect()
+      const content = document.querySelector('.app-content')?.getBoundingClientRect()
+      if (!side || !content) return null
+      return Math.round(content.left - side.right)
+    })
+    expect(gap, 'a dead strip between the sidebar and the content').toBeLessThanOrEqual(2)
+  })
+
+  test('the workspace is centred on a wide screen, not pinned left', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 900 })
+    await page.goto('/#/meta')
+    await page.locator('.workspace').first().waitFor()
+    const box = await page.evaluate(() => {
+      const w = document.querySelector('.workspace')?.getBoundingClientRect()
+      const c = document.querySelector('.app-content')?.getBoundingClientRect()
+      if (!w || !c) return null
+      return { left: w.left - c.left, right: c.right - w.right }
+    })
+    expect(box).not.toBeNull()
+    // Equal margins either side; a pinned-left layout has one near zero.
+    expect(Math.abs(box!.left - box!.right)).toBeLessThan(24)
+  })
+
+  test('the heading lines up with the content it belongs to', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 900 })
+    await page.goto('/#/meta')
+    await page.locator('.page-title h1').waitFor()
+    const drift = await page.evaluate(() => {
+      const title = document.querySelector('.page-title h1')?.getBoundingClientRect()
+      const work = document.querySelector('.workspace')?.getBoundingClientRect()
+      if (!title || !work) return null
+      return Math.abs(title.left - work.left)
+    })
+    expect(drift, 'the title sat left of the content below it').toBeLessThan(48)
+  })
+})

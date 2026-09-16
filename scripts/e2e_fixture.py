@@ -247,7 +247,20 @@ def seed(database_url: str, artifact_dir: Path) -> None:
         db.commit()
 
 
+def _isolate_environment() -> None:
+    """The fixture is a clean ledger; it has to be a clean environment too.
+
+    This machine exports DASHBOARD_TOKEN so the real dashboard can be reached
+    over a tailnet. The fixture inherited it, started demanding a credential,
+    and every browser test was handed a sign-in page instead of the app --
+    failing for a reason that had nothing to do with the code under test.
+    """
+    for name in ("DASHBOARD_TOKEN", "HOST"):
+        os.environ.pop(name, None)
+
+
 def main() -> int:
+    _isolate_environment()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8799)
     args = parser.parse_args()
