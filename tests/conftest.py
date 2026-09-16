@@ -44,6 +44,27 @@ def session_factory():
     return sessionmaker(bind=_memory_engine(), expire_on_commit=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_dashboard_token(monkeypatch):
+    """Tests run as if no credential is configured.
+
+    `DASHBOARD_TOKEN` is a real environment variable on the machine that
+    serves this dashboard over a tailnet. Without this, every test client
+    request answers 401 and 56 unrelated tests fail depending on whose shell
+    ran them. A suite that passes or fails on the developer's environment is
+    not testing the code.
+    """
+    from app.config import get_settings
+
+    monkeypatch.delenv("DASHBOARD_TOKEN", raising=False)
+    monkeypatch.delenv("HOST", raising=False)
+    # `get_settings` is lru_cached, so a Settings built before the variables
+    # were removed would still be handed out.
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest.fixture
 def settings(tmp_path, monkeypatch):
     """Isolated settings carrying synthetic credentials.

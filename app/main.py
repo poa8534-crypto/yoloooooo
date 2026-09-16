@@ -199,12 +199,16 @@ button{margin-top:12px;width:100%;padding:10px;border:0;border-radius:4px;backgr
 .err{color:#c5221f;font-size:13px;margin-top:10px;min-height:18px}</style>
 <form onsubmit="go(event)"><h1>Roblox Venture Agents</h1>
 <p>This dashboard is reachable from your tailnet. Enter the access token.</p>
-<input id=t type=password autocomplete=current-password placeholder="Access token" autofocus>
-<button>Sign in</button><div class=err id=e></div></form>
+<input id=t type=password autocomplete=current-password placeholder="Access token" autofocus
+ onkeydown="if(event.key==='Enter'){go(event)}">
+<button type=submit>Sign in</button><div class=err id=e></div></form>
 <script>async function go(ev){ev.preventDefault();document.getElementById('e').textContent='';
-const r=await fetch('/api/session',{method:'POST',headers:{'content-type':'application/json'},
+try{const r=await fetch('/api/session',{method:'POST',headers:{'content-type':'application/json'},
 body:JSON.stringify({token:document.getElementById('t').value})});
-if(r.ok){location.href='/';}else{document.getElementById('e').textContent='That token was not accepted.';}}</script>"""
+if(r.ok){location.href='/';}
+else if(r.status===401){document.getElementById('e').textContent='That token was not accepted.';}
+else{document.getElementById('e').textContent='Sign-in failed ('+r.status+'). The service may have just restarted.';}}
+catch(err){document.getElementById('e').textContent='Could not reach the service.';}}</script>"""
 
 
 @app.get("/login")
