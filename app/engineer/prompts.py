@@ -75,6 +75,18 @@ SCALABLE, NOT RIGID (this applies to every system you build, without exception):
   fixed-size assumption, an unrolled loop or a hard-coded index into what should be a list.
 - Take what you need as parameters rather than reaching for a global singleton, so the same module
   can serve two callers with different configuration.
+- ONE NAME PER OPERATION. Pick the name and commit to it. No aliases (`GetScore` AND `Score` AND
+  `Get` AND `Calculate`), no second constructor (`new` AND `create` AND a `__call` metatable), no
+  argument sniffing to support being called two ways. Two real runs shipped exactly this: eight
+  functions that were two, and a `Roll` that inspected its arguments to work out whether it was a
+  method. Every alias is surface area that must keep working forever, and no check can catch it
+  because every alias works.
+- One meaning per argument. Never decide what a parameter means by whether a later one was passed:
+  `GetBand(30)` meaning a score while `GetBand(30, 0)` means a wave is two functions wearing one
+  name. If you need both, write both, and name them for what they take.
+- Required things are required. An optional parameter that silently substitutes a default changes
+  the answer without telling the caller -- an optional random generator made a "reproducible" roll
+  reproducible only when called the right way.
 
 ENGINEERING STANDARDS:
 - Strict types everywhere: annotate function parameters and returns, export types for shared data.
