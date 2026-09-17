@@ -73,15 +73,70 @@ async def test_it_runs_in_a_scratch_directory_not_the_worktree(tmp_path):
 @pytest.mark.anyio
 async def test_the_answer_is_asked_for_as_json(tmp_path):
     calls: list = []
-    await client_for(calls, tmp_path, effort="high").generate(model="gemini-3.8-flash-high",
-                                                              system="rules", prompt="task")
+    await client_for(calls, tmp_path).generate(model="gemini-3.8-flash-high",
+                                               system="rules", prompt="task")
 
     command = calls[0]["command"]
-    assert command[:2] == ["agy", "-p"]
+    assert command[1] == "-p"
     assert "rules" in command[2] and "task" in command[2], "the rules are prepended to the prompt"
     assert command[command.index("--output-format") + 1] == "json"
     assert command[command.index("--model") + 1] == "gemini-3.8-flash-high"
-    assert command[command.index("--effort") + 1] == "high"
+
+
+@pytest.mark.anyio
+async def test_slash_command_expansion_is_disabled(tmp_path):
+    """The prompt carries a design assembled from pages off the open web, and
+    `agy` expands slash commands in print mode. A design line beginning with
+    `/` would be executed rather than read."""
+    calls: list = []
+    await client_for(calls, tmp_path).generate(model="m", system="s", prompt="p")
+
+    assert "--disable-slash-commands" in calls[0]["command"]
+    assert "--sandbox" in calls[0]["command"]
+
+
+@pytest.mark.anyio
+async def test_effort_is_not_sent_when_the_model_name_already_carries_it(tmp_path):
+    """Measured against agy 1.2.5: `--model gemini-3.8-flash-low conflicts with
+    --effort=medium`. The models are named with the effort built in."""
+    calls: list = []
+    client = client_for(calls, tmp_path, effort="medium")
+
+    await client.generate(model="gemini-3.8-flash-low", system="s", prompt="p")
+    assert "--effort" not in calls[0]["command"]
+
+    await client.generate(model="claude-sonnet-4-6", system="s", prompt="p")
+    assert calls[1]["command"][calls[1]["command"].index("--effort") + 1] == "medium"
+
+
+@pytest.mark.anyio
+async def test_an_uppercase_status_is_still_success(tmp_path):
+    """agy 1.2.5 answers "SUCCESS". Comparing case-sensitively turned a working
+    call into an outage."""
+    payload = {"status": "SUCCESS", "response": '{"files": []}'}
+    reply = await client_for([], tmp_path, fake={"payload": payload}).generate(
+        model="m", system="s", prompt="p")
+    assert reply.text == '{"files": []}'
+
+
+def test_the_executable_is_found_off_path_where_the_installer_puts_it(tmp_path, monkeypatch):
+    """The installer writes the PATH to the registry and broadcasts it, which a
+    running process never sees: CreateProcess resolves against the PARENT's
+    PATH. A service started before the install would otherwise never find it."""
+    binary = tmp_path / "agy" / "bin" / "agy.exe"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("", encoding="utf-8")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr("app.engineer.antigravity.shutil.which", lambda _name: None)
+
+    assert AntigravityClient().resolve() == str(binary)
+
+
+def test_resolution_gives_up_when_it_is_really_not_there(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr("app.engineer.antigravity.shutil.which", lambda _name: None)
+
+    assert AntigravityClient().resolve() is None
 
 
 # ---- what it does with the answer -----------------------------------------

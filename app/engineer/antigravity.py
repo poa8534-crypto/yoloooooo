@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -41,6 +42,7 @@ UsageHook = Callable[[str, str, str, dict], None] | None
 WINDOWS_COMMAND_LIMIT = 32_767
 COMMAND_HEADROOM = 2_000
 # What tells `agy`'s own envelope apart from an answer that happens to be JSON.
+EFFORT_SUFFIX = re.compile(r"-(low|medium|high)$")
 ENVELOPE_KEYS = frozenset({"status", "response", "structured_output", "error",
                            "conversation_id", "num_turns", "duration_seconds"})
 
@@ -66,8 +68,26 @@ class AntigravityClient:
     _scratch: Path | None = field(init=False, default=None)
 
     def resolve(self) -> str | None:
-        """The executable's full path, or None when it is not installed."""
-        return shutil.which(self.executable)
+        """The executable's full path, or None when it is not installed.
+
+        The installer adds `%LOCALAPPDATA%\\agy\\bin` to the PATH in the
+        registry and broadcasts the change, which a running process never sees:
+        on Windows CreateProcess resolves an executable against the PARENT's
+        PATH. So a service started before the install -- or any terminal that
+        has not been restarted -- finds nothing on PATH alone. The same trap
+        made `gate.format` silently do nothing for six attempts of a real run
+        (app/engineer/gate.py), so it is answered the same way here.
+        """
+        found = shutil.which(self.executable)
+        if found:
+            return found
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            for name in (f"{self.executable}.exe", self.executable):
+                candidate = Path(local) / "agy" / "bin" / name
+                if candidate.is_file():
+                    return str(candidate)
+        return None
 
     def workspace(self) -> Path:
         if self._scratch is None:
@@ -84,9 +104,25 @@ class AntigravityClient:
         return text
 
     def command(self, model: str, prompt: str) -> list[str]:
-        return [self.executable, "-p", prompt, "--output-format", "json",
-                "--model", model, "--effort", self.effort,
-                "--print-timeout", f"{max(int(self.timeout), 60)}s"]
+        # `agy models` names its models with the effort built in --
+        # `gemini-3.8-flash-high`, `gemini-3.1-pro-low` -- and passing --effort
+        # as well is refused: "--model gemini-3.8-flash-low conflicts with
+        # --effort=medium". So the flag is only sent when the name leaves the
+        # question open.
+        effort = [] if EFFORT_SUFFIX.search(model) else ["--effort", self.effort]
+        return [self.resolve() or self.executable, "-p", prompt, "--output-format", "json",
+                "--model", model, *effort,
+                "--print-timeout", f"{max(int(self.timeout), 60)}s",
+                # The prompt carries a Venture Scout design, which is assembled
+                # from pages off the open web. `agy` expands slash commands and
+                # skills in print mode, so a design containing a line that
+                # begins with `/` would be executed rather than read. The loop
+                # already treats that text as data (prompts.fence); this is the
+                # same decision one layer down.
+                "--disable-slash-commands",
+                # Terminal restrictions. The model is here to write Luau; the
+                # worktree, the gate and the commit belong to this project.
+                "--sandbox"]
 
     async def generate(self, *, model: str, system: str, prompt: str, json_output: bool = True,
                        deadline: float | None = None, max_wait: float | None = None) -> AntigravityReply:
@@ -147,7 +183,9 @@ class AntigravityClient:
             # A refusal is the model declining, which is not a reason to try a
             # different model with the same prompt; the loop stops on it.
             raise GeminiRefused(f"{model}: {str(error)[:300]}")
-        if status and status not in ("success", "completed", "ok"):
+        # Measured: `agy` 1.2.5 answers "SUCCESS". Compared casefolded so the
+        # check does not turn a working call into an outage over capitalisation.
+        if status and status.casefold() not in ("success", "completed", "ok", "done"):
             raise GeminiUnavailable(f"{model}: `{self.executable}` reported status {status!r}")
 
         text = envelope.get("structured_output") or envelope.get("response") or ""
