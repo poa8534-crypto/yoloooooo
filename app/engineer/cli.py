@@ -2,6 +2,7 @@
 
     venture-engineer check [--path DIR]    run the gate on a project (verify.ps1 + guard), no model
     venture-engineer ping                  one tiny request per key and model, to see what answers today
+    venture-engineer plan AUDIT_ID         turn an audited design into task files
     venture-engineer run TASK.json         build one system from an audited design
     venture-engineer usage                 today's Gemini calls and tokens per key
 
@@ -180,6 +181,49 @@ async def _run(task_file: str) -> int:
     return 0 if result.status == "complete" else 1
 
 
+async def _plan(audit_id: str, out: str | None, run: bool) -> int:
+    """Write one task file per planned system.
+
+    It writes rather than runs by default. The acceptance criteria are the
+    specification the gate measures against, so they are meant to be read by a
+    person before anything is built from them.
+    """
+    from ..db import SessionLocal
+    from .planner import PlanRefused, render_task, task_filename
+    from .runs import plan_from_audit
+
+    settings = get_settings()
+    directory = Path(out) if out else Path("tasks")
+    try:
+        tasks = await plan_from_audit(audit_id, settings=settings, factory=SessionLocal)
+    except PlanRefused as exc:
+        print(exc)
+        return 1
+
+    directory.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for task in tasks:
+        path = directory / task_filename(task)
+        path.write_text(render_task(task), encoding="utf-8", newline="\n")
+        written.append(path)
+        print(f"{path}")
+        print(f"    {task.goal[:140]}")
+        for criterion in task.acceptance_criteria:
+            print(f"      - {criterion[:120]}")
+
+    print(f"\n{len(written)} task(s) written to {directory}.")
+    if not run:
+        print("Read them, then build one with `venture-engineer run <file>`.")
+        return 0
+
+    failures = 0
+    for path in written:
+        print(f"\n=== {path.stem}")
+        if await _run(str(path)) != 0:
+            failures += 1
+    return 1 if failures else 0
+
+
 def _usage() -> int:
     from ..db import SessionLocal
     from ..models import SystemState
@@ -200,6 +244,11 @@ def main(argv: list[str] | None = None) -> int:
     check = commands.add_parser("check")
     check.add_argument("--path")
     commands.add_parser("ping")
+    plan = commands.add_parser("plan")
+    plan.add_argument("audit_id")
+    plan.add_argument("--out", help="where to write the task files (default: tasks/)")
+    plan.add_argument("--run", action="store_true",
+                      help="build each planned system straight away, without reading the plan first")
     run = commands.add_parser("run")
     run.add_argument("task")
     commands.add_parser("usage")
@@ -209,6 +258,8 @@ def main(argv: list[str] | None = None) -> int:
             return _check(args.path)
         if args.command == "ping":
             return asyncio.run(_ping())
+        if args.command == "plan":
+            return asyncio.run(_plan(args.audit_id, args.out, args.run))
         if args.command == "run":
             return asyncio.run(_run(args.task))
         return _usage()

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from .catalog import load_services
 from .gate import Gate, run_command
 from .gemini import GeminiClient
 from .loop import EngineerLoop, EngineerResult, gemini_models
+from .planner import PLANNER_SYSTEM, PlanRefused, build_planner_prompt, parse_plan
 from .ollama import OllamaClient, ollama_models
 from .schemas import EngineeringTask
 from .workspace import Worktree
@@ -229,6 +231,54 @@ def build_gate(settings: Settings) -> Gate:
     return Gate(load_services(settings.roblox_services_file), repo / settings.luau_definitions_file,
                 runner=run_command, timeout=settings.engineer_tool_timeout_seconds,
                 mode=settings.engineer_gate)
+
+
+def existing_systems(settings: Settings) -> set[str]:
+    """What the game repository already has, by module name.
+
+    The planner is told, so it plans what is missing rather than what is there.
+    """
+    repo = game_repo(settings)
+    names: set[str] = set()
+    for root in ("src/server", "src/shared", "src/client"):
+        directory = repo / root
+        if not directory.is_dir():
+            continue
+        for file in directory.glob("*.luau"):
+            stem = file.stem
+            if stem not in ("Services", "Hello") and not stem.startswith("init."):
+                names.add(stem)
+    return names
+
+
+async def plan_from_audit(audit_id: str, *, settings: Settings, factory,
+                          attempts: int = 3) -> list[EngineeringTask]:
+    """An audited design turned into engineering tasks.
+
+    Planning is a separate call from building on purpose: the criteria are what
+    the gate measures against, and a model that writes its own criteria while
+    writing the code that meets them is grading its own homework.
+    """
+    design = load_design(factory, audit_id)
+    existing = existing_systems(settings)
+    clients = build_clients(settings, on_usage=usage_recorder(factory))
+    model = build_model_call(settings, clients)
+    prompt = build_planner_prompt(design, existing)
+    refusal = ""
+    try:
+        for attempt in range(1, attempts + 1):
+            text, _model_name = await model(PLANNER_SYSTEM, prompt + refusal, time.monotonic() + 1800)
+            try:
+                return parse_plan(text, audit_id, existing)
+            except PlanRefused as exc:
+                if attempt == attempts:
+                    raise
+                refusal = (f'\n\n<previous_attempt number="{attempt}">\n{exc}\n'
+                           "Return the complete plan again.\n</previous_attempt>")
+    finally:
+        for _name, client in clients:
+            await client.close()
+    raise PlanRefused("the planner produced nothing usable")
 
 
 async def run_task(task: EngineeringTask, *, settings: Settings, factory, on_event=None) -> EngineerResult:
