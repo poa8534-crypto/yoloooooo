@@ -28,7 +28,7 @@ from app.engineer.antigravity import (
     result_envelope,
     stream_message,
 )
-from app.engineer.gemini import GeminiRefused, GeminiUnavailable
+from app.engineer.gemini import GeminiIncomplete, GeminiRefused, GeminiUnavailable
 
 ANSWER = {"status": "success", "response": '{"files": []}', "conversation_id": "c1",
           "usage": {"input_tokens": 100, "output_tokens": 200}}
@@ -233,6 +233,33 @@ async def test_an_error_in_the_envelope_is_a_refusal_not_an_outage(tmp_path):
     payload = {"status": "ERROR", "error": "blocked by safety settings"}
     with pytest.raises(GeminiRefused, match="safety"):
         await client_for([], tmp_path, fake={"payload": payload}).generate(model="m", system="s", prompt="p")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("message", [
+    "Your previous response was cut off because it exceeded the output token limit. "
+    "Please continue from where you left off, keeping your response shorter. Retries remaining: 3",
+    "the response was truncated",
+    "exceeded the maximum output length",
+])
+async def test_a_truncated_answer_is_incomplete_not_a_refusal(tmp_path, message):
+    """`agy` reports both through the same `error` field, and the loop answers
+    them differently: a refusal ends the run, a truncation asks for a smaller
+    answer and tries again. The first end-to-end run was stopped with five
+    attempts unspent by exactly this."""
+    payload = {"status": "ERROR", "error": message}
+    with pytest.raises(GeminiIncomplete):
+        await client_for([], tmp_path, fake={"payload": payload}).generate(
+            model="m", system="s", prompt="p")
+
+
+@pytest.mark.anyio
+async def test_a_real_refusal_is_still_a_refusal(tmp_path):
+    """The truncation test must not be so broad that it swallows a decline."""
+    payload = {"status": "ERROR", "error": "blocked by safety settings"}
+    with pytest.raises(GeminiRefused):
+        await client_for([], tmp_path, fake={"payload": payload}).generate(
+            model="m", system="s", prompt="p")
 
 
 @pytest.mark.anyio

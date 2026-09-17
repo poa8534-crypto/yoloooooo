@@ -31,11 +31,21 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .gemini import GeminiRefused, GeminiUnavailable
+from .gemini import GeminiIncomplete, GeminiRefused, GeminiUnavailable
 
 UsageHook = Callable[[str, str, str, dict], None] | None
 
 EFFORT_SUFFIX = re.compile(r"-(low|medium|high)$")
+# `agy` reports a truncated answer through the same `error` field as a refusal,
+# and the difference matters: the loop answers a refusal by stopping the run and
+# a truncation by asking for a smaller answer and trying again. Measured on the
+# first end-to-end run, which was stopped with five attempts unspent by
+#
+#     Your previous response was cut off because it exceeded the output token
+#     limit. Please continue from where you left off, keeping your response
+#     shorter. Retries remaining: 3
+TRUNCATED = re.compile(r"cut off|output token limit|exceeded the (?:maximum|output)|truncat",
+                       re.IGNORECASE)
 
 
 # `agy` is an agent, so its first instinct on any task is to orient itself.
@@ -221,6 +231,10 @@ class AntigravityClient:
 
         error = envelope.get("error")
         status = str(envelope.get("status") or "")
+        if error and TRUNCATED.search(str(error)):
+            # Not a refusal: the model had more to say. The loop's answer to
+            # this is a smaller ask, not the end of the run.
+            raise GeminiIncomplete(f"{model}: {str(error)[:200]}")
         if error:
             # A refusal is the model declining, which is not a reason to try a
             # different model with the same prompt; the loop stops on it.

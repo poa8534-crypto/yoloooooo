@@ -1,0 +1,19 @@
+{
+  "audit_id": "f2f84b07-23b8-4df5-9755-d77f9cffe4fb",
+  "system": "HarvestRequest",
+  "goal": "Let a survivor ask the server to harvest a salvage node, and have the server decide. The client sends a node id over a RemoteEvent; the server rate-limits the player, harvests the node through SalvageNode, credits the yield through ResourceService, and tells the client what it actually got. The client never says how much it harvested.",
+  "acceptance_criteria": [
+    "A ModuleScript at src/server/HarvestRequest.luau returns a table with Start and Stop functions, all annotated, so a test can start it and shut it down.",
+    "It creates its RemoteEvent under ReplicatedStorage if it is not already there, reached through the generated Services module, and Stop disconnects everything it connected.",
+    "Every request validates that the argument is a string node id and refuses anything else without erroring, because a client can send whatever it likes.",
+    "Each player is rate-limited through the shared RateLimiter, and a player over the limit is refused without touching the node.",
+    "The amount harvested comes from SalvageNode and the credit comes from ResourceService: the client's message carries only the node id, never an amount.",
+    "The node id, the yield it credits and the rate limit are read from a configuration table at the top of the module, so adding a node type means adding a row and never editing a function.",
+    "Every file begins with --!strict and the whole project passes scripts/verify.ps1."
+  ],
+  "notes": [
+    "Keep it small: one module, under 140 lines.",
+    "Return only the files you create. Do not return a file you are not changing.",
+    "ResourceService, SalvageNode and RateLimiter already exist and are on master; require them rather than reimplementing them."
+  ]
+}
