@@ -27,6 +27,7 @@ embeddings = ["fastembed>=0.7,<1"]
 venture-agents = "app.main:run"
 venture-calibrate = "app.calibration:main"
 venture-assoc-benchmark = "app.association.benchmark:main"
+venture-engineer = "app.engineer.cli:main"
 
 [build-system]
 requires = ["hatchling"]
