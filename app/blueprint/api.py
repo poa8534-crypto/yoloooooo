@@ -4,10 +4,15 @@ What the frontend can actually call. Every endpoint here is backed by something
 that works: the architect runs through the Engineer's provider chain, readiness
 and scope are counted, and the specification is compiled deterministically.
 
-What is deliberately ABSENT: any endpoint that starts a Roblox build. Compiling
-a specification into Studio operations does not exist yet, so there is no route
-that pretends to. `/studio` reports what the bridge really says, including
-"not running", so the UI can show the truth rather than a spinner.
+`/api/builds` puts the generated project into Studio for real: it compiles the
+blueprint, reads the game checkout, turns those files into typed operations and
+queues them on the bridge. It does NOT generate code -- the Engineer writes the
+files, this sends what is there -- and a specification naming systems nobody has
+built yet comes back with `missing_systems` rather than being half-built
+quietly.
+
+`/api/studio` reports what the bridge really says, including "not running", so
+the UI can show the truth rather than a spinner.
 """
 
 from __future__ import annotations
@@ -15,7 +20,7 @@ from __future__ import annotations
 import time
 
 import httpx
-from fastapi import APIRouter, Body, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import get_settings
@@ -379,20 +384,102 @@ def studio(token: str = "") -> dict:
 build_router = APIRouter(prefix="/api/builds", tags=["build"])
 
 
-@build_router.post("", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-def start_build(blueprint_id: str = Body(embed=True)) -> dict:
-    """Not implemented, and it says so rather than pretending.
+class BuildRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    blueprint_id: str = Field(min_length=1, max_length=64)
+    token: str = Field(min_length=1, max_length=200, description="the bridge pairing token")
+    play: bool = True
 
-    Everything up to here is real: the specification compiles, and
-    `tasks_from` turns it into Engineer tasks. What does not exist is the step
-    that turns generated Luau into Studio operations -- the Engineer writes
-    files into a git worktree, and nothing converts that into a batch for the
-    plugin. Until it does, this endpoint returns 501 so the UI can disable the
-    button honestly instead of showing a spinner that goes nowhere.
+
+@build_router.post("", status_code=status.HTTP_202_ACCEPTED)
+def start_build(request: BuildRequest) -> dict:
+    """Put the generated project into Roblox Studio.
+
+    What it does, in order, and what each step can refuse:
+
+      1. compile the blueprint -- refuses if it is not ready
+      2. read the game checkout's .luau files
+      3. compile those into Studio operations
+      4. queue them on the bridge for the plugin
+
+    What it does NOT do is generate code. The Engineer writes files into the
+    game repository; this sends what is there. A specification naming systems
+    nobody has built yet is reported rather than silently half-built --
+    `missing_systems` says which, so the UI can show the truth.
     """
-    raise HTTPException(
-        status.HTTP_501_NOT_IMPLEMENTED,
-        "Building into Studio is not wired up yet. The blueprint compiles to a specification "
-        "and the specification compiles to Engineer tasks, but nothing yet turns generated Luau "
-        "into Studio operations. The deterministic build (app/bridge/smoke.py) does reach Studio; "
-        "a generated one does not.")
+    from ..bridge.from_project import Unmappable, operations_for, read_project
+
+    blueprint = _load(request.blueprint_id)
+    try:
+        spec = compile_spec(blueprint)
+    except NotReady as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+
+    settings = get_settings()
+    if settings.game_project_dir is None:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "GAME_PROJECT_DIR is not set, so there is no project to build")
+    files = read_project(settings.game_project_dir)
+    if not files:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"no .luau files under {settings.game_project_dir}")
+
+    built = {path.rsplit("/", 1)[-1].removesuffix(".luau") for path in files}
+    missing = [system.name for system in spec.systems if system.name not in built]
+
+    try:
+        batch = operations_for(files, build_id=f"build-{spec.spec_id}", play=request.play)
+    except Unmappable as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+
+    try:
+        queued = httpx.post(f"{BRIDGE_URL}/bridge/batches", timeout=20.0,
+                            headers={"X-Bridge-Token": request.token},
+                            json=batch.model_dump(by_alias=True, mode="json"))
+    except httpx.HTTPError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "The local bridge is not running. Start it with: "
+                            "python -m app.bridge.run") from None
+    if queued.status_code == 401:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            "The bridge refused that token. It prints the right one on start.")
+    if queued.status_code != 202:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                            f"the bridge refused the batch: {queued.text[:300]}")
+
+    return {
+        "batch_id": batch.batch_id,
+        "build_id": batch.build_id,
+        "operations": len(batch.operations),
+        "files": len(files),
+        "spec_revision": spec.revision,
+        "content_hash": spec.content_hash,
+        # Named rather than hidden: a specification can ask for systems nobody
+        # has written yet, and a build that quietly sends 13 files for a
+        # 16-system spec looks like it worked.
+        "missing_systems": missing,
+        "play": request.play,
+    }
+
+
+@build_router.get("/{batch_id}")
+def build_result(batch_id: str, token: str = "") -> dict:
+    """What Studio did with it. Straight from the bridge, unedited."""
+    if not token:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "the bridge pairing token is required")
+    try:
+        answer = httpx.get(f"{BRIDGE_URL}/bridge/results/{batch_id}", timeout=10.0,
+                           headers={"X-Bridge-Token": token})
+    except httpx.HTTPError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "the local bridge is not running") from None
+    if answer.status_code == 404:
+        return {"status": "pending", "detail": "the plugin has not reported yet"}
+    if answer.status_code != 200:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, answer.text[:300])
+    result = answer.json()
+    failed = [entry for entry in result["results"] if entry["status"] == "failed"]
+    return {"status": "failed" if failed else "applied", **result,
+            "applied": len([e for e in result["results"] if e["status"] == "applied"]),
+            "skipped": len([e for e in result["results"] if e["status"] == "skipped"]),
+            "failed_count": len(failed)}

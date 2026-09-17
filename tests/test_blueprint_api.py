@@ -161,21 +161,22 @@ def test_proceeding_on_an_idea_with_no_design_is_refused(client):
     assert "audit" in response.text.lower()
 
 
-def test_the_build_endpoint_says_it_is_not_implemented(client):
-    """Section 31: the frontend is an interface to real capabilities. Nothing
-    yet turns generated Luau into Studio operations, so this must not return
-    something that looks like progress."""
+def test_building_an_unknown_blueprint_is_a_404(client):
+    response = client.post("/api/builds", json={"blueprint_id": "nope", "token": "t"})
+    assert response.status_code == 404
+
+
+def test_a_build_needs_a_bridge_token(client):
+    """Without it the bridge refuses, and a build that fails at the last step
+    wastes everything before it."""
     response = client.post("/api/builds", json={"blueprint_id": "bp"})
-
-    assert response.status_code == 501
-    assert "not wired up yet" in response.text
+    assert response.status_code == 422
 
 
-def test_the_build_refusal_says_what_does_work(client):
-    """A dead end is worse when it does not say where the road continues."""
-    text = client.post("/api/builds", json={"blueprint_id": "bp"}).text
-
-    assert "smoke" in text and "does reach Studio" in text
+def test_reading_a_result_needs_the_token_too(client):
+    response = client.get("/api/builds/some-batch")
+    assert response.status_code == 400
+    assert "token" in response.text
 
 
 def test_studio_reports_the_bridge_being_offline_rather_than_erroring(client):

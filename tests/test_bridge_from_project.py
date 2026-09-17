@@ -1,0 +1,184 @@
+"""Generated files -> Studio operations.
+
+The link that was missing: six checks could pass and the code still never
+reached Studio. The failures worth testing are the quiet ones -- a file landing
+in the wrong service, a script colliding with the folder holding its siblings,
+or a place full of ModuleScripts that nothing requires, which at run time looks
+exactly like a build that failed.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.bridge.from_project import (
+    BOOTSTRAP_NAME,
+    Unmappable,
+    bootstrap_source,
+    operations_for,
+    read_project,
+    studio_path,
+    world_operations,
+)
+from app.bridge.protocol import OperationKind, validate_batch
+
+MODULE = "--!strict\nreturn {}\n"
+
+
+# ---- where a file lands ----------------------------------------------------
+
+@pytest.mark.parametrize("source, target, script_class", [
+    ("src/shared/DamageMath.luau", "ReplicatedStorage/Shared/DamageMath", "ModuleScript"),
+    ("src/server/WaveService.luau", "ServerScriptService/Server/WaveService", "ModuleScript"),
+    ("src/client/HudController.luau",
+     "StarterPlayer/StarterPlayerScripts/Client/HudController", "ModuleScript"),
+])
+def test_each_source_root_lands_in_its_service(source, target, script_class):
+    assert studio_path(source) == (target, script_class)
+
+
+def test_an_init_script_becomes_a_child_rather_than_the_folder():
+    """Rojo makes `init.server.luau` the containing folder itself, as a Script
+    with children. The protocol cannot say that -- a path is a script or a
+    folder -- and the folder gets created for its siblings first, so the script
+    would collide with it. It becomes `Main` instead."""
+    assert studio_path("src/server/init.server.luau") == ("ServerScriptService/Server/Main", "Script")
+    assert studio_path("src/client/init.client.luau") == (
+        "StarterPlayer/StarterPlayerScripts/Client/Main", "LocalScript")
+
+
+def test_a_file_outside_the_source_roots_is_refused():
+    with pytest.raises(Unmappable, match="outside"):
+        studio_path("docs/README.luau")
+
+
+def test_a_file_that_is_not_luau_is_refused():
+    with pytest.raises(Unmappable, match="only .luau"):
+        studio_path("src/shared/notes.txt")
+
+
+# ---- the batch -------------------------------------------------------------
+
+def test_every_file_becomes_a_script_operation():
+    batch = operations_for({"src/shared/A.luau": MODULE, "src/server/B.luau": MODULE},
+                           build_id="b1", play=False)
+
+    paths = [op.path for op in batch.operations if op.operation is OperationKind.CREATE_SCRIPT]
+    assert "ReplicatedStorage/Shared/A" in paths
+    assert "ServerScriptService/Server/B" in paths
+
+
+def test_the_batch_validates_against_the_protocol():
+    """Belt and braces: the compiler could emit a path the plugin would refuse,
+    and the place to find that out is here."""
+    batch = operations_for({"src/server/B.luau": MODULE}, build_id="b1")
+    assert validate_batch(batch) is batch
+
+
+def test_no_folder_operations_are_emitted():
+    """The plugin creates missing folders on the way to a path, so an operation
+    per folder would be a second way to do one thing."""
+    batch = operations_for({"src/shared/Deep/Nested.luau": MODULE}, build_id="b1", play=False)
+
+    assert all(op.operation is not OperationKind.CREATE_INSTANCE for op in batch.operations)
+
+
+def test_the_batch_ends_by_starting_play_mode():
+    batch = operations_for({"src/server/B.luau": MODULE}, build_id="b1")
+    assert batch.operations[-1].operation is OperationKind.START_PLAYTEST
+
+
+def test_a_build_can_be_sent_without_running_it():
+    batch = operations_for({"src/server/B.luau": MODULE}, build_id="b1", play=False)
+    assert all(op.operation is not OperationKind.START_PLAYTEST for op in batch.operations)
+
+
+def test_a_project_with_nothing_buildable_is_refused():
+    with pytest.raises(Unmappable, match="no .luau files"):
+        operations_for({}, build_id="b1")
+
+
+# ---- the bootstrap ---------------------------------------------------------
+
+def test_server_modules_get_a_script_that_actually_starts_them():
+    """A ModuleScript does nothing on its own. A place full of them runs no code
+    at all, which at run time is indistinguishable from a failed build."""
+    batch = operations_for({"src/server/WaveService.luau": MODULE}, build_id="b1", play=False)
+
+    bootstrap = [op for op in batch.operations
+                 if getattr(op, "path", "").endswith(BOOTSTRAP_NAME)]
+    assert bootstrap, "nothing would require the generated modules"
+    created = next(op for op in bootstrap if op.operation is OperationKind.CREATE_SCRIPT)
+    assert created.script_type == "Script"
+    assert "WaveService" in created.source
+
+
+def test_the_bootstrap_is_opened_so_the_person_sees_code():
+    batch = operations_for({"src/server/B.luau": MODULE}, build_id="b1", play=False)
+    assert any(op.operation is OperationKind.OPEN_SCRIPT for op in batch.operations)
+
+
+def test_a_project_with_no_server_modules_gets_no_bootstrap():
+    batch = operations_for({"src/shared/A.luau": MODULE}, build_id="b1", play=False)
+    assert not any(getattr(op, "path", "").endswith(BOOTSTRAP_NAME) for op in batch.operations)
+
+
+def test_the_bootstrap_survives_one_module_throwing():
+    """One module that errors must not stop the rest, and the error has to
+    reach the Output window rather than vanishing."""
+    source = bootstrap_source(["Alpha", "Beta"])
+
+    assert "pcall" in source
+    assert "warn(" in source
+    assert source.count("continue") >= 2
+
+
+def test_the_bootstrap_only_starts_what_has_a_start():
+    """A module that is only a library is not forced to pretend it is a service."""
+    source = bootstrap_source(["Alpha"])
+    assert '(loaded :: any).Start) == "function"' in source
+
+
+def test_the_bootstrap_says_what_it_did():
+    assert "print(" in bootstrap_source(["Alpha"])
+
+
+def test_the_bootstrap_is_generated_in_build_order():
+    source = bootstrap_source(["First", "Second", "Third"])
+    assert source.index('"First"') < source.index('"Second"') < source.index('"Third"')
+
+
+# ---- somewhere to stand ----------------------------------------------------
+
+def test_a_world_is_offered_but_never_assumed():
+    """Overwriting someone's world is not recoverable, so the caller decides."""
+    assert world_operations("b1", floor=False) == []
+    paths = [op.path for op in world_operations("b1")]
+    assert "Workspace/VentureWorld/Floor" in paths
+    assert "Workspace/VentureWorld/Spawn" in paths
+
+
+# ---- reading a checkout ----------------------------------------------------
+
+def test_reading_a_project_keeps_repository_paths(tmp_path):
+    (tmp_path / "src" / "server").mkdir(parents=True)
+    (tmp_path / "src" / "server" / "WaveService.luau").write_bytes(MODULE.encode("utf-8"))
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "ignored.luau").write_bytes(b"-- not a source root\n")
+
+    found = read_project(tmp_path)
+
+    assert list(found) == ["src/server/WaveService.luau"]
+
+
+def test_a_bom_or_crlf_never_reaches_a_studio_script(tmp_path):
+    """The same class of bug the Engineer's own workspace guards against: a BOM
+    has already broken a --!strict directive in this project."""
+    (tmp_path / "src" / "shared").mkdir(parents=True)
+    (tmp_path / "src" / "shared" / "A.luau").write_bytes(
+        "﻿--!strict\r\nreturn {}\r\n".encode("utf-8"))
+
+    source = read_project(tmp_path)["src/shared/A.luau"]
+
+    assert source.startswith("--!strict")
+    assert "\r" not in source
