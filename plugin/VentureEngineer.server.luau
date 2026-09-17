@@ -511,13 +511,54 @@ local function applyStartPlaytest(operation: any): (string, string, boolean)
 				.. "Use mode 'run', or press Play in Studio",
 			false
 	end
-	local ok, err = pcall(function()
-		(service :: any):ExecutePlayModeAsync()
-	end)
-	if not ok then
-		return "failed", `could not start play mode: {tostring(err)}`, false
+
+	--[[
+		`ExecutePlayModeAsync()` with no argument answered
+		"Argument 1 missing or nil" on Studio 0.739. The signature is not
+		something to guess at and ship, so the shapes are tried in order and the
+		one that works is REPORTED -- the detail line names it, and that answer
+		gets written into docs/STUDIO_EXPERIMENTS.md rather than left in code as
+		folklore.
+
+		Each is wrapped: a wrong argument type errors harmlessly inside pcall.
+	]]
+	local attempts = {
+		{
+			name = "callback",
+			call = function()
+				(service :: any):ExecutePlayModeAsync(function() end)
+			end,
+		},
+		{
+			name = "empty table",
+			call = function()
+				(service :: any):ExecutePlayModeAsync({})
+			end,
+		},
+		{
+			name = "one player",
+			call = function()
+				(service :: any):ExecutePlayModeAsync(1)
+			end,
+		},
+		{
+			name = "table with numPlayers",
+			call = function()
+				(service :: any):ExecutePlayModeAsync({ numPlayers = 1 })
+			end,
+		},
+	}
+
+	local reasons = {}
+	for _, attempt in ipairs(attempts) do
+		local ok, err = pcall(attempt.call)
+		if ok then
+			return "applied", `play mode started via ExecutePlayModeAsync({attempt.name})`, false
+		end
+		table.insert(reasons, `{attempt.name}: {tostring(err)}`)
 	end
-	return "applied", "play mode started", false
+
+	return "failed", "ExecutePlayModeAsync refused every call shape tried -- " .. table.concat(reasons, " | "), false
 end
 
 local function applyStopPlaytest(_operation: any): (string, string, boolean)

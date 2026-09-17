@@ -121,18 +121,22 @@ def command_errors(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="bridge", description=__doc__,
+    # --token and --url are accepted on either side of the subcommand. argparse
+    # puts top-level options before it, which is not where anyone types them.
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument("--url", default=DEFAULT_URL)
+    shared.add_argument("--token", default="", help="the pairing token the bridge printed")
+
+    parser = argparse.ArgumentParser(prog="bridge", description=__doc__, parents=[shared],
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--url", default=DEFAULT_URL)
-    parser.add_argument("--token", default="", help="the pairing token the bridge printed")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("status")
-    smoke = commands.add_parser("smoke")
+    commands.add_parser("status", parents=[shared])
+    smoke = commands.add_parser("smoke", parents=[shared])
     smoke.add_argument("--no-play", action="store_true",
                        help="build it but do not start a test session")
-    result = commands.add_parser("result")
+    result = commands.add_parser("result", parents=[shared])
     result.add_argument("batch_id")
-    errors = commands.add_parser("errors")
+    errors = commands.add_parser("errors", parents=[shared])
     errors.add_argument("--build", default="")
 
     args = parser.parse_args(argv)
