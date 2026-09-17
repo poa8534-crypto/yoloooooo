@@ -185,6 +185,14 @@ app = FastAPI(title="Roblox Venture Agents", version="0.1.0", lifespan=lifespan)
 install_log_redaction()
 app.add_middleware(RedactedResponses)
 
+# The Blueprint stage: idea -> refined build -> specification. A router rather
+# than more routes in this file, which is long enough.
+from .blueprint.api import build_router, router as blueprint_router, studio_router  # noqa: E402
+
+app.include_router(blueprint_router)
+app.include_router(studio_router)
+app.include_router(build_router)
+
 
 @app.middleware("http")
 async def require_token(request, call_next):

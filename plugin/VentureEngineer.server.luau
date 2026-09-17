@@ -41,7 +41,11 @@ local function studioTestService(): Instance?
 	return if ok then service else nil
 end
 
-local PLUGIN_VERSION = "0.1.0"
+-- Bumped whenever this file changes. The heartbeat reports it, so
+-- `bridge status` says which code Studio is actually running -- otherwise a
+-- stale plugin and a wrong code path look identical from outside, which cost a
+-- round trip once already.
+local PLUGIN_VERSION = "0.2.0-playmode-ladder"
 local PROTOCOL_VERSION = 1
 local DEFAULT_BRIDGE = "http://127.0.0.1:34873"
 local HEARTBEAT_SECONDS = 5
