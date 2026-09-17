@@ -5,7 +5,10 @@
 // frontend does not decide what state a system is in, because a UI that works
 // that out for itself can disagree with the build and nobody would see it.
 
-export type NodeState = 'built' | 'building' | 'waiting' | 'refused' | 'error'
+// 'existing' is not a kind of waiting: the project already had that system,
+// so this build is never going to write it and it will never become built.
+export type NodeState =
+  'built' | 'building' | 'waiting' | 'existing' | 'refused' | 'error'
 
 export interface GraphNode {
   id: string
@@ -52,6 +55,28 @@ export interface SyncState {
   reported_at: string
 }
 
+// A steering directive, and what the backend says it can reach.
+//
+// `reachable` never includes the system in flight: its prompt was built before
+// the directive existed. `carried_into` is what makes "applied" checkable --
+// the systems the instruction actually went into.
+export interface Directive {
+  id: string
+  text: string
+  system: string
+  created_at: string
+  status: 'pending' | 'carried' | 'stale'
+  carried_into: string[]
+  reachable_when_written: string[]
+}
+
+export interface Steering {
+  directives: Directive[]
+  reachable: string[]
+  accepting: boolean
+  max_active: number
+}
+
 export interface ExplorerRow {
   name: string
   class: string
@@ -80,6 +105,7 @@ export interface BuildGraph {
   counts: Record<string, number>
   pace: Pace
   sync: SyncState
+  steering: Steering
   explorer: ExplorerRow[]
   events: Array<{ at: string; stage: string; detail: string }>
 }
@@ -150,6 +176,11 @@ export const engineeringApi = {
     call<{ opened: string; batch_id: string }>(
       `/api/builds/${buildId}/systems/${encodeURIComponent(system)}/open`,
       { method: 'POST', body: JSON.stringify({ token }) }),
+  steer: (buildId: string, text: string, system: string) =>
+    call<Steering>(`/api/builds/${buildId}/directives`,
+      { method: 'POST', body: JSON.stringify({ text, system }) }),
+  unsteer: (buildId: string, directiveId: string) =>
+    call<Steering>(`/api/builds/${buildId}/directives/${directiveId}`, { method: 'DELETE' }),
 }
 
 // Where each node sits, worked out once from the dependency graph rather than
@@ -233,6 +264,9 @@ export const NO_PACE: Pace = {
 export const NOT_SENT: SyncState = {
   batch_id: '', operations: 0, sent_at: '',
   applied: null, skipped: null, failed: null, reported_at: '',
+}
+export const NO_STEERING: Steering = {
+  directives: [], reachable: [], accepting: false, max_active: 0,
 }
 
 export function duration(seconds: number | null | undefined): string {

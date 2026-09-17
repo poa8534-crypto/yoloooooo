@@ -461,6 +461,65 @@ def build(build_id: str) -> dict:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such build") from None
 
 
+def _subject(event: dict) -> str:
+    """The system name an event is about: every one is written "Name: what".""" 
+    return str(event.get("detail") or "").split(":", 1)[0].strip()
+
+
+def _progress(record: dict, spec) -> tuple[dict, bool, str | None, set[str]]:
+    """Where the build actually is: outcomes, whether it runs, what is in
+    flight, and what it is not going to write at all.
+
+    One function because the graph and the steering panel must never disagree
+    about which system is being written -- one of them saying a directive can
+    still reach a system the other is drawing as in flight would be worse than
+    either being wrong alone.
+    """
+    from .transitions import is_running
+
+    outcomes: dict[str, dict] = record.get("systems") or {}
+    running = is_running(BuildStatus(record["status"]))
+
+    # Which system is being written comes from the event that recorded the
+    # Engineer being asked -- not from build order. The Engineer skips a system
+    # the project already has, so walking build_order named a system that was
+    # never asked for and drew it as in flight for the whole run.
+    asked = [_subject(event) for event in record["events"]
+             if event.get("stage") == "generating"
+             and "asking the Engineer" in str(event.get("detail") or "")]
+    current = (next((name for name in reversed(asked) if name not in outcomes), None)
+               if running else None)
+
+    # Recorded since this was written; derived for builds made before it, where
+    # a system nobody asked for while later ones were asked can only have been
+    # skipped for already existing.
+    stored = record.get("skipped")
+    if stored is None:
+        seen = set(asked)
+        last = max((spec.build_order.index(name) for name in seen
+                    if name in spec.build_order), default=-1)
+        skipped = {name for index, name in enumerate(spec.build_order)
+                   if name not in seen and name not in outcomes and index < last}
+    else:
+        skipped = set(stored)
+    return outcomes, running, current, skipped
+
+
+def _build_and_spec(build_id: str):
+    """The build record and the specification it was made from, or a 404/409."""
+    from ..db import SessionLocal
+    from .builds import read_build
+
+    try:
+        record = read_build(SessionLocal, build_id)
+    except KeyError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such build") from None
+    try:
+        return record, compile_spec(_load(record["blueprint_id"]))
+    except NotReady as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+
+
 def _studio_location(source_path: str) -> tuple[str, str]:
     """Where a generated file lands in the DataModel, or ("", "") if nowhere.
 
@@ -574,18 +633,20 @@ def build_graph(build_id: str) -> dict:
         built     the Engineer wrote it and the six-check gate accepted it
         refused   it wrote it and the gate refused it
         error     the run itself failed
-        building  it is the next system in build order and the build is running
+        building  the last system the Engineer was asked for, still unanswered
+        existing  the project already had it, so this build does not rewrite it
         waiting   everything else
 
-    "building" is the only inference, and it is a narrow one: the build order is
-    fixed and systems are written one at a time, so the first system with no
-    recorded outcome is the one being worked on. If the build is not running,
-    nothing is building -- a UI that pulses a node while nothing is happening is
-    the simulated progress this endpoint exists to avoid.
+    "building" comes from the event that recorded the Engineer being asked, not
+    from position in the build order. That distinction was not academic: the
+    Engineer skips a system the project already has, so reading build order
+    named a system nobody had asked for and drew it as in flight for the whole
+    run. If the build is not running, nothing is building -- a UI that pulses a
+    node while nothing is happening is the simulated progress this endpoint
+    exists to avoid.
     """
     from ..db import SessionLocal
     from .builds import read_build
-    from .transitions import is_running
 
     try:
         record = read_build(SessionLocal, build_id)
@@ -598,14 +659,7 @@ def build_graph(build_id: str) -> dict:
     except NotReady as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
 
-    outcomes: dict[str, dict] = record.get("systems") or {}
-    running = is_running(BuildStatus(record["status"]))
-    current: str | None = None
-    if running:
-        for name in spec.build_order:
-            if name not in outcomes:
-                current = name
-                break
+    outcomes, running, current, skipped = _progress(record, spec)
 
     by_name = {system.name: system for system in spec.systems}
     nodes = []
@@ -616,7 +670,8 @@ def build_graph(build_id: str) -> dict:
         outcome = outcomes.get(name)
         location, script_class = _studio_location(system.path)
         if outcome is None:
-            state = "building" if name == current else "waiting"
+            state = ("building" if name == current
+                     else "existing" if name in skipped else "waiting")
         elif outcome["status"] == "built":
             state = "built"
         elif outcome["status"] == "refused":
@@ -682,9 +737,92 @@ def build_graph(build_id: str) -> dict:
         "counts": {**counts, "total": len(nodes)},
         "pace": pace,
         "sync": _sync_state(record["events"]),
+        "steering": _steering_view(record, spec),
         "explorer": _explorer(nodes),
         "events": record["events"][-200:],
     }
+
+
+def _reachable(record: dict, spec) -> list[str]:
+    """The systems a directive added right now could still reach.
+
+    Not the one in flight: its prompt was built before the directive existed,
+    so listing it would promise something the build cannot deliver. Not one the
+    project already has either -- this build is not going to write it.
+    """
+    outcomes, running, current, skipped = _progress(record, spec)
+    if not running:
+        return []
+    return [name for name in spec.build_order
+            if name not in outcomes and name not in skipped and name != current]
+
+
+def _steering_view(record: dict, spec) -> dict:
+    from .steering import MAX_ACTIVE, as_shown
+
+    _outcomes, running, _current, _skipped = _progress(record, spec)
+    return {
+        "directives": as_shown(record, running=running),
+        "reachable": _reachable(record, spec),
+        "accepting": running,
+        "max_active": MAX_ACTIVE,
+    }
+
+
+class DirectiveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=2000)
+    # "" means every system still to be written.
+    system: str = Field(default="", max_length=64)
+
+
+@build_router.get("/{build_id}/directives")
+def read_directives(build_id: str) -> dict:
+    record, spec = _build_and_spec(build_id)
+    return _steering_view(record, spec)
+
+
+@build_router.post("/{build_id}/directives", status_code=status.HTTP_201_CREATED)
+def add_directive(build_id: str, request: DirectiveRequest) -> dict:
+    """Add an instruction the Engineer will be given for the systems it has
+    not started.
+
+    Refused rather than stored when it cannot reach anything: a panel listing
+    directives that changed nothing is worse than no panel.
+    """
+    from ..db import SessionLocal
+    from .builds import BuildRecord
+    from .steering import DirectiveRefused, new_directive, with_directive
+
+    record, spec = _build_and_spec(build_id)
+    try:
+        directive = new_directive(request.text, request.system,
+                                  reachable=_reachable(record, spec))
+        with_directive(record, directive)  # the ceiling, checked before writing
+    except DirectiveRefused as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+
+    written = BuildRecord(SessionLocal, build_id).mutate(
+        lambda current: {"directives": with_directive(current, directive)})
+    return {"directive": directive, **_steering_view(written, spec)}
+
+
+@build_router.delete("/{build_id}/directives/{directive_id}")
+def remove_directive(build_id: str, directive_id: str) -> dict:
+    """Withdraw one that has not been used yet."""
+    from ..db import SessionLocal
+    from .builds import BuildRecord
+    from .steering import DirectiveRefused, without_directive
+
+    record, spec = _build_and_spec(build_id)
+    try:
+        without_directive(record, directive_id)
+    except DirectiveRefused as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+
+    written = BuildRecord(SessionLocal, build_id).mutate(
+        lambda current: {"directives": without_directive(current, directive_id)})
+    return _steering_view(written, spec)
 
 
 @build_router.get("/{build_id}/systems/{system}/source")

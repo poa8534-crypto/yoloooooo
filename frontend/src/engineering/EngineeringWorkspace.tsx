@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import './engineering.css'
 import {
-  duration, elapsedSince, engineeringApi, NO_PACE, NOT_SENT,
+  duration, elapsedSince, engineeringApi, NO_PACE, NO_STEERING, NOT_SENT,
   type BuildGraph, type BuildSummaryRow, type GraphNode, type StudioStatus,
 } from './api'
 import { ArchitectureMap } from './ArchitectureMap'
 import { NodeInspector } from './NodeInspector'
+import { SteeringPanel } from './SteeringPanel'
 import { StudioExplorer } from './StudioExplorer'
 
 // The control room for a build. It answers what is being built, why, what
@@ -31,7 +32,7 @@ const LIVE = new Set(['queued', 'planning', 'generating', 'validating',
   'waiting_for_studio', 'syncing', 'building', 'playtesting', 'repairing'])
 
 const MARK: Record<string, string> = {
-  built: '✓', building: '●', refused: '!', error: '!', waiting: '○',
+  built: '✓', building: '●', refused: '!', error: '!', waiting: '○', existing: '=',
 }
 
 export function EngineeringWorkspace({ buildId, onNavigate }: {
@@ -210,7 +211,8 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
                         ? node.branch.replace('engineer/', '')
                         : node.state === 'refused' ? node.detail || 'refused'
                           : node.state === 'building' ? 'in flight'
-                            : `${node.acceptance_criteria.length} criteria`}
+                            : node.state === 'existing' ? 'already in the project'
+                              : `${node.acceptance_criteria.length} criteria`}
                     </span>
                   </span>
                   <span className="plan-state" data-state={node.state}>{node.state}</span>
@@ -327,6 +329,10 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
               </div>
             </aside>
           )}
+
+        {graph && <SteeringPanel buildId={graph.build_id}
+          steering={graph.steering ?? NO_STEERING}
+          onChanged={next => setGraph(current => current ? { ...current, steering: next } : current)} />}
 
         {graph && <StudioExplorer explorer={graph.explorer ?? []}
           sync={graph.sync ?? NOT_SENT} />}

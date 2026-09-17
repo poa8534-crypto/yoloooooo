@@ -205,9 +205,10 @@
 .engineering-grid {
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr) 342px;
-  grid-template-rows: minmax(380px, 1fr) minmax(190px, auto);
+  grid-template-rows: minmax(360px, 1fr) minmax(180px, auto) minmax(150px, auto);
   grid-template-areas:
     'plan architecture inspector'
+    'perf activity     steering'
     'perf activity     explorer';
   gap: 0.6rem;
   align-items: stretch;
@@ -217,6 +218,7 @@
 .architecture { grid-area: architecture; display: flex; flex-direction: column; overflow: hidden; }
 .activity { grid-area: activity; display: flex; flex-direction: column; overflow: hidden; }
 .node-inspector { grid-area: inspector; display: flex; flex-direction: column; overflow: hidden; }
+.steering { grid-area: steering; display: flex; flex-direction: column; overflow: hidden; }
 .studio-explorer { grid-area: explorer; display: flex; flex-direction: column; overflow: hidden; }
 
 @media (max-width: 1400px) {
@@ -227,13 +229,15 @@
       'plan architecture'
       'perf architecture'
       'inspector activity'
+      'steering activity'
       'explorer activity';
   }
 }
 @media (max-width: 1000px) {
   .engineering-grid {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: 'plan' 'architecture' 'inspector' 'activity' 'perf' 'explorer';
+    grid-template-areas:
+      'plan' 'architecture' 'inspector' 'steering' 'activity' 'perf' 'explorer';
   }
 }
 
@@ -574,3 +578,84 @@
 .explorer-state[data-state='building'] { color: var(--accent); }
 .explorer-state[data-state='refused'],
 .explorer-state[data-state='error'] { color: var(--refused); }
+
+/* ---- live steering ------------------------------------------------------- */
+
+.steering-body { padding: 0.6rem 0.8rem 0.8rem; overflow: auto; flex: 1; }
+
+.directive-list { list-style: none; margin: 0 0 0.7rem; padding: 0; display: grid; gap: 0.4rem; }
+.directive-list li {
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ink-faint);
+  border-radius: 7px;
+  background: #fbfcfe;
+}
+.directive-list li[data-status='pending'] { border-left-color: var(--accent); }
+.directive-list li[data-status='carried'] { border-left-color: var(--built); }
+.directive-list li[data-status='stale'] { border-left-color: var(--line-strong); opacity: 0.75; }
+.directive-text { margin: 0 0 0.25rem; font-size: 0.78rem; line-height: 1.45; color: var(--ink); }
+.directive-meta { margin: 0; font-size: 0.66rem; color: var(--ink-faint); line-height: 1.4; }
+.directive-status {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.directive-status[data-status='pending'] { color: var(--accent); }
+.directive-status[data-status='carried'] { color: var(--built); }
+.link-button {
+  margin-top: 0.25rem;
+  padding: 0;
+  font: inherit;
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.steering-field { display: block; margin-bottom: 0.5rem; }
+.steering-field textarea,
+.steering-field select {
+  display: block;
+  width: 100%;
+  margin-top: 0.2rem;
+  padding: 0.4rem 0.5rem;
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  resize: vertical;
+}
+.steering-field textarea:focus,
+.steering-field select:focus { outline: 2px solid rgba(37, 99, 235, 0.35); outline-offset: 0; }
+
+.steering-reach { margin: 0 0 0.2rem; font-size: 0.72rem; color: var(--ink-soft); }
+.steering-reach strong { color: var(--accent); }
+.steering-caveat { margin: 0 0 0.6rem; font-size: 0.68rem; line-height: 1.45; color: var(--ink-faint); }
+.steering-error { margin: 0.5rem 0 0; font-size: 0.74rem; color: var(--refused); }
+
+.primary-button {
+  padding: 0.42rem 0.8rem;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.primary-button:disabled { background: var(--line-strong); border-color: var(--line-strong); cursor: not-allowed; }
+
+/* ---- a system the project already had ------------------------------------ */
+
+.map-node[data-state='existing'] rect { fill: #fafbfd; stroke-dasharray: 4 3; }
+.map-node[data-state='existing'] .map-node-name { fill: var(--ink-soft); }
+.map-legend span[data-state='existing']::before { background: transparent; border: 1px dashed var(--ink-faint); }
+.plan-list li[data-state='existing'] .plan-mark { color: var(--ink-faint); }

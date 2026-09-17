@@ -39,6 +39,7 @@ from ..models import SystemState
 from .compile import NotReady, compile_spec
 from .schemas import Blueprint, BuildStatus, GameBuildSpecification
 from .store import BlueprintStore
+from .steering import carried, notes_for
 from .transitions import check
 
 PREFIX = "build:"
@@ -113,6 +114,25 @@ class BuildRecord:
             db.commit()
         return record
 
+    def mutate(self, change) -> dict:
+        """Read, change and write inside one session.
+
+        `update` computes its new value outside the session, which is fine
+        while one writer owns a field. Steering broke that: the person adds a
+        directive from the API at the same moment the build loop marks another
+        as carried, and whichever read first wins with a value computed before
+        the other existed. `change` is given the record as it is at write time.
+        """
+        with self.factory() as db:
+            row = db.get(SystemState, self.key)
+            if row is None:
+                raise KeyError(self.id)
+            record = {**row.value_json, **change(dict(row.value_json))}
+            row.value_json = record
+            row.updated_at = datetime.now(UTC)
+            db.commit()
+        return record
+
     def move(self, status: BuildStatus, detail: str = "") -> dict:
         current = BuildStatus(self.read()["status"])
         check(current, status)
@@ -163,12 +183,33 @@ async def run_build(blueprint_id: str, *, settings, factory, token: str,
         record.event("planning", str(exc))
         tasks = []
 
+    # Which systems this build will NOT write because the project already has
+    # them. Without this the graph has to guess, and it guessed wrong: it
+    # assumed the Engineer works through spec.build_order, so a skipped system
+    # showed as "being written now" for as long as the build ran.
+    planned = {task.system for task in tasks}
+    skipped = [name for name in spec.build_order if name not in planned]
+    record.update(skipped=skipped)
+    if skipped:
+        record.event("planning",
+                     f"already in the project, not rewritten: {', '.join(skipped)}")
+
     generated: dict[str, str] = {}
     systems: dict[str, dict] = {}
 
     if tasks:
         record.move(BuildStatus.GENERATING, f"{len(tasks)} system(s) to write")
         for task in tasks:
+            # Read now, not when the plan was made: a directive typed a minute
+            # ago has to reach the system being asked for a minute later, and
+            # the plan was built before it existed.
+            steering = notes_for(record.read(), task.system)
+            if steering:
+                task = task.model_copy(update={"notes": [*task.notes, *steering][:20]})
+                record.mutate(lambda current, name=task.system:
+                              {"directives": carried(current, name)})
+                record.event("steering",
+                             f"{task.system}: {len(steering)} directive(s) carried into the prompt")
             record.event("generating", f"{task.system}: asking the Engineer")
             try:
                 result = await run_task(task, settings=settings, factory=factory)

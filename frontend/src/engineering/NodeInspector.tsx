@@ -16,6 +16,7 @@ import { duration, engineeringApi, type GraphNode, type Pace, type SystemSource 
 
 const STATE_LABEL: Record<string, string> = {
   built: 'Accepted by the gate', building: 'Being written now', waiting: 'Not started',
+  existing: 'The project already had this, so this build does not rewrite it',
   refused: 'Refused by the gate', error: 'The run failed',
 }
 
@@ -138,7 +139,9 @@ export function NodeInspector({ node, buildId, token, pace, onOpened }: {
               ? 'All six checks passed against this file.'
               : node.state === 'refused'
                 ? 'The gate refused this file.'
-                : 'Not judged yet.'}
+                : node.state === 'existing'
+                  ? 'Not judged by this build: the file was already in the project.'
+                  : 'Not judged yet.'}
           </p>
           <h3 className="micro-label">
             Acceptance criteria · {node.acceptance_criteria.length}

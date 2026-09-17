@@ -13,7 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EngineeringWorkspace } from './EngineeringWorkspace'
 import {
   clusters, duration, layout,
-  type BuildGraph, type ExplorerRow, type GraphNode, type NodeState,
+  type BuildGraph, type Directive, type ExplorerRow, type GraphNode, type NodeState,
+  type Steering,
 } from './api'
 
 function node(id: string, state: NodeState, depends: string[] = [], order = 0,
@@ -23,6 +24,20 @@ function node(id: string, state: NodeState, depends: string[] = [], order = 0,
     purpose: `What ${id} is for.`, acceptance_criteria: [`${id} refuses a bad amount.`],
     depends_on: depends, state, detail: '', branch: null, commit: '', attempts: 0,
     studio_path: `ServerScriptService/Server/${id}`, studio_class: 'ModuleScript', order,
+  }
+}
+
+function directive(overrides: Partial<Directive> = {}): Directive {
+  return {
+    id: 'steer-1', text: 'Cap every wave at eight infected.', system: '',
+    created_at: '2026-09-17T23:30:00', status: 'pending', carried_into: [],
+    reachable_when_written: ['InfectedService'], ...overrides,
+  }
+}
+
+function steering(overrides: Partial<Steering> = {}): Steering {
+  return {
+    directives: [], reachable: ['InfectedService'], accepting: true, max_active: 6, ...overrides,
   }
 }
 
@@ -56,6 +71,7 @@ function graph(overrides: Partial<BuildGraph> = {}): BuildGraph {
     },
     sync: { batch_id: '', operations: 0, sent_at: '',
       applied: null, skipped: null, failed: null, reported_at: '' },
+    steering: steering(),
     explorer: [explorerRow('ServerScriptService', [
       explorerRow('Server', [explorerRow('ResearchService', [], 'built', 'ResearchService')]),
     ])],
@@ -80,8 +96,12 @@ function reply(body: unknown, status = 200) {
 }
 
 function serve(options: { builds?: unknown; graph?: BuildGraph; studio?: unknown
-  source?: unknown } = {}) {
-  fetchMock.mockImplementation((url: string) => {
+  source?: unknown; steer?: unknown; steerStatus?: number } = {}) {
+  fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.includes('/directives')) {
+      return reply(options.steer ?? steering({ directives: [directive()] }),
+        options.steerStatus ?? 200)
+    }
     if (url.includes('/source')) {
       return reply(options.source ?? { system: 'ResearchService', state: 'built',
         source: 'local ResearchService = {}', path: 'src/server/ResearchService.luau',
@@ -392,5 +412,122 @@ describe('the node inspector', () => {
 
     expect(screen.getByRole('button', { name: /open in studio/i })
       .hasAttribute('disabled')).toBe(true)
+  })
+})
+
+describe('the steering panel', () => {
+  it('lists what a directive will reach before it is written', async () => {
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    const panel = await screen.findByLabelText('Live steering')
+    // The claim the panel makes, made before the button rather than after it.
+    expect(within(panel).getByText(/Will be carried into:/)).toBeTruthy()
+    expect(within(panel).getByText('InfectedService')).toBeTruthy()
+  })
+
+  it('offers only the systems the backend says are reachable', async () => {
+    // WaveService is in flight. Its prompt was built before this directive
+    // existed, so it must not be offered as something the directive can steer.
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    const panel = await screen.findByLabelText('Live steering')
+    const options = within(panel).getAllByRole('option').map(option => option.textContent)
+
+    expect(options).toEqual(['Every system still to be written', 'InfectedService only'])
+  })
+
+  it('will not send an instruction too short to be one', async () => {
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    const panel = await screen.findByLabelText('Live steering')
+
+    await userEvent.type(within(panel).getByRole('textbox'), 'faster')
+
+    expect(within(panel).getByRole('button', { name: /add directive/i })
+      .hasAttribute('disabled')).toBe(true)
+  })
+
+  it('sends the instruction and the system it applies to', async () => {
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    const panel = await screen.findByLabelText('Live steering')
+
+    await userEvent.type(within(panel).getByRole('textbox'),
+      'Cap every wave at eight infected.')
+    await userEvent.selectOptions(within(panel).getByRole('combobox'), 'InfectedService')
+    await userEvent.click(within(panel).getByRole('button', { name: /add directive/i }))
+
+    await waitFor(() => {
+      const posted = fetchMock.mock.calls.find(call =>
+        String(call[0]).includes('/directives') && call[1]?.method === 'POST')
+      expect(posted).toBeTruthy()
+      expect(JSON.parse(posted[1].body as string))
+        .toEqual({ text: 'Cap every wave at eight infected.', system: 'InfectedService' })
+    })
+  })
+
+  it('shows the refusal the backend gave rather than swallowing it', async () => {
+    serve({ steer: { detail: 'InfectedService has already been started' }, steerStatus: 409 })
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    const panel = await screen.findByLabelText('Live steering')
+
+    await userEvent.type(within(panel).getByRole('textbox'), 'Cap every wave at eight.')
+    await userEvent.click(within(panel).getByRole('button', { name: /add directive/i }))
+
+    await waitFor(() => expect(screen.getByText(/already been started/)).toBeTruthy())
+  })
+
+  it('names the systems a carried directive actually went into', async () => {
+    // "Applied" beside a tick is a claim. Which prompts it reached is the fact
+    // that makes the claim checkable afterwards.
+    serve({ graph: graph({ steering: steering({ directives: [directive({
+      status: 'carried', carried_into: ['InfectedService', 'AirlockService'] })] }) }) })
+
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    const panel = await screen.findByLabelText('Live steering')
+    expect(within(panel).getByText(/Carried into InfectedService, AirlockService/)).toBeTruthy()
+  })
+
+  it('does not offer to withdraw a directive that already went into a prompt', async () => {
+    serve({ graph: graph({ steering: steering({ directives: [directive({
+      status: 'carried', carried_into: ['InfectedService'] })] }) }) })
+
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    const panel = await screen.findByLabelText('Live steering')
+    expect(within(panel).queryByRole('button', { name: /withdraw/i })).toBeNull()
+  })
+
+  it('says a directive reached nothing rather than leaving it looking imminent', async () => {
+    serve({ graph: graph({ status: 'succeeded', current: null,
+      steering: steering({ accepting: false, reachable: [],
+        directives: [directive({ status: 'stale' })] }) }) })
+
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    const panel = await screen.findByLabelText('Live steering')
+    expect(within(panel).getByText(/The build ended before this reached anything/)).toBeTruthy()
+    // And no form, because there is no prompt left to put an instruction into.
+    expect(within(panel).queryByRole('textbox')).toBeNull()
+  })
+})
+
+describe('a system the project already had', () => {
+  it('is not drawn as waiting, and never becomes built', async () => {
+    // The bug this state exists for: the graph used to assume the Engineer
+    // works through build order, so a system it skips showed as in flight for
+    // the whole run.
+    serve({ graph: graph({ current: 'InfectedService', nodes: [
+      node('WaveService', 'existing'), node('InfectedService', 'building')] }) })
+
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+    const map = screen.getByTestId('architecture-map')
+    expect(within(map).getByLabelText(/WaveService, Already in the project/)).toBeTruthy()
+    expect(screen.getByText('Working on InfectedService')).toBeTruthy()
   })
 })

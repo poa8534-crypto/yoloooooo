@@ -19,7 +19,7 @@ const BAND_LABEL = 22
 
 const STATE_LABEL: Record<NodeState, string> = {
   built: 'Built', building: 'Building', waiting: 'Waiting',
-  refused: 'Refused by the gate', error: 'Error',
+  existing: 'Already in the project', refused: 'Refused by the gate', error: 'Error',
 }
 
 const LAYER_LABEL: Record<string, string> = {
@@ -132,6 +132,7 @@ export function ArchitectureMap({ graph, selected, onSelect }: {
         <span data-state="built">Built</span>
         <span data-state="building">Building</span>
         <span data-state="waiting">Waiting</span>
+        <span data-state="existing">Already there</span>
         <span data-state="refused">Refused</span>
         <span className="map-legend-note">
           Left to right is build order · spec revision {graph.spec_revision} · {graph.content_hash}
