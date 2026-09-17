@@ -1,0 +1,313 @@
+"""One build: specification in, running Roblox place out.
+
+The pieces all existed and nothing drove them. This is the driver:
+
+    compile the spec        -> refuses unless the blueprint is ready
+    tasks_from(spec)        -> one EngineeringTask per system, in build order
+    run_task(...)           -> the Engineer's own loop and six-check gate
+    files from the branch   -> what the gate accepted, not what a model claimed
+    operations_for(...)     -> typed operations
+    bridge                  -> the plugin -> Studio
+
+Two decisions worth stating, because both cost something.
+
+A system that fails the gate does NOT stop the build. It is recorded, the rest
+carry on, and the build ends PARTIAL rather than FAILED -- four working systems
+and one honest refusal is a better outcome than nothing, and the refusal is
+reported rather than buried.
+
+Files are read from the accepted commit rather than from the worktree, which is
+deleted when a run ends. What reaches Studio is therefore exactly what passed
+six checks, and there is no path by which unverified code gets there.
+
+Every event is a real transition. Nothing here writes a log line for the look
+of it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import secrets
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+
+from ..bridge.from_project import ROOTS, Unmappable, operations_for
+from ..engineer.from_spec import SpecUnusable, tasks_from
+from ..engineer.runs import game_repo, run_task
+from ..models import SystemState
+from .compile import NotReady, compile_spec
+from .schemas import Blueprint, BuildStatus, GameBuildSpecification
+from .store import BlueprintStore
+from .transitions import check
+
+PREFIX = "build:"
+
+
+def new_id() -> str:
+    return f"build-{secrets.token_hex(6)}"
+
+
+def files_on_branch(repo: Path, branch: str) -> dict[str, str]:
+    """The .luau files as they are on a branch the gate accepted.
+
+    Read from the commit rather than from a worktree: the worktree is removed
+    when the run ends, and reading it would race that removal. More to the
+    point, the commit is the thing six checks were run against.
+    """
+    listing = subprocess.run(["git", "ls-tree", "-r", "--name-only", branch],
+                             cwd=repo, capture_output=True, check=False)
+    if listing.returncode != 0:
+        return {}
+    found: dict[str, str] = {}
+    for path in listing.stdout.decode("utf-8", "replace").splitlines():
+        if not path.endswith(".luau") or not any(path.startswith(root + "/") for root in ROOTS):
+            continue
+        blob = subprocess.run(["git", "show", f"{branch}:{path}"], cwd=repo,
+                              capture_output=True, check=False)
+        if blob.returncode == 0:
+            text = blob.stdout.decode("utf-8", "replace")
+            found[path] = text.removeprefix("﻿").replace("\r\n", "\n")
+    return found
+
+
+class BuildRecord:
+    """A build as it is stored and streamed. Status moves only through the
+    state machine, so an impossible state cannot be written even by mistake."""
+
+    def __init__(self, factory, build_id: str):
+        self.factory = factory
+        self.id = build_id
+
+    @property
+    def key(self) -> str:
+        return PREFIX + self.id
+
+    def create(self, blueprint: Blueprint, spec: GameBuildSpecification) -> dict:
+        record = {
+            "id": self.id, "blueprint_id": blueprint.id, "project_id": blueprint.project_id,
+            "spec_id": spec.spec_id, "spec_revision": spec.revision,
+            "content_hash": spec.content_hash, "title": blueprint.title,
+            "status": BuildStatus.QUEUED.value, "events": [],
+            "systems": {}, "batch_id": None, "operations": 0,
+            "created_at": datetime.now(UTC).isoformat(), "completed_at": None,
+        }
+        with self.factory() as db:
+            db.add(SystemState(key=self.key, value_json=record))
+            db.commit()
+        return record
+
+    def read(self) -> dict:
+        with self.factory() as db:
+            row = db.get(SystemState, self.key)
+        if row is None:
+            raise KeyError(self.id)
+        return dict(row.value_json)
+
+    def update(self, **changes) -> dict:
+        with self.factory() as db:
+            row = db.get(SystemState, self.key)
+            record = {**row.value_json, **changes}
+            row.value_json = record
+            row.updated_at = datetime.now(UTC)
+            db.commit()
+        return record
+
+    def move(self, status: BuildStatus, detail: str = "") -> dict:
+        current = BuildStatus(self.read()["status"])
+        check(current, status)
+        return self.event(status.value, detail or status.value, status=status.value)
+
+    def event(self, stage: str, detail: str, **extra) -> dict:
+        record = self.read()
+        entry = {"at": datetime.now(UTC).isoformat(), "stage": stage, "detail": detail[:2000]}
+        return self.update(events=[*record["events"], entry], **extra)
+
+
+class BuildFailed(RuntimeError):
+    pass
+
+
+async def run_build(blueprint_id: str, *, settings, factory, token: str,
+                    play: bool = True, build_id: str | None = None) -> dict:
+    """Generate the specification's systems, then put them into Studio.
+
+    Long-running on purpose -- the Engineer takes minutes per system -- so the
+    caller starts it in the background and follows the event stream.
+    """
+    import httpx
+
+    from .api import BRIDGE_URL
+
+    store = BlueprintStore(factory)
+    blueprint = store.get(blueprint_id)
+    try:
+        spec = compile_spec(blueprint)
+    except NotReady as exc:
+        raise BuildFailed(str(exc)) from None
+
+    record = BuildRecord(factory, build_id or new_id())
+    record.create(blueprint, spec)
+    record.event("queued", f"{len(spec.systems)} system(s) in the specification")
+
+    repo = game_repo(settings)
+    existing = {path.stem for root in ROOTS
+                for path in (repo / root).glob("*.luau")} if repo.exists() else set()
+
+    record.move(BuildStatus.PLANNING, "working out what still has to be built")
+    try:
+        tasks = tasks_from(spec, already_built=existing)
+    except SpecUnusable as exc:
+        # Everything already exists: not a failure, there is simply nothing to
+        # generate, and the sync below still puts it into Studio.
+        record.event("planning", str(exc))
+        tasks = []
+
+    generated: dict[str, str] = {}
+    systems: dict[str, dict] = {}
+
+    if tasks:
+        record.move(BuildStatus.GENERATING, f"{len(tasks)} system(s) to write")
+        for task in tasks:
+            record.event("generating", f"{task.system}: asking the Engineer")
+            try:
+                result = await run_task(task, settings=settings, factory=factory)
+            except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+                systems[task.system] = {"status": "error", "detail": str(exc)[:500]}
+                record.event("system_failed", f"{task.system}: {str(exc)[:300]}",
+                             systems=systems)
+                continue
+
+            if result.status == "complete" and result.branch:
+                files = files_on_branch(repo, result.branch)
+                # Only the file this task was for. A run's branch also carries
+                # the generated Services module and whatever was already on the
+                # base branch, and sending those as this system's work would
+                # misreport what was built.
+                for path, source in files.items():
+                    if Path(path).stem == task.system:
+                        generated[path] = source
+                systems[task.system] = {"status": "built", "branch": result.branch,
+                                        "commit": result.commit, "attempts": result.attempts}
+                record.event("system_built", f"{task.system}: accepted on {result.branch}",
+                             systems=systems)
+            else:
+                # Recorded, and the build carries on. Four working systems and
+                # one honest refusal beats nothing.
+                systems[task.system] = {"status": "refused", "reason": result.reason[:500],
+                                        "branch": result.branch, "attempts": result.attempts}
+                record.event("system_refused", f"{task.system}: {result.reason[:300]}",
+                             systems=systems)
+
+    record.move(BuildStatus.VALIDATING, "reading what the gate accepted")
+    from ..bridge.from_project import read_project
+
+    # What is on the base branch already, plus what this build just generated.
+    project = {**read_project(repo), **generated}
+    if not project:
+        record.move(BuildStatus.FAILED, "nothing was generated and the project is empty")
+        raise BuildFailed("there is nothing to build: no system was accepted and the "
+                          "project has no Luau files")
+
+    record.move(BuildStatus.WAITING_FOR_STUDIO, "checking Studio is connected")
+    try:
+        status = httpx.get(f"{BRIDGE_URL}/bridge/status", timeout=5.0,
+                           headers={"X-Bridge-Token": token})
+    except httpx.HTTPError:
+        record.move(BuildStatus.FAILED, "the local bridge is not running")
+        raise BuildFailed("The local bridge is not running. Start it with: "
+                          "python -m app.bridge.run") from None
+    if status.status_code == 401:
+        record.move(BuildStatus.FAILED, "the bridge refused the token")
+        raise BuildFailed("The bridge refused that token.")
+    if not status.json().get("plugin_connected"):
+        record.move(BuildStatus.FAILED, "the Studio plugin is not connected")
+        raise BuildFailed("The Studio plugin is not connected, so nothing would apply the build.")
+
+    record.move(BuildStatus.SYNCING, f"{len(project)} file(s) to send")
+    try:
+        batch = operations_for(project, build_id=record.id, play=play)
+    except Unmappable as exc:
+        record.move(BuildStatus.FAILED, str(exc))
+        raise BuildFailed(str(exc)) from None
+
+    queued = httpx.post(f"{BRIDGE_URL}/bridge/batches", timeout=30.0,
+                        headers={"X-Bridge-Token": token},
+                        json=batch.model_dump(by_alias=True, mode="json"))
+    if queued.status_code != 202:
+        record.move(BuildStatus.FAILED, f"the bridge refused the batch: {queued.text[:200]}")
+        raise BuildFailed(f"the bridge refused the batch: {queued.text[:300]}")
+
+    record.event("syncing", f"{len(batch.operations)} operation(s) queued for Studio",
+                 batch_id=batch.batch_id, operations=len(batch.operations))
+
+    record.move(BuildStatus.BUILDING, "Studio is applying the operations")
+    applied = await _await_result(record, batch.batch_id, token)
+
+    refused = [name for name, entry in systems.items() if entry["status"] != "built"]
+    if applied is None:
+        record.move(BuildStatus.PARTIAL, "Studio did not report before the timeout")
+    elif applied.get("failed_count"):
+        record.move(BuildStatus.PARTIAL,
+                    f"{applied['failed_count']} operation(s) failed in Studio")
+    elif refused:
+        record.move(BuildStatus.PARTIAL,
+                    f"built, but {len(refused)} system(s) were refused: {', '.join(refused)}")
+    elif play:
+        record.move(BuildStatus.PLAYTESTING, "Studio was asked to start a test session")
+        record.move(BuildStatus.SUCCEEDED, "the build is in Studio")
+    else:
+        record.move(BuildStatus.SUCCEEDED, "the build is in Studio")
+
+    return record.update(completed_at=datetime.now(UTC).isoformat())
+
+
+async def _await_result(record: BuildRecord, batch_id: str, token: str,
+                        attempts: int = 40, pause: float = 1.5) -> dict | None:
+    """What the plugin reported, or None if it never did.
+
+    Bounded: a plugin that has gone away must not hold a build open forever,
+    and "did not report" is a different outcome from "reported a failure".
+    """
+    import httpx
+
+    from .api import BRIDGE_URL
+
+    for _ in range(attempts):
+        await asyncio.sleep(pause)
+        try:
+            answer = httpx.get(f"{BRIDGE_URL}/bridge/results/{batch_id}", timeout=5.0,
+                               headers={"X-Bridge-Token": token})
+        except httpx.HTTPError:
+            continue
+        if answer.status_code != 200:
+            continue
+        result = answer.json()
+        failed = [entry for entry in result["results"] if entry["status"] == "failed"]
+        summary = {
+            "applied": len([e for e in result["results"] if e["status"] == "applied"]),
+            "skipped": len([e for e in result["results"] if e["status"] == "skipped"]),
+            "failed_count": len(failed),
+            "failures": [{"operation_id": e["operation_id"], "detail": e["detail"]}
+                         for e in failed][:20],
+        }
+        record.event("studio_result",
+                     f"{summary['applied']} applied, {summary['skipped']} unchanged, "
+                     f"{summary['failed_count']} failed",
+                     result=summary)
+        return summary
+    return None
+
+
+def read_build(factory, build_id: str) -> dict:
+    return BuildRecord(factory, build_id).read()
+
+
+def list_builds(factory, blueprint_id: str = "", limit: int = 20) -> list[dict]:
+    with factory() as db:
+        rows = [row for row in db.query(SystemState).all() if row.key.startswith(PREFIX)]
+    records = [dict(row.value_json) for row in rows]
+    if blueprint_id:
+        records = [record for record in records if record.get("blueprint_id") == blueprint_id]
+    records.sort(key=lambda record: record["created_at"], reverse=True)
+    return records[:limit]

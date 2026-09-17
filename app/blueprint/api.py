@@ -4,12 +4,11 @@ What the frontend can actually call. Every endpoint here is backed by something
 that works: the architect runs through the Engineer's provider chain, readiness
 and scope are counted, and the specification is compiled deterministically.
 
-`/api/builds` puts the generated project into Studio for real: it compiles the
-blueprint, reads the game checkout, turns those files into typed operations and
-queues them on the bridge. It does NOT generate code -- the Engineer writes the
-files, this sends what is there -- and a specification naming systems nobody has
-built yet comes back with `missing_systems` rather than being half-built
-quietly.
+`/api/builds` runs the whole chain: compile the specification, ask the Engineer
+to write the systems that are missing, take what its six-check gate accepted,
+turn that into typed operations and send it to Studio. It is accepted rather
+than awaited -- the Engineer takes minutes per system -- and followed on
+`/api/builds/{id}/events`, where every line is a real transition.
 
 `/api/studio` reports what the bridge really says, including "not running", so
 the UI can show the truth rather than a spinner.
@@ -17,10 +16,13 @@ the UI can show the truth rather than a spinner.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 
 import httpx
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import get_settings
@@ -392,78 +394,108 @@ class BuildRequest(BaseModel):
 
 
 @build_router.post("", status_code=status.HTTP_202_ACCEPTED)
-def start_build(request: BuildRequest) -> dict:
-    """Put the generated project into Roblox Studio.
+async def start_build(request: BuildRequest) -> dict:
+    """Generate the specification's systems and put them into Studio.
 
-    What it does, in order, and what each step can refuse:
-
-      1. compile the blueprint -- refuses if it is not ready
-      2. read the game checkout's .luau files
-      3. compile those into Studio operations
-      4. queue them on the bridge for the plugin
-
-    What it does NOT do is generate code. The Engineer writes files into the
-    game repository; this sends what is there. A specification naming systems
-    nobody has built yet is reported rather than silently half-built --
-    `missing_systems` says which, so the UI can show the truth.
+    Accepted rather than awaited: the Engineer takes minutes per system, and a
+    request held open for that long is a request that times out somewhere in
+    between. The build id comes back at once and the work is followed on
+    `/api/builds/{id}/events`.
     """
-    from ..bridge.from_project import Unmappable, operations_for, read_project
+    from ..db import SessionLocal
+    from .builds import BuildFailed, new_id, run_build
 
     blueprint = _load(request.blueprint_id)
     try:
-        spec = compile_spec(blueprint)
+        compile_spec(blueprint)
     except NotReady as exc:
+        # Checked here so an unready blueprint fails the REQUEST rather than
+        # failing silently in a background task nobody is watching yet.
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
 
     settings = get_settings()
-    if settings.game_project_dir is None:
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            "GAME_PROJECT_DIR is not set, so there is no project to build")
-    files = read_project(settings.game_project_dir)
-    if not files:
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            f"no .luau files under {settings.game_project_dir}")
+    build_id = new_id()
 
-    built = {path.rsplit("/", 1)[-1].removesuffix(".luau") for path in files}
-    missing = [system.name for system in spec.systems if system.name not in built]
+    async def work() -> None:
+        try:
+            await run_build(request.blueprint_id, settings=settings, factory=SessionLocal,
+                            token=request.token, play=request.play, build_id=build_id)
+        except BuildFailed:
+            pass  # already recorded on the build, with its reason
+        except Exception:  # noqa: BLE001
+            from .builds import BuildRecord
+            from .schemas import BuildStatus as S
+
+            record = BuildRecord(SessionLocal, build_id)
+            try:
+                record.event("failed", "the build stopped unexpectedly", status=S.FAILED.value)
+            except KeyError:
+                pass
+
+    asyncio.create_task(work())
+    return {"build_id": build_id, "blueprint_id": request.blueprint_id,
+            "follow": f"/api/builds/{build_id}/events"}
+
+
+@build_router.get("")
+def builds(blueprint_id: str = "") -> dict:
+    """Build history, newest first. Reproducibility: every build carries the
+    specification revision and content hash it was made from."""
+    from ..db import SessionLocal
+    from .builds import list_builds
+
+    return {"builds": list_builds(SessionLocal, blueprint_id)}
+
+
+@build_router.get("/{build_id}")
+def build(build_id: str) -> dict:
+    from ..db import SessionLocal
+    from .builds import read_build
 
     try:
-        batch = operations_for(files, build_id=f"build-{spec.spec_id}", play=request.play)
-    except Unmappable as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
-
-    try:
-        queued = httpx.post(f"{BRIDGE_URL}/bridge/batches", timeout=20.0,
-                            headers={"X-Bridge-Token": request.token},
-                            json=batch.model_dump(by_alias=True, mode="json"))
-    except httpx.HTTPError:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                            "The local bridge is not running. Start it with: "
-                            "python -m app.bridge.run") from None
-    if queued.status_code == 401:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
-                            "The bridge refused that token. It prints the right one on start.")
-    if queued.status_code != 202:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
-                            f"the bridge refused the batch: {queued.text[:300]}")
-
-    return {
-        "batch_id": batch.batch_id,
-        "build_id": batch.build_id,
-        "operations": len(batch.operations),
-        "files": len(files),
-        "spec_revision": spec.revision,
-        "content_hash": spec.content_hash,
-        # Named rather than hidden: a specification can ask for systems nobody
-        # has written yet, and a build that quietly sends 13 files for a
-        # 16-system spec looks like it worked.
-        "missing_systems": missing,
-        "play": request.play,
-    }
+        return read_build(SessionLocal, build_id)
+    except KeyError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such build") from None
 
 
-@build_router.get("/{batch_id}")
+@build_router.get("/{build_id}/events")
+async def build_events(build_id: str) -> StreamingResponse:
+    """The build as it happens, over the SSE the rest of the app already uses.
+
+    Only real transitions are sent. Nothing here emits a line to make the UI
+    look alive, and when the build reaches a terminal state the stream ends
+    rather than idling forever.
+    """
+    from ..db import SessionLocal
+    from .builds import read_build
+    from .transitions import is_terminal
+
+    async def stream():
+        sent = 0
+        for _ in range(1200):  # about ten minutes at the poll below
+            try:
+                record = read_build(SessionLocal, build_id)
+            except KeyError:
+                yield 'event: error\ndata: {"detail": "no such build"}\n\n'
+                return
+            events = record["events"]
+            while sent < len(events):
+                payload = json.dumps({**events[sent], "status": record["status"]})
+                yield f"data: {payload}\n\n"
+                sent += 1
+            if is_terminal(BuildStatus(record["status"])):
+                done = json.dumps({"stage": "done", "status": record["status"]})
+                yield f"data: {done}\n\n"
+                return
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache"})
+
+
+@build_router.get("/batches/{batch_id}")
 def build_result(batch_id: str, token: str = "") -> dict:
+    # Two segments, so it cannot be shadowed by /api/builds/{build_id}.
     """What Studio did with it. Straight from the bridge, unedited."""
     if not token:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "the bridge pairing token is required")

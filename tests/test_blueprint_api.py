@@ -173,10 +173,16 @@ def test_a_build_needs_a_bridge_token(client):
     assert response.status_code == 422
 
 
-def test_reading_a_result_needs_the_token_too(client):
-    response = client.get("/api/builds/some-batch")
+def test_reading_a_batch_result_needs_the_token_too(client):
+    """Namespaced under /batches/ so it cannot be shadowed by the build record
+    route, which takes a build id in the same position."""
+    response = client.get("/api/builds/batches/some-batch")
     assert response.status_code == 400
     assert "token" in response.text
+
+
+def test_a_build_that_does_not_exist_is_a_404(client):
+    assert client.get("/api/builds/no-such-build").status_code == 404
 
 
 def test_studio_reports_the_bridge_being_offline_rather_than_erroring(client):
@@ -189,3 +195,107 @@ def test_studio_reports_the_bridge_being_offline_rather_than_erroring(client):
     assert body["plugin_connected"] in (True, False)
     if body["bridge"] == "offline":
         assert "python -m app.bridge.run" in body["detail"]
+
+
+# ---- the build orchestrator ------------------------------------------------
+
+def test_a_build_of_an_unready_blueprint_fails_the_request(client, store, monkeypatch):
+    """Rather than failing inside a background task nobody is watching yet."""
+    from app.blueprint import api
+
+    created = store.create(audit_id="audit-1", title="Lab")
+    monkeypatch.setattr(api, "_store", lambda: (store, store.factory))
+
+    response = client.post("/api/builds", json={"blueprint_id": created.id, "token": "t"})
+
+    assert response.status_code == 409
+    assert "ready" in response.text
+
+
+def test_build_history_is_newest_first_and_carries_the_spec_it_came_from(session_factory):
+    """Reproducibility: a build says which specification revision and content
+    hash it was made from, so two builds can be told apart."""
+    from app.blueprint.builds import BuildRecord, list_builds
+    from app.blueprint.schemas import Blueprint, GameBuildSpecification, BlueprintConfig
+
+    plan = Blueprint(id="bp", project_id="p", audit_id="a", title="Lab")
+    spec = GameBuildSpecification(spec_id="s1", project_id="p", blueprint_id="bp",
+                                  idea_id="a", title="Lab", config=BlueprintConfig(),
+                                  revision=7, content_hash="abc123")
+    for identifier in ("build-1", "build-2"):
+        BuildRecord(session_factory, identifier).create(plan, spec)
+
+    history = list_builds(session_factory)
+
+    assert len(history) == 2
+    assert history[0]["spec_revision"] == 7
+    assert history[0]["content_hash"] == "abc123"
+
+
+def test_a_build_moves_only_through_legal_states(session_factory):
+    from app.blueprint.builds import BuildRecord
+    from app.blueprint.schemas import Blueprint, BlueprintConfig, BuildStatus, GameBuildSpecification
+    from app.blueprint.transitions import IllegalTransition
+
+    plan = Blueprint(id="bp", project_id="p", audit_id="a", title="Lab")
+    spec = GameBuildSpecification(spec_id="s", project_id="p", blueprint_id="bp",
+                                  idea_id="a", title="Lab", config=BlueprintConfig())
+    record = BuildRecord(session_factory, "build-x")
+    record.create(plan, spec)
+
+    record.move(BuildStatus.PLANNING)
+    with pytest.raises(IllegalTransition):
+        record.move(BuildStatus.SUCCEEDED)
+
+
+def test_every_recorded_event_came_from_something_that_happened(session_factory):
+    """Section 28: no log lines written to make the UI look alive."""
+    from app.blueprint.builds import BuildRecord
+    from app.blueprint.schemas import Blueprint, BlueprintConfig, BuildStatus, GameBuildSpecification
+
+    plan = Blueprint(id="bp", project_id="p", audit_id="a", title="Lab")
+    spec = GameBuildSpecification(spec_id="s", project_id="p", blueprint_id="bp",
+                                  idea_id="a", title="Lab", config=BlueprintConfig())
+    record = BuildRecord(session_factory, "build-y")
+    assert record.create(plan, spec)["events"] == []
+
+    record.move(BuildStatus.PLANNING, "working it out")
+
+    events = record.read()["events"]
+    assert [event["stage"] for event in events] == ["planning"]
+    assert events[0]["detail"] == "working it out"
+
+
+def test_files_are_read_from_the_commit_the_gate_accepted(tmp_path):
+    """Not from the worktree, which is deleted when a run ends -- and the commit
+    is the thing six checks were run against."""
+    import subprocess
+
+    from app.blueprint.builds import files_on_branch
+
+    repo = tmp_path / "game"
+    (repo / "src" / "server").mkdir(parents=True)
+    (repo / "src" / "server" / "WaveService.luau").write_text("--!strict\nreturn {}\n",
+                                                              encoding="utf-8")
+    (repo / "notes.txt").write_text("not luau", encoding="utf-8")
+    for command in (["init", "-b", "main"], ["add", "-A"],
+                    ["-c", "user.name=t", "-c", "user.email=t@t.invalid",
+                     "commit", "-m", "first"]):
+        subprocess.run(["git", *command], cwd=repo, capture_output=True, check=True)
+
+    found = files_on_branch(repo, "main")
+
+    assert list(found) == ["src/server/WaveService.luau"]
+    assert found["src/server/WaveService.luau"].startswith("--!strict")
+
+
+def test_a_branch_that_does_not_exist_yields_nothing_rather_than_raising(tmp_path):
+    import subprocess
+
+    from app.blueprint.builds import files_on_branch
+
+    repo = tmp_path / "game"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, capture_output=True, check=True)
+
+    assert files_on_branch(repo, "no-such-branch") == {}

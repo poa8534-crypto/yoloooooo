@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import './blueprint.css'
 import {
   ApiError, blueprintApi,
-  type BlueprintConfig, type BlueprintView, type BuildResult, type BuildStarted,
+  type BlueprintConfig, type BlueprintView, type BuildStarted,
   type SpecificationView,
 } from './api'
 import { BuildSummary } from './BuildSummary'
@@ -36,6 +36,23 @@ const PLAYER_PRESETS: Array<[string, number, number]> = [
   ['Solo', 1, 1], ['1-4', 1, 4], ['4-8', 4, 8],
 ]
 
+// The backend's own state machine, in words. Every one of these is a state a
+// build can really be in (app/blueprint/schemas.py BuildStatus).
+const BUILD_STATUS_LABEL: Record<string, string> = {
+  queued: 'Queued',
+  planning: 'Working out what to build',
+  generating: 'The Engineer is writing systems',
+  validating: 'Reading what the gate accepted',
+  waiting_for_studio: 'Waiting for Studio',
+  syncing: 'Sending to Studio',
+  building: 'Studio is applying the build',
+  playtesting: 'Playtest starting',
+  succeeded: 'Build running in Roblox Studio',
+  partial: 'Built, with refusals',
+  failed: 'Build failed',
+  cancelled: 'Cancelled',
+}
+
 export function BlueprintWorkspace({ auditId, title, originalIdea, onClose }: {
   auditId: string
   title: string
@@ -49,7 +66,10 @@ export function BlueprintWorkspace({ auditId, title, originalIdea, onClose }: {
   const [error, setError] = useState('')
   const [spec, setSpec] = useState<SpecificationView | null>(null)
   const [build, setBuild] = useState<BuildStarted | null>(null)
-  const [result, setResult] = useState<BuildResult | null>(null)
+  // Real transitions from the backend, in order. Nothing is appended here to
+  // make the list look busy: if the build is quiet, the list is quiet.
+  const [events, setEvents] = useState<Array<{ stage: string; detail: string; status?: string }>>([])
+  const [buildStatus, setBuildStatus] = useState('')
   const studio = useStudio()
 
   const run = useCallback(async function <T>(label: string, work: () => Promise<T>) {
@@ -124,23 +144,23 @@ export function BlueprintWorkspace({ auditId, title, originalIdea, onClose }: {
 
   async function startBuild() {
     if (!id) return
-    const started = await run('Sending the build to Studio', () =>
+    const started = await run('Starting the build', () =>
       blueprintApi.build(id, studio.token, true))
     if (!started) return
     setBuild(started)
-    setResult(null)
-    // Poll the bridge for what the plugin reported. Real operation results, not
-    // a progress animation: every line is something Studio actually did.
-    const poll = setInterval(async () => {
-      try {
-        const answer = await blueprintApi.buildResult(started.batch_id, studio.token)
-        setResult(answer)
-        if (answer.status !== 'pending') clearInterval(poll)
-      } catch {
-        // The plugin may not have reported yet; keep asking.
-      }
-    }, 1500)
-    setTimeout(() => clearInterval(poll), 120000)
+    setEvents([])
+    setBuildStatus('queued')
+    // The build takes minutes -- the Engineer writes a system at a time -- so
+    // it is followed rather than awaited. Every line that arrives is a state
+    // the backend actually moved through.
+    const stream = new EventSource(started.follow)
+    stream.onmessage = message => {
+      const event = JSON.parse(message.data)
+      if (event.status) setBuildStatus(event.status)
+      if (event.stage === 'done') { stream.close(); return }
+      setEvents(previous => [...previous, event])
+    }
+    stream.onerror = () => stream.close()
   }
 
   if (!view || !blueprint) {
@@ -349,25 +369,17 @@ export function BlueprintWorkspace({ auditId, title, originalIdea, onClose }: {
               {build && (
                 <section className="build-report" data-testid="build-report">
                   <h3>Build {build.build_id}</h3>
-                  <p>{build.files} file(s) sent as {build.operations} operation(s).</p>
-                  {build.missing_systems.length > 0 && (
-                    <div className="warning-box">
-                      <p>The specification asks for systems nobody has written yet, so they were
-                        not sent: {build.missing_systems.join(', ')}.</p>
-                    </div>
-                  )}
-                  {result && result.status === 'pending' &&
-                    <p role="status">Waiting for Studio to report</p>}
-                  {result && result.status !== 'pending' && <>
-                    <p><strong>{result.applied}</strong> applied, {result.skipped} unchanged,{' '}
-                      <strong>{result.failed_count}</strong> failed
-                      {result.place_name ? ` in ${result.place_name}` : ''}.</p>
-                    <ul className="operation-results">
-                      {(result.results ?? []).filter(entry => entry.status === 'failed')
-                        .map(entry => <li key={entry.operation_id}>
-                          <code>{entry.operation_id}</code> {entry.detail}</li>)}
-                    </ul>
-                  </>}
+                  <p className="build-status" data-status={buildStatus}>
+                    {BUILD_STATUS_LABEL[buildStatus] ?? buildStatus}</p>
+                  <ol className="build-log">
+                    {events.map((event, index) => (
+                      <li key={index} data-stage={event.stage}>
+                        <span className="build-log-stage">{event.stage}</span>
+                        <span>{event.detail}</span>
+                      </li>
+                    ))}
+                  </ol>
+                  {events.length === 0 && <p role="status">Waiting for the first step</p>}
                 </section>
               )}
             </section>

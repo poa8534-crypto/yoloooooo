@@ -128,14 +128,22 @@ export interface SpecificationView {
 }
 
 export interface BuildStarted {
-  batch_id: string
   build_id: string
-  operations: number
-  files: number
+  blueprint_id: string
+  follow: string
+}
+
+export interface BuildRecord {
+  id: string
+  title: string
+  status: string
   spec_revision: number
   content_hash: string
-  missing_systems: string[]
-  play: boolean
+  batch_id: string | null
+  operations: number
+  systems: Record<string, { status: string; detail?: string; reason?: string; branch?: string }>
+  events: Array<{ at: string; stage: string; detail: string }>
+  completed_at: string | null
 }
 
 export interface BuildResult {
@@ -228,6 +236,8 @@ export const blueprintApi = {
       method: 'POST', body: JSON.stringify({ blueprint_id: blueprintId, token, play }),
     }),
 
+  buildRecord: (buildId: string) => call<BuildRecord>(`/api/builds/${buildId}`),
+
   buildResult: (batchId: string, token: string) =>
-    call<BuildResult>(`/api/builds/${batchId}?token=${encodeURIComponent(token)}`),
+    call<BuildResult>(`/api/builds/batches/${batchId}?token=${encodeURIComponent(token)}`),
 }

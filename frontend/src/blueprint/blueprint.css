@@ -283,3 +283,38 @@
 .build-order { font-size: 0.85rem; color: #39414f; }
 .build-report { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid #e6e9ef; }
 .operation-results { font-size: 0.82rem; color: #b91c1c; }
+
+.build-status {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.build-status[data-status='succeeded'] { color: #0f766e; }
+.build-status[data-status='partial'] { color: #b45309; }
+.build-status[data-status='failed'] { color: #b91c1c; }
+
+.build-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+}
+.build-log li {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #f0f2f6;
+}
+.build-log-stage {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8892a4;
+}
+.build-log li[data-stage='system_refused'] .build-log-stage,
+.build-log li[data-stage='system_failed'] .build-log-stage,
+.build-log li[data-stage='failed'] .build-log-stage { color: #b45309; }
+.build-log li[data-stage='system_built'] .build-log-stage { color: #0f766e; }
