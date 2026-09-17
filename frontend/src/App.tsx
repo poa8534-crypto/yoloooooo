@@ -1,5 +1,6 @@
 import { ResearchReport, CandidateHistory, DesignDetails } from './ResearchReport'
 import { BlueprintWorkspace } from './blueprint/BlueprintWorkspace'
+import { EngineeringWorkspace } from './engineering/EngineeringWorkspace'
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { readRoute, routeHash, matchesDecision, RESEARCH_PHASES, researchPhase, type PageId } from './routing'
 
@@ -160,13 +161,14 @@ const REVIEW_REASON_MIN = 10
 
 const navigation: Array<{ group: string; items: Array<[PageId, string, string]> }> = [
   { group: 'Intelligence', items: [['home', '⌂', 'Command Center'], ['ideas', '◉', 'Idea Panel'], ['sources', '▦', 'Sources'], ['market', '◬', 'Market Pulse'], ['history', '≡', 'Agent History']] },
-  { group: 'Engine', items: [['matching', '⌘', 'Matching Engine'], ['meta', '◎', 'Meta Hunter'], ['scout', '◈', 'Venture Scout']] },
+  { group: 'Engine', items: [['matching', '⌘', 'Matching Engine'], ['meta', '◎', 'Meta Hunter'], ['scout', '◈', 'Venture Scout'], ['engineering', '◇', 'Engineering Agent']] },
   { group: 'System', items: [['calibration', '☷', 'Collection & Calibration'], ['health', '⌁', 'System Health']] },
 ]
 
 const pageNames: Record<PageId, string> = {
   home: 'Home', ideas: 'Ideas and game dossiers', sources: 'Sources', matching: 'Matching Engine',
-  meta: 'Meta Hunter', scout: 'Venture Scout', history: 'Agent History', market: 'Market Pulse', calibration: 'Collection & Calibration', health: 'System Health',
+  meta: 'Meta Hunter', scout: 'Venture Scout', engineering: 'Engineering Agent',
+  history: 'Agent History', market: 'Market Pulse', calibration: 'Collection & Calibration', health: 'System Health',
 }
 
 function describeError(detail: unknown, status: number): string {
@@ -1809,6 +1811,7 @@ export default function App() {
         {page === 'market' && <MarketPulsePage />}
         {page === 'meta' && <MetaHunterPage runs={runs} health={health} onStart={startResearch} onResume={resumeResearch} busy={busy} onInspectFact={inspectFact} />}
         {page === 'scout' && <VentureScoutPage candidates={candidates} />}
+        {page === 'engineering' && <EngineeringWorkspace onNavigate={page => navigate(page as PageId)} />}
         {page === 'calibration' && <CalibrationPage calibration={calibration} summary={summary} />}
         {page === 'health' && <HealthPage health={health} summary={summary} matching={matchingStatus} />}
       </main>

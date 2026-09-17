@@ -1,10 +1,10 @@
-export type PageId = 'home' | 'ideas' | 'sources' | 'history' | 'market' | 'matching' | 'meta' | 'scout' | 'calibration' | 'health'
-const pages = new Set(['home', 'ideas', 'sources', 'history', 'market', 'matching', 'meta', 'scout', 'calibration', 'health'])
-export type Route = { page: PageId; candidate: string; proposal: string; audit: string; run: string }
+export type PageId = 'home' | 'ideas' | 'sources' | 'history' | 'market' | 'matching' | 'meta' | 'scout' | 'engineering' | 'calibration' | 'health'
+const pages = new Set(['home', 'ideas', 'sources', 'history', 'market', 'matching', 'meta', 'scout', 'engineering', 'calibration', 'health'])
+export type Route = { page: PageId; candidate: string; proposal: string; audit: string; run: string; build: string }
 export function readRoute(hash = window.location.hash): Route {
   const [path, search = ''] = hash.replace(/^#\/?/, '').split('?')
   const params = new URLSearchParams(search)
-  return { page: pages.has(path) ? path as PageId : 'home', candidate: params.get('candidate') || '', proposal: params.get('proposal') || '', audit: params.get('audit') || '', run: params.get('run') || '' }
+  return { page: pages.has(path) ? path as PageId : 'home', candidate: params.get('candidate') || '', proposal: params.get('proposal') || '', audit: params.get('audit') || '', run: params.get('run') || '', build: params.get('build') || '' }
 }
 export function routeHash(page: PageId, params: Partial<Omit<Route, 'page'>> = {}): string {
   const query = new URLSearchParams()

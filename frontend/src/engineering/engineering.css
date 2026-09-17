@@ -1,0 +1,243 @@
+/* Engineering Agent.
+ *
+ * Light glass over a pale blue-lavender field. The blur separates layers
+ * without hiding them: this page is read at a glance while something is
+ * running, so contrast wins over effect everywhere the two disagree.
+ *
+ * Colour carries state and nothing else. Green means built, amber means
+ * refused, blue means working, grey means waiting.
+ */
+
+.engineering-workspace {
+  --glass: rgba(255, 255, 255, 0.72);
+  --glass-strong: rgba(255, 255, 255, 0.86);
+  --glass-border: rgba(148, 163, 199, 0.28);
+  --glass-shadow: 0 8px 32px rgba(76, 96, 140, 0.10);
+  --ink: #1f2733;
+  --ink-soft: #5a6478;
+  --accent: #2563eb;
+  --built: #0f766e;
+  --refused: #b45309;
+  --failed: #b91c1c;
+
+  position: relative;
+  min-height: 100%;
+  padding: 1.25rem;
+  color: var(--ink);
+  background:
+    radial-gradient(1100px 620px at 12% -10%, rgba(191, 210, 255, 0.55), transparent 62%),
+    radial-gradient(900px 520px at 92% 8%, rgba(214, 205, 255, 0.45), transparent 60%),
+    linear-gradient(180deg, #f6f8fd 0%, #eef2fb 100%);
+}
+
+.glass-panel {
+  background: var(--glass);
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  box-shadow: var(--glass-shadow);
+}
+
+.engineering-empty {
+  max-width: 520px;
+  margin: 12vh auto;
+  padding: 2rem;
+  text-align: center;
+}
+.engineering-empty h1 { margin: 0 0 0.5rem; font-size: 1.3rem; }
+.engineering-empty p { margin: 0 0 1.5rem; color: var(--ink-soft); line-height: 1.55; }
+
+.engineering-header {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+.engineering-eyebrow {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ink-soft);
+}
+.engineering-identity { display: flex; flex-direction: column; gap: 0.15rem; }
+.engineering-identity strong { font-size: 1.1rem; }
+.engineering-build-id { font-size: 0.74rem; color: var(--ink-soft); font-family: ui-monospace, monospace; }
+
+.build-selector { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.72rem; color: var(--ink-soft); }
+.build-selector select {
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+  font-size: 0.82rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 7px;
+  background: var(--glass-strong);
+}
+
+.engineering-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.10);
+  color: var(--accent);
+}
+.engineering-status .dot {
+  width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+}
+.engineering-status[data-status='succeeded'] { background: rgba(15, 118, 110, 0.12); color: var(--built); }
+.engineering-status[data-status='partial'] { background: rgba(180, 83, 9, 0.12); color: var(--refused); }
+.engineering-status[data-status='failed'] { background: rgba(185, 28, 28, 0.10); color: var(--failed); }
+
+.engineering-studio { display: flex; flex-direction: column; gap: 0.1rem; text-align: right; }
+.engineering-studio strong { font-size: 0.9rem; color: var(--ink-soft); }
+.engineering-studio[data-connected='true'] strong { color: var(--built); }
+.engineering-studio span:last-child { font-size: 0.74rem; color: var(--ink-soft); max-width: 260px; }
+
+.engineering-grid {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 320px;
+  grid-template-rows: minmax(360px, 1fr) 220px;
+  grid-template-areas:
+    'timeline map inspector'
+    'timeline activity inspector';
+  gap: 1rem;
+}
+@media (max-width: 1280px) {
+  .engineering-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'timeline' 'map' 'inspector' 'activity';
+    grid-template-rows: auto;
+  }
+}
+
+.build-timeline { grid-area: timeline; padding: 1rem; overflow: auto; }
+.engineering-map { grid-area: map; padding: 1rem; overflow: auto; }
+.engineering-inspector { grid-area: inspector; padding: 1rem 1.15rem; overflow: auto; }
+.engineering-activity { grid-area: activity; padding: 1rem; overflow: auto; }
+
+.build-timeline h2,
+.engineering-map h2,
+.engineering-inspector h2,
+.engineering-activity h2 {
+  margin: 0 0 0.75rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ink-soft);
+}
+.engineering-inspector h2 {
+  font-size: 1.02rem;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+.engineering-inspector h3 {
+  margin: 1rem 0 0.25rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-soft);
+}
+.engineering-inspector p { margin: 0; font-size: 0.86rem; line-height: 1.5; }
+.engineering-inspector ul { margin: 0; padding-left: 1.1rem; font-size: 0.84rem; line-height: 1.5; }
+.inspector-state { font-weight: 600; }
+.inspector-state[data-state='built'] { color: var(--built); }
+.inspector-state[data-state='building'] { color: var(--accent); }
+.inspector-state[data-state='refused'],
+.inspector-state[data-state='error'] { color: var(--refused); }
+.inspector-detail { color: var(--refused); }
+.inspector-criteria li { margin-bottom: 0.3rem; }
+
+.build-timeline ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.15rem; }
+.build-timeline button {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.build-timeline li[data-selected='true'] button {
+  background: rgba(37, 99, 235, 0.08);
+  border-color: rgba(37, 99, 235, 0.22);
+  color: var(--ink);
+}
+.timeline-mark { width: 1rem; text-align: center; }
+.build-timeline li[data-state='built'] .timeline-mark { color: var(--built); }
+.build-timeline li[data-state='building'] .timeline-mark { color: var(--accent); }
+.build-timeline li[data-state='refused'] .timeline-mark,
+.build-timeline li[data-state='error'] .timeline-mark { color: var(--refused); }
+.build-timeline li[data-state='building'] .timeline-name { color: var(--ink); font-weight: 600; }
+.timeline-progress { margin: 0.75rem 0 0; font-size: 0.76rem; color: var(--ink-soft); }
+
+.map-header { display: flex; align-items: baseline; gap: 1rem; }
+.map-current { margin-left: auto; font-size: 0.78rem; color: var(--accent); font-weight: 600; }
+.map-idle { color: var(--ink-soft); font-weight: 400; }
+
+.architecture-map { overflow: auto; }
+.map-edge { stroke: rgba(90, 110, 150, 0.35); stroke-width: 1.5; }
+.map-node { cursor: pointer; }
+.map-node rect {
+  fill: rgba(255, 255, 255, 0.82);
+  stroke: var(--glass-border);
+  stroke-width: 1;
+}
+.map-node-name { font-size: 12.5px; font-weight: 600; fill: var(--ink); }
+.map-node-meta { font-size: 10.5px; fill: var(--ink-soft); text-transform: capitalize; }
+.map-tick { font-size: 13px; fill: var(--built); }
+.map-warn { font-size: 13px; font-weight: 700; fill: var(--refused); }
+
+.map-node[data-state='built'] rect { stroke: rgba(15, 118, 110, 0.45); }
+.map-node[data-state='waiting'] rect { fill: rgba(255, 255, 255, 0.5); }
+.map-node[data-state='waiting'] .map-node-name { fill: var(--ink-soft); }
+.map-node[data-state='refused'] rect,
+.map-node[data-state='error'] rect { stroke: rgba(180, 83, 9, 0.55); fill: rgba(254, 243, 226, 0.75); }
+.map-node[data-state='building'] rect {
+  stroke: var(--accent);
+  stroke-width: 2;
+  fill: rgba(239, 246, 255, 0.95);
+}
+/* Only the system actually being written pulses, and only while the backend
+   says the build is running. */
+.map-node[data-state='building'] rect { animation: node-working 2.4s ease-in-out infinite; }
+@keyframes node-working {
+  0%, 100% { stroke-opacity: 1; }
+  50% { stroke-opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-node[data-state='building'] rect { animation: none; }
+}
+.map-node[data-selected='true'] rect { stroke: var(--accent); stroke-width: 2; }
+
+.activity-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; font-size: 0.8rem; }
+.activity-log li {
+  display: grid;
+  grid-template-columns: 62px 120px minmax(0, 1fr);
+  gap: 0.6rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid rgba(148, 163, 199, 0.16);
+}
+.activity-time { color: var(--ink-soft); font-family: ui-monospace, monospace; font-size: 0.74rem; }
+.activity-stage {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+}
+.activity-log li[data-stage='system_built'] .activity-stage { color: var(--built); }
+.activity-log li[data-stage='system_refused'] .activity-stage,
+.activity-log li[data-stage='system_failed'] .activity-stage,
+.activity-log li[data-stage='failed'] .activity-stage { color: var(--refused); }

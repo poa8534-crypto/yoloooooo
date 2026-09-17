@@ -458,6 +458,106 @@ def build(build_id: str) -> dict:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such build") from None
 
 
+@build_router.get("/{build_id}/graph")
+def build_graph(build_id: str) -> dict:
+    """The architecture as a graph, with each node's REAL state.
+
+    Nodes are the specification's systems and edges are their declared
+    dependencies -- both already exist, so nothing here invents structure.
+
+    A node's state is derived, never guessed:
+
+        built     the Engineer wrote it and the six-check gate accepted it
+        refused   it wrote it and the gate refused it
+        error     the run itself failed
+        building  it is the next system in build order and the build is running
+        waiting   everything else
+
+    "building" is the only inference, and it is a narrow one: the build order is
+    fixed and systems are written one at a time, so the first system with no
+    recorded outcome is the one being worked on. If the build is not running,
+    nothing is building -- a UI that pulses a node while nothing is happening is
+    the simulated progress this endpoint exists to avoid.
+    """
+    from ..db import SessionLocal
+    from .builds import read_build
+    from .transitions import is_running
+
+    try:
+        record = read_build(SessionLocal, build_id)
+    except KeyError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such build") from None
+
+    blueprint = _load(record["blueprint_id"])
+    try:
+        spec = compile_spec(blueprint)
+    except NotReady as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+
+    outcomes: dict[str, dict] = record.get("systems") or {}
+    running = is_running(BuildStatus(record["status"]))
+    current: str | None = None
+    if running:
+        for name in spec.build_order:
+            if name not in outcomes:
+                current = name
+                break
+
+    by_name = {system.name: system for system in spec.systems}
+    nodes = []
+    for name in spec.build_order:
+        system = by_name.get(name)
+        if system is None:
+            continue
+        outcome = outcomes.get(name)
+        if outcome is None:
+            state = "building" if name == current else "waiting"
+        elif outcome["status"] == "built":
+            state = "built"
+        elif outcome["status"] == "refused":
+            state = "refused"
+        else:
+            state = "error"
+        nodes.append({
+            "id": system.name, "name": system.name, "layer": system.layer.value,
+            "path": system.path, "purpose": system.purpose,
+            "acceptance_criteria": system.acceptance_criteria,
+            "depends_on": system.depends_on, "state": state,
+            "detail": (outcome or {}).get("reason") or (outcome or {}).get("detail") or "",
+            "branch": (outcome or {}).get("branch"),
+            "order": spec.build_order.index(name),
+        })
+
+    edges = [{"from": dependency, "to": node["id"]}
+             for node in nodes for dependency in node["depends_on"]
+             if dependency in by_name]
+
+    counts: dict[str, int] = {}
+    for node in nodes:
+        counts[node["state"]] = counts.get(node["state"], 0) + 1
+
+    return {
+        "build_id": build_id,
+        "status": record["status"],
+        "title": record["title"],
+        "spec_revision": record["spec_revision"],
+        "content_hash": record["content_hash"],
+        "goal": {
+            "title": blueprint.title,
+            "intent": blueprint.user_intent,
+            "included_features": spec.included_features,
+            "excluded_features": spec.excluded_features,
+            "constraints": spec.technical_constraints,
+            "acceptance_criteria_total": len(spec.acceptance_criteria),
+        },
+        "nodes": nodes,
+        "edges": edges,
+        "current": current,
+        "counts": {**counts, "total": len(nodes)},
+        "events": record["events"][-200:],
+    }
+
+
 @build_router.get("/{build_id}/events")
 async def build_events(build_id: str) -> StreamingResponse:
     """The build as it happens, over the SSE the rest of the app already uses.
