@@ -14,7 +14,7 @@ import { EngineeringWorkspace } from './EngineeringWorkspace'
 import {
   clusters, duration, layout,
   type BuildGraph, type Directive, type ExplorerRow, type GraphNode, type NodeState,
-  type Steering,
+  type Steering, type Toolchain,
 } from './api'
 
 function node(id: string, state: NodeState, depends: string[] = [], order = 0,
@@ -38,6 +38,19 @@ function directive(overrides: Partial<Directive> = {}): Directive {
 function steering(overrides: Partial<Steering> = {}): Steering {
   return {
     directives: [], reachable: ['InfectedService'], accepting: true, max_active: 6, ...overrides,
+  }
+}
+
+function toolchain(overrides: Partial<Toolchain> = {}): Toolchain {
+  return {
+    ready: true, missing: [],
+    tools: [
+      { name: 'agy', present: true, path: 'C:/agy/bin/agy.exe', version: '1.2.5',
+        detail: '', purpose: 'the primary model provider', required: true },
+      { name: 'stylua', present: true, path: 'C:/rokit/bin/stylua.exe', version: 'stylua 2.5.2',
+        detail: '', purpose: 'formatting', required: true },
+    ],
+    ...overrides,
   }
 }
 
@@ -96,8 +109,11 @@ function reply(body: unknown, status = 200) {
 }
 
 function serve(options: { builds?: unknown; graph?: BuildGraph; studio?: unknown
-  source?: unknown; steer?: unknown; steerStatus?: number } = {}) {
+  source?: unknown; steer?: unknown; steerStatus?: number; toolchain?: unknown } = {}) {
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.includes('/api/engineer/toolchain')) {
+      return reply(options.toolchain ?? toolchain())
+    }
     if (url.includes('/directives')) {
       return reply(options.steer ?? steering({ directives: [directive()] }),
         options.steerStatus ?? 200)
@@ -605,5 +621,79 @@ describe('mistakes that only show up at runtime', () => {
 
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('The Studio plugin is not connected.')
+  })
+})
+
+describe('the build machine', () => {
+  it('says the machine is ready without taking up the page to say it', async () => {
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    const machine = await screen.findByLabelText('Build machine')
+    await waitFor(() => expect(within(machine).getByText('Ready')).toBeTruthy())
+    // Collapsed: a panel that spends room saying "yes" stops being read.
+    expect(within(machine).queryByText('stylua')).toBeNull()
+  })
+
+  it('names the missing tool in the collapsed line', async () => {
+    // The whole point. This page is open on a different device from the one
+    // doing the work, so "agy is not installed" has to be legible without
+    // opening anything.
+    serve({ toolchain: toolchain({ ready: false, missing: ['agy', 'stylua'] }) })
+
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    const machine = await screen.findByLabelText('Build machine')
+    await waitFor(() =>
+      expect(within(machine).getByText('Missing agy, stylua')).toBeTruthy())
+  })
+
+  it('lists each tool with its version when opened', async () => {
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    const machine = await screen.findByLabelText('Build machine')
+    await waitFor(() => expect(within(machine).getByText('Ready')).toBeTruthy())
+
+    await userEvent.click(within(machine).getByRole('button'))
+
+    expect(within(machine).getByText('agy')).toBeTruthy()
+    expect(within(machine).getByText('1.2.5')).toBeTruthy()
+    expect(within(machine).getByText('stylua 2.5.2')).toBeTruthy()
+  })
+
+  it('shows the reason a tool is unusable rather than what it is for', async () => {
+    // A Rokit shim on PATH that cannot find its pinned tool is the failure
+    // this check exists for, and the fix is in the detail, not in the purpose.
+    serve({ toolchain: toolchain({ ready: false, missing: ['rojo'], tools: [
+      { name: 'rojo', present: false, path: '', version: '',
+        detail: "Failed to find tool 'rojo'. install it with Rokit",
+        purpose: 'the sourcemap', required: true }] }) })
+
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    const machine = await screen.findByLabelText('Build machine')
+    await waitFor(() => expect(within(machine).getByText(/Missing rojo/)).toBeTruthy())
+    await userEvent.click(within(machine).getByRole('button'))
+
+    expect(within(machine).getByText(/Failed to find tool/)).toBeTruthy()
+    expect(within(machine).queryByText('the sourcemap')).toBeNull()
+  })
+
+  it('says it cannot read the machine rather than claiming it is ready', async () => {
+    serve()
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/api/engineer/toolchain')) return reply({ detail: 'nope' }, 500)
+      if (url.includes('/graph')) return reply(graph())
+      if (url.includes('/api/builds')) {
+        return reply({ builds: [{ id: 'build-1', title: 'Lab', status: 'generating',
+          spec_revision: 4, content_hash: 'cf986b30', created_at: '2026-09-17T23:19:40',
+          completed_at: null }] })
+      }
+      return reply({ bridge: 'offline', plugin_connected: false, detail: 'offline' })
+    })
+
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    const machine = await screen.findByLabelText('Build machine')
+    await waitFor(() => expect(within(machine).getByText('Cannot be read')).toBeTruthy())
   })
 })

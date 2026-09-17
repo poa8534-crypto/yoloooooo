@@ -138,6 +138,24 @@ export interface StudioStatus {
   } | null
 }
 
+// What the machine that runs builds can do. Read from that machine, which is
+// usually not the one showing this page.
+export interface ToolReport {
+  name: string
+  present: boolean
+  path: string
+  version: string
+  detail: string
+  purpose: string
+  required: boolean
+}
+
+export interface Toolchain {
+  ready: boolean
+  missing: string[]
+  tools: ToolReport[]
+}
+
 export interface SystemSource {
   system: string
   state: string
@@ -165,6 +183,7 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const engineeringApi = {
   builds: () => call<{ builds: BuildSummaryRow[] }>('/api/builds'),
+  toolchain: () => call<Toolchain>('/api/engineer/toolchain'),
   graph: (buildId: string) => call<BuildGraph>(`/api/builds/${buildId}/graph`),
   studio: (token: string) =>
     call<StudioStatus>(`/api/studio${token ? `?token=${encodeURIComponent(token)}` : ''}`),

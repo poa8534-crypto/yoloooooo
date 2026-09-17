@@ -347,6 +347,33 @@ def specification(blueprint_id: str) -> dict:
     }
 
 
+engineer_router = APIRouter(prefix="/api/engineer", tags=["engineer"])
+
+
+def _toolchain() -> dict:
+    from ..engineer.runs import game_repo
+    from ..engineer.toolchain import inspect
+
+    settings = get_settings()
+    repo = game_repo(settings)
+    return inspect(repo=repo, definitions=repo / settings.luau_definitions_file).as_dict()
+
+
+@engineer_router.get("/toolchain")
+def toolchain() -> dict:
+    """Whether the machine that would run a build can actually run one.
+
+    The build is driven from a browser that may be on another device, so the
+    person pressing the button cannot see whether `agy` is installed on the
+    machine that does the work. This answers that from the machine itself,
+    resolving every tool exactly the way the gate resolves it.
+
+    It is read live rather than cached: a tool appears on PATH the moment it is
+    installed, and a cached "not ready" would outlive the fix.
+    """
+    return _toolchain()
+
+
 studio_router = APIRouter(prefix="/api/studio", tags=["studio"])
 
 
@@ -407,6 +434,18 @@ async def start_build(request: BuildRequest) -> dict:
     """
     from ..db import SessionLocal
     from .builds import BuildFailed, new_id, run_build
+
+    # First, before the blueprint is even looked at. "This machine cannot build
+    # anything" outranks "this blueprint is not ready", and it is the one the
+    # person cannot see: they are driving from a browser on another device, and
+    # a missing formatter would otherwise surface eight minutes in, after the
+    # run has spent an attempt on every system.
+    ready = _toolchain()
+    if not ready["ready"]:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "the build machine is missing: " + ", ".join(ready["missing"])
+            + ". Open the Engineering Agent to see what each one needs.")
 
     blueprint = _load(request.blueprint_id)
     try:

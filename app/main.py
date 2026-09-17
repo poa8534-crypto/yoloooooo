@@ -187,11 +187,14 @@ app.add_middleware(RedactedResponses)
 
 # The Blueprint stage: idea -> refined build -> specification. A router rather
 # than more routes in this file, which is long enough.
-from .blueprint.api import build_router, router as blueprint_router, studio_router  # noqa: E402
+from .blueprint.api import (  # noqa: E402
+    build_router, engineer_router, router as blueprint_router, studio_router,
+)
 
 app.include_router(blueprint_router)
 app.include_router(studio_router)
 app.include_router(build_router)
+app.include_router(engineer_router)
 
 
 @app.middleware("http")

@@ -5,6 +5,7 @@ import {
   type BuildGraph, type BuildSummaryRow, type GraphNode, type StudioStatus,
 } from './api'
 import { ArchitectureMap } from './ArchitectureMap'
+import { BuildMachine } from './BuildMachine'
 import { NodeInspector } from './NodeInspector'
 import { SteeringPanel } from './SteeringPanel'
 import { StudioExplorer } from './StudioExplorer'
@@ -45,6 +46,10 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
   const [selected, setSelected] = useState<GraphNode | null>(null)
   const [studio, setStudio] = useState<StudioStatus | null>(null)
   const [error, setError] = useState('')
+  // Whether the build list has come back yet. Without it, "no build yet" is
+  // also what the first paint says, so the empty state flashes on every visit
+  // and the panels below it mount twice.
+  const [listed, setListed] = useState(false)
   // A message and whether it is a failure. They were one string, so the
   // bridge refusing to open a script appeared in the box that means "done".
   const [notice, setNotice] = useState<{ text: string; failed: boolean } | null>(null)
@@ -58,6 +63,7 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
         if (!active && answer.builds.length) setActive(answer.builds[0].id)
       })
       .catch(caught => setError((caught as Error).message))
+      .finally(() => setListed(true))
   }, [active])
 
   const refresh = useCallback(async () => {
@@ -92,15 +98,21 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
     return () => clearInterval(timer)
   }, [token])
 
-  if (!active && !error) {
+  if (!active && !error && listed) {
     return (
-      <div className="engineering-empty panel">
-        <h1>Engineering Agent</h1>
-        <p>No build yet. Choose an idea in Venture Scout and turn it into a blueprint
-          to start one.</p>
-        <button type="button" className="primary" onClick={() => onNavigate('scout')}>
-          Open Venture Scout
-        </button>
+      <div className="engineering-workspace">
+        <div className="engineering-empty panel">
+          <h1>Engineering Agent</h1>
+          <p>No build yet. Choose an idea in Venture Scout and turn it into a blueprint
+            to start one.</p>
+          <button type="button" className="primary" onClick={() => onNavigate('scout')}>
+            Open Venture Scout
+          </button>
+        </div>
+        {/* Worth knowing here above all: this is where a first build is
+            started, and it is the moment the machine's readiness decides
+            whether the button will work. */}
+        <BuildMachine />
       </div>
     )
   }
@@ -167,6 +179,8 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
         {!studio?.plugin_connected && studio?.detail &&
           <span className="strip-detail">{studio.detail}</span>}
       </div>
+
+      <BuildMachine />
 
       <div className="context-strip">
         <span className="micro-label">Active generation context</span>

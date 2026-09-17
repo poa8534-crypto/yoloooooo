@@ -664,3 +664,49 @@
 .map-node[data-state='existing'] .map-node-name { fill: var(--ink-soft); }
 .map-legend span[data-state='existing']::before { background: transparent; border: 1px dashed var(--ink-faint); }
 .plan-list li[data-state='existing'] .plan-mark { color: var(--ink-faint); }
+
+/* ---- the build machine --------------------------------------------------- */
+
+.build-machine {
+  margin-bottom: 0.5rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.build-machine[data-ready='false'] { border-color: rgba(180, 83, 9, 0.4); }
+
+.machine-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  padding: 0.45rem 0.85rem;
+  font: inherit;
+  text-align: left;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.machine-summary strong { font-size: 0.78rem; color: var(--built); }
+.build-machine[data-ready='false'] .machine-summary strong { color: var(--refused); }
+.machine-note { font-size: 0.7rem; color: var(--ink-faint); }
+.machine-chevron { margin-left: auto; color: var(--ink-faint); font-size: 0.7rem; }
+.machine-error { margin: 0; padding: 0 0.85rem 0.5rem; font-size: 0.72rem; color: var(--refused); }
+
+.tool-list { list-style: none; margin: 0; padding: 0.25rem 0.5rem 0.6rem; }
+.tool-list li {
+  display: grid;
+  grid-template-columns: 1rem 130px 110px minmax(0, 1fr);
+  gap: 0.5rem;
+  padding: 0.22rem 0.35rem;
+  font-size: 0.74rem;
+  border-top: 1px solid #f1f4f9;
+}
+.tool-mark { color: var(--built); text-align: center; }
+.tool-list li[data-present='false'] .tool-mark { color: var(--refused); }
+.tool-name { color: var(--ink); }
+.tool-version { color: var(--ink-soft); font-family: var(--mono); font-size: 0.7rem; }
+.tool-detail { color: var(--ink-faint); overflow-wrap: anywhere; }
+.tool-list li[data-present='false'] .tool-detail { color: var(--refused); }
