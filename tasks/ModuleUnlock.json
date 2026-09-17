@@ -1,0 +1,16 @@
+{
+  "system": "ModuleUnlock",
+  "goal": "Decide whether a player may unlock a lab module and record it when they do. Each module costs resources and may require an earlier module, so the rules live in one place rather than being repeated by callers.",
+  "acceptance_criteria": [
+    "A ModuleScript at src/server/ModuleUnlock.luau returns a table with CanUnlock and Unlock functions, all annotated.",
+    "An exported type describes a module definition: its id, its resource cost and the module it requires, if any.",
+    "CanUnlock returns both a boolean and a reason string, so a caller can tell the player why it was refused.",
+    "Unlock refuses a module the player has already unlocked, and refuses one whose requirement is unmet.",
+    "Every file begins with --!strict and the whole project passes scripts/verify.ps1."
+  ],
+  "audit_id": "f2f84b07-23b8-4df5-9755-d77f9cffe4fb",
+  "notes": [
+    "Keep it small: one module, under 120 lines. A short answer is a correct answer more often.",
+    "Return only the files you create. Do not return DataService.luau or any file you are not changing."
+  ]
+}

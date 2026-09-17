@@ -1,0 +1,16 @@
+{
+  "system": "ResourceService",
+  "goal": "Track each player's scarce resources for the Sanctuary lab -- scrap, biomass and power -- on the server only. Other systems add resources when a player gathers them and spend resources when a player builds or researches, and a spend that cannot be afforded fails without changing anything.",
+  "acceptance_criteria": [
+    "A ModuleScript at src/server/ResourceService.luau returns a table with Add, Spend, Get and Clear functions, all annotated.",
+    "Amounts are validated: a non-integer, zero, negative or non-finite amount is refused rather than applied.",
+    "Spend is all-or-nothing and returns whether it succeeded; a partial spend is never written.",
+    "Clear drops a player's counts when they leave, wired through Players.PlayerRemoving.",
+    "Every file begins with --!strict and the whole project passes scripts/verify.ps1."
+  ],
+  "audit_id": "f2f84b07-23b8-4df5-9755-d77f9cffe4fb",
+  "notes": [
+    "Keep it small: one module, under 120 lines. A short answer is a correct answer more often.",
+    "Return only the files you create. Do not return DataService.luau or any file you are not changing."
+  ]
+}

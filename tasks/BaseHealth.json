@@ -1,0 +1,16 @@
+{
+  "system": "BaseHealth",
+  "goal": "Hold the Sanctuary's structural health for a round. Infected damage it, players repair it, and the round is lost when it reaches zero. Only the server may change it.",
+  "acceptance_criteria": [
+    "A ModuleScript at src/server/BaseHealth.luau returns a table with Damage, Repair, Get and Reset functions, all annotated.",
+    "Health is clamped between zero and a maximum; damage or repair beyond the bounds does not move it past them.",
+    "Damage and Repair validate their amount and refuse a negative, zero or non-finite value.",
+    "A callback can be registered for the moment health reaches zero, and it fires once per round, not once per damage call.",
+    "Every file begins with --!strict and the whole project passes scripts/verify.ps1."
+  ],
+  "audit_id": "f2f84b07-23b8-4df5-9755-d77f9cffe4fb",
+  "notes": [
+    "Keep it small: one module, under 120 lines. A short answer is a correct answer more often.",
+    "Return only the files you create. Do not return DataService.luau or any file you are not changing."
+  ]
+}

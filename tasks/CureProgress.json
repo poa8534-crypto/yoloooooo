@@ -1,0 +1,16 @@
+{
+  "system": "CureProgress",
+  "goal": "Track linear cure research progress: a player contributes research points toward the current cure stage, and completing a stage advances them to the next one. The final stage completes the cure.",
+  "acceptance_criteria": [
+    "A ModuleScript at src/server/CureProgress.luau returns a table with Contribute, GetStage and IsComplete functions, all annotated.",
+    "An exported type describes a stage: its name and the research points it needs.",
+    "Contribute validates the amount and carries leftover points into the next stage rather than discarding them.",
+    "Contributing to a completed cure is refused rather than advancing past the last stage.",
+    "Every file begins with --!strict and the whole project passes scripts/verify.ps1."
+  ],
+  "audit_id": "f2f84b07-23b8-4df5-9755-d77f9cffe4fb",
+  "notes": [
+    "Keep it small: one module, under 120 lines. A short answer is a correct answer more often.",
+    "Return only the files you create. Do not return DataService.luau or any file you are not changing."
+  ]
+}
