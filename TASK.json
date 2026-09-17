@@ -1,0 +1,14 @@
+{
+  "audit_id": "f2f84b07-23b8-4df5-9755-d77f9cffe4fb",
+  "system": "DataService",
+  "goal": "Persist each player's Sanctuary Research progress across sessions: the lab modules they have unlocked, their stored resources, and the cures they have completed. Load a profile when the player joins, keep the live copy in memory, and save on leave and on server shutdown so no run of the lab is lost to a restart.",
+  "acceptance_criteria": [
+    "A ModuleScript at src/server/DataService.luau returns a table with Load, Save, Get and Release functions, all annotated.",
+    "A profile has a declared Luau type with explicit fields for unlocked lab modules, resource counts and completed cures, and a default profile is returned for a player who has never played.",
+    "DataStoreService is reached through the generated Services module; no file other than Services.luau mentions the game global, and no file reaches through the script global except as require(script.Parent.X).",
+    "Every DataStore call is wrapped so a thrown request is caught and retried a bounded number of times, and a load that never succeeds returns the default profile rather than nil.",
+    "A session lock stops two servers writing the same profile at once, and a lock held by a dead session is reclaimed rather than blocking the player forever.",
+    "Data is saved when the player leaves and again on BindToClose, and Release drops the in-memory copy so a rejoining player is not served a stale table.",
+    "Every file begins with --!strict and the whole project passes scripts/verify.ps1."
+  ]
+}

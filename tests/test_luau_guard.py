@@ -137,9 +137,16 @@ def test_a_service_that_does_not_exist_is_rejected():
 def test_check_project_exempts_only_the_services_module(tmp_path):
     shared = tmp_path / "shared"
     shared.mkdir()
-    (shared / "Services.luau").write_text(render_services_module(["Players"]), encoding="utf-8")
-    (shared / "Copy.luau").write_text(render_services_module(["Players"]), encoding="utf-8")
-    (tmp_path / "Ok.luau").write_text("--!strict\nreturn {}\n", encoding="utf-8")
+    # `newline=""` on every write. `write_text` translates \n to \r\n on
+    # Windows, and the Services module's check is byte-exact, so without it
+    # this passes on macOS and fails here with `services-module-edited` for a
+    # file the generator itself produced. Same change as 8a36082 on main.
+    def write(path, text):
+        path.write_text(text, encoding="utf-8", newline="")
+
+    write(shared / "Services.luau", render_services_module(["Players"]))
+    write(shared / "Copy.luau", render_services_module(["Players"]))
+    write(tmp_path / "Ok.luau", "--!strict\nreturn {}\n")
 
     violations = check_project(tmp_path, shared / "Services.luau", KNOWN)
 

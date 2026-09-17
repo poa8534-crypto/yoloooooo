@@ -92,3 +92,93 @@ def test_reset_discards_a_previous_attempt(game_repo, tmp_path):
 def test_worktree_name_must_be_a_slug(game_repo, tmp_path):
     with pytest.raises(ValueError):
         Worktree.create(game_repo, "master", tmp_path, "../escape")
+
+
+# ---- inputs git does not carry ---------------------------------------------
+
+def test_the_worktree_gets_the_files_the_checks_need(tmp_path):
+    """`globalTypes.None.d.luau` is generated and gitignored, so a fresh
+    worktree has none. luau-lsp answers a missing definitions file with an
+    ERROR line and then exits 0, and `Services.Players:MadeUp()` drew no
+    diagnostic at all in that state -- the one mistake the Services module
+    exists to catch. verify.ps1 now refuses when it is absent, so without this
+    copy every engineer run stops at preflight.
+    """
+    repo = tmp_path / "game"
+    repo.mkdir()
+    git("init", "-q", "-b", "master", cwd=repo)
+    git("config", "user.email", "t@t.invalid", cwd=repo)
+    git("config", "user.name", "t", cwd=repo)
+    (repo / ".gitignore").write_text("globalTypes.None.d.luau\nroblox.yml\n", encoding="utf-8")
+    (repo / "keep.txt").write_text("tracked\n", encoding="utf-8")
+    git("add", "-A", cwd=repo)
+    git("commit", "-qm", "base", cwd=repo)
+    # Generated after the commit, exactly as the real ones are.
+    (repo / "globalTypes.None.d.luau").write_text("declare extern type X\n", encoding="utf-8")
+    (repo / "roblox.yml").write_text("base: lua51\n", encoding="utf-8")
+
+    tree = Worktree.create(repo, "master", tmp_path / "trees", "probe-run")
+
+    assert (tree.path / "globalTypes.None.d.luau").is_file(), "the type check has no definitions"
+    assert (tree.path / "roblox.yml").is_file()
+    assert (tree.path / "globalTypes.None.d.luau").read_text(encoding="utf-8") == "declare extern type X\n"
+
+
+def test_a_reset_between_attempts_keeps_them(tmp_path):
+    """`reset()` runs `git clean -fd`, which leaves ignored files alone. If
+    that ever changes, every attempt after the first loses its type
+    definitions and the gate starts refusing for the wrong reason."""
+    repo = tmp_path / "game"
+    repo.mkdir()
+    git("init", "-q", "-b", "master", cwd=repo)
+    git("config", "user.email", "t@t.invalid", cwd=repo)
+    git("config", "user.name", "t", cwd=repo)
+    (repo / ".gitignore").write_text("globalTypes.None.d.luau\n", encoding="utf-8")
+    git("add", "-A", cwd=repo)
+    git("commit", "-qm", "base", cwd=repo)
+    (repo / "globalTypes.None.d.luau").write_text("definitions\n", encoding="utf-8")
+
+    tree = Worktree.create(repo, "master", tmp_path / "trees", "probe-reset")
+    (tree.path / "src").mkdir(parents=True, exist_ok=True)
+    (tree.path / "src" / "Junk.luau").write_text("--!strict\nreturn {}\n", encoding="utf-8")
+
+    tree.reset()
+
+    assert not (tree.path / "src" / "Junk.luau").exists(), "the attempt's files survived the reset"
+    assert (tree.path / "globalTypes.None.d.luau").is_file(), "the reset removed the definitions"
+
+
+def test_a_repo_without_them_still_builds_a_worktree(tmp_path):
+    """Copying is best effort: the gate reports the absence with the command
+    to fix it, which is a better message than a crash in worktree creation."""
+    repo = tmp_path / "game"
+    repo.mkdir()
+    git("init", "-q", "-b", "master", cwd=repo)
+    git("config", "user.email", "t@t.invalid", cwd=repo)
+    git("config", "user.name", "t", cwd=repo)
+    (repo / "keep.txt").write_text("tracked\n", encoding="utf-8")
+    git("add", "-A", cwd=repo)
+    git("commit", "-qm", "base", cwd=repo)
+
+    tree = Worktree.create(repo, "master", tmp_path / "trees", "probe-bare")
+
+    assert tree.path.is_dir()
+    assert not (tree.path / "globalTypes.None.d.luau").exists()
+
+
+def test_sources_are_read_back_with_the_line_endings_they_were_written_with(game_repo, tmp_path):
+    """Git for Windows defaults core.autocrlf to true at system level, so a
+    worktree checkout returns CRLF for a file committed with LF. Reading it
+    raw showed the model CRLF sources while `.gitattributes` forces LF and
+    stylua.toml declares Unix endings -- a contradiction it could not see.
+    Writes were already normalised; only the read was asymmetric.
+    """
+    git("config", "core.autocrlf", "true", cwd=game_repo)
+    tree = Worktree.create(game_repo, "master", tmp_path / "worktrees", "eol-abcd1234")
+    try:
+        sources = tree.read_existing_sources()
+    finally:
+        tree.remove(delete_branch=True)
+
+    assert sources == {"src/shared/Hello.luau": "--!strict\nreturn {}\n"}
+    assert all("\r" not in text for text in sources.values())

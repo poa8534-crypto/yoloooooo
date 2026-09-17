@@ -35,6 +35,21 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 _WINDOWS_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
                      *(f"lpt{i}" for i in range(1, 10))}
 _SERVICE_NAME = re.compile(r'^\t[A-Za-z_]\w* = game:GetService\("([A-Za-z_]\w*)"\)', re.MULTILINE)
+# Inputs the checks need that git does not carry. They are generated and
+# gitignored, so `git worktree add` produces a tree without them, and luau-lsp
+# answers a missing definitions file with
+#
+#     [ERROR] Failed to read definitions file ... Extended types will not be
+#             provided
+#
+# and then exits 0. Measured in a fresh worktree: `Services.Players:MadeUp()`
+# drew no diagnostic at all, which is the one mistake the Services module
+# exists to catch. `verify.ps1` now refuses when the file is absent, so without
+# this copy every run would stop at preflight.
+#
+# `reset()` between attempts runs `git clean -fd`, which leaves ignored files
+# alone, so copying once at creation is enough.
+CARRIED_INTO_WORKTREE = ("globalTypes.None.d.luau", "roblox.yml")
 GIT_IDENTITY = ("-c", "user.name=Roblox Engineer Agent", "-c", "user.email=engineer@roblox-venture-agents.invalid")
 
 
@@ -70,6 +85,20 @@ def normalize_source(text: str) -> bytes:
     return (text if text.endswith("\n") else text + "\n").encode("utf-8")
 
 
+def read_normalized(file: Path) -> str:
+    """A file's text with the line endings writes already use.
+
+    Git for Windows defaults `core.autocrlf` to true at system level, so a
+    worktree checkout hands back CRLF for content committed with LF. Read raw,
+    that showed the model CRLF sources while `.gitattributes` forces LF and
+    stylua.toml declares Unix endings -- a contradiction it could not see and
+    did not create. `normalize_source` already did this for writes; every read
+    goes through here so the round trip cannot go asymmetric again.
+    """
+    text = file.read_bytes().decode("utf-8", "replace")
+    return text.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def services_in(source: str) -> set[str]:
     return set(_SERVICE_NAME.findall(source))
 
@@ -101,6 +130,10 @@ class Worktree:
         path = root / name
         branch = f"engineer/{name}"
         git(["worktree", "add", "-b", branch, str(path), base_commit], repo)
+        for carried in CARRIED_INTO_WORKTREE:
+            source = repo / carried
+            if source.is_file():
+                shutil.copy2(source, path / carried)
         return cls(repo=repo, path=path, branch=branch, base_commit=base_commit)
 
     def reset(self) -> None:
@@ -109,21 +142,22 @@ class Worktree:
         git(["clean", "-fdq"], self.path)
 
     def read_existing_sources(self) -> dict[str, str]:
+        """What the model is shown of the tree it is extending."""
         files: dict[str, str] = {}
         for root in READABLE_ROOTS:
             directory = self.path / root
             if directory.is_dir():
                 for file in sorted(directory.rglob("*.luau")):
-                    files[file.relative_to(self.path).as_posix()] = file.read_bytes().decode("utf-8", "replace")
+                    files[file.relative_to(self.path).as_posix()] = read_normalized(file)
         return files
 
     def project_file(self) -> str:
         file = self.path / PROJECT_FILE
-        return file.read_bytes().decode("utf-8", "replace") if file.is_file() else ""
+        return read_normalized(file) if file.is_file() else ""
 
     def existing_services(self) -> set[str]:
         module = self.path / SERVICES_PATH
-        return services_in(module.read_bytes().decode("utf-8", "replace")) if module.is_file() else set()
+        return services_in(read_normalized(module)) if module.is_file() else set()
 
     def write(self, files: dict[str, str], services: set[str]) -> list[str]:
         written: list[str] = []
