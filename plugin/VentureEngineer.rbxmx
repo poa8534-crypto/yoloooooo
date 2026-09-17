@@ -1,4 +1,9 @@
---!nonstrict
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+	<External>null</External>
+	<External>nil</External>
+	<Item class="Script" referent="RBX1A9B2DD175F8436F8E0F0BFDB5527DC2">
+		<Properties>
+			<ProtectedString name="Source"><![CDATA[--!nonstrict
 --[[
 	Venture Engineer -- the Studio plugin.
 
@@ -25,21 +30,7 @@ local HttpService = game:GetService("HttpService")
 local ScriptEditorService = game:GetService("ScriptEditorService")
 local RunService = game:GetService("RunService")
 local Selection = game:GetService("Selection")
-
---[[
-	Fetched when it is needed, not at load.
-
-	`game:GetService` throws for a service this Studio build does not have, and a
-	throw at the top of a plugin means no toolbar, no panel, and no clue why --
-	the plugin simply is not in the Plugins menu. Anything optional is looked up
-	inside a pcall at the point of use.
-]]
-local function studioTestService(): Instance?
-	local ok, service = pcall(function()
-		return game:GetService("StudioTestService")
-	end)
-	return if ok then service else nil
-end
+local StudioTestService = game:GetService("StudioTestService")
 
 local PLUGIN_VERSION = "0.1.0"
 local PROTOCOL_VERSION = 1
@@ -504,15 +495,8 @@ local function applyStartPlaytest(operation: any): (string, string, boolean)
 		return "applied", "run mode started", false
 	end
 
-	local service = studioTestService()
-	if service == nil then
-		return "failed",
-			"this Studio has no StudioTestService, so the plugin cannot start Play mode. "
-				.. "Use mode 'run', or press Play in Studio",
-			false
-	end
 	local ok, err = pcall(function()
-		(service :: any):ExecutePlayModeAsync()
+		StudioTestService:ExecutePlayModeAsync()
 	end)
 	if not ok then
 		return "failed", `could not start play mode: {tostring(err)}`, false
@@ -783,3 +767,20 @@ render()
 if token() ~= "" then
 	start()
 end
+]]></ProtectedString>
+			<bool name="Disabled">false</bool>
+			<Content name="LinkedSource"><null></null></Content>
+			<token name="RunContext">0</token>
+			<string name="ScriptGuid">{C983CAA1-3A08-45A0-8922-A092C758A685}</string>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">VentureEngineer</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<SharedString name="Tags">yuZpQdnvvUBOTYh1jqZ2cA==</SharedString>
+		</Properties>
+	</Item>
+	<SharedStrings>
+		<SharedString md5="yuZpQdnvvUBOTYh1jqZ2cA=="></SharedString>
+	</SharedStrings>
+</roblox>
