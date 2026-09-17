@@ -1,4 +1,5 @@
 import { ResearchReport, CandidateHistory, DesignDetails } from './ResearchReport'
+import { BlueprintWorkspace } from './blueprint/BlueprintWorkspace'
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { readRoute, routeHash, matchesDecision, RESEARCH_PHASES, researchPhase, type PageId } from './routing'
 
@@ -1030,7 +1031,11 @@ function ScoutQueuePanel({ queue, chosen, onToggle, onClose, onRun, busy }: {
     </aside></div>
 }
 
-function ResultDetail({ card, onClose }: { card: ResultCard; onClose: () => void }) {
+function ResultDetail({ card, onClose, onProceed }: {
+  card: ResultCard
+  onClose: () => void
+  onProceed: (card: ResultCard, audit: AuditResult | null) => void
+}) {
   const [audit, setAudit] = useState<AuditResult | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
@@ -1078,6 +1083,16 @@ function ResultDetail({ card, onClose }: { card: ResultCard; onClose: () => void
             <dt>Audited</dt><dd>{formatDate(card.created_at)}</dd>
             <dt>Audit record</dt><dd><code>{card.audit_id}</code></dd></dl>
 
+          {/* The modal used to end here, as a report with nowhere to go. The
+              analysis above is unchanged; this is the way out of it. */}
+          <section className="proceed-section">
+            <h2>Ready to take this further?</h2>
+            <p>Refine this idea into a playable Roblox prototype: choose the features you
+              want, decide the systems, and build it into Studio.</p>
+            <button type="button" className="proceed-button" onClick={() => onProceed(card, audit)}>
+              Proceed with this idea →
+            </button>
+          </section>
         </>}
       </div></aside></div>
 }
@@ -1142,6 +1157,11 @@ function ScoutQueueSection() {
   const [panelOpen, setPanelOpen] = useState(false)
   const [resultTab, setResultTab] = useState('latest')
   const [detail, setDetail] = useState<ResultCard | null>(null)
+  // The blueprint the person proceeded into, with the audit it came from. Held
+  // here rather than in a route so the Scout page underneath keeps its state:
+  // closing the blueprint returns to exactly the list they were reading.
+  const [blueprintFor, setBlueprintFor] =
+    useState<{ card: ResultCard; audit: AuditResult | null } | null>(null)
   const [jobs, setJobs] = useState<AuditJob[]>([])
   const [labels, setLabels] = useState<Record<string, JobLabel>>({})
   const [openJobId, setOpenJobId] = useState('')
@@ -1343,7 +1363,23 @@ function ScoutQueueSection() {
         return next
       })}
       onClose={() => setPanelOpen(false)} onRun={run} />}
-    {detail && <ResultDetail card={detail} onClose={() => setDetail(null)} />}
+    {detail && <ResultDetail card={detail} onClose={() => setDetail(null)}
+      onProceed={(card, audit) => {
+        // The idea stays selected: the blueprint modifies it rather than
+        // replacing it, and the Scout analysis is still one Close away.
+        setDetail(null)
+        setBlueprintFor({ card, audit })
+      }} />}
+    {blueprintFor && <div className="modal-scrim">
+      <BlueprintWorkspace auditId={blueprintFor.card.audit_id}
+        title={blueprintFor.card.concept_title}
+        originalIdea={{
+          core_loop: blueprintFor.audit?.proposal?.core_loop ?? blueprintFor.card.core_loop,
+          differentiator: blueprintFor.audit?.proposal?.differentiator,
+          risks: blueprintFor.audit?.risks ?? [],
+        }}
+        onClose={() => setBlueprintFor(null)} />
+    </div>}
     <BackgroundWorkDrawer job={watched} events={watched?.events || []} open={!!watched}
       label="Audit progress" onClose={() => setOpenJobId('')}
       onCancel={() => watched && act(`/api/audit-jobs/${watched.id}/cancel`, 'Cancel')}
