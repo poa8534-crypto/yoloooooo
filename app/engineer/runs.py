@@ -160,7 +160,9 @@ def build_client(settings: Settings, **kwargs):
     if settings.engineer_provider == "ollama":
         return OllamaClient(base_url=settings.engineer_ollama_base_url,
                             timeout=settings.engineer_ollama_timeout_seconds,
-                            num_ctx=settings.engineer_ollama_context, **kwargs)
+                            num_ctx=settings.engineer_ollama_context,
+                            repeat_penalty=settings.engineer_ollama_repeat_penalty,
+                            top_p=settings.engineer_ollama_top_p, **kwargs)
     return GeminiClient(keys=engineer_keys(settings), base_url=settings.engineer_gemini_base_url,
                         timeout=settings.engineer_gemini_timeout_seconds,
                         max_output_tokens=settings.engineer_gemini_max_output_tokens, **kwargs)

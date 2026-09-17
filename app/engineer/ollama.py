@@ -53,6 +53,18 @@ class OllamaClient:
     timeout: float = 900.0
     num_ctx: int = 16_384
     temperature: float = 0.2
+    # Sent explicitly, never inherited. Ollama applies whatever PARAMETER lines
+    # the installed Modelfile carries for anything the request leaves out, so a
+    # model someone repackaged locally can change how the engineer generates
+    # without a line of this project changing. `venture-coder:14b` was found
+    # carrying `repeat_penalty 1.15` for exactly that reason.
+    #
+    # 1.0 is no penalty, which is the right default for code: a repetition
+    # penalty discounts tokens already in the context, and code repeats tokens
+    # constantly -- `end`, `local`, `--`, a tab. Penalising them is penalising
+    # correct Luau.
+    repeat_penalty: float = 1.0
+    top_p: float = 0.9
     client: httpx.AsyncClient | None = None
     on_usage: UsageHook | None = None
     clock: Callable[[], float] = time.monotonic
@@ -85,7 +97,8 @@ class OllamaClient:
             "stream": False,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": prompt}],
-            "options": {"num_ctx": self.num_ctx, "temperature": self.temperature},
+            "options": {"num_ctx": self.num_ctx, "temperature": self.temperature,
+                        "repeat_penalty": self.repeat_penalty, "top_p": self.top_p},
         }
         if json_output:
             # Ollama's JSON mode. The loop parses the answer itself and rejects

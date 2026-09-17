@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     engineer_ollama_base_url: str = "http://127.0.0.1:11434"
     engineer_ollama_models: str = "venture-coder:14b,qwen2.5-coder:14b,qwen3:14b"
     engineer_ollama_context: int = Field(default=16_384, ge=2048)
+    # Sent with every request so an installed Modelfile cannot change how the
+    # engineer generates. 1.0 is no repetition penalty, which is what code
+    # wants: see app/engineer/ollama.py.
+    engineer_ollama_repeat_penalty: float = Field(default=1.0, ge=1.0, le=2.0)
+    engineer_ollama_top_p: float = Field(default=0.9, gt=0.0, le=1.0)
     engineer_ollama_timeout_seconds: float = Field(default=900.0, gt=0)
     engineer_gemini_timeout_seconds: float = Field(default=900.0, gt=0)
     engineer_gemini_max_output_tokens: int = Field(default=65_536, ge=1024)
