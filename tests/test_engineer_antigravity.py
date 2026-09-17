@@ -2,11 +2,14 @@
 
 `agy` is an agent harness: given a prompt it will reason, call tools, edit
 files and run commands. This project already owns that loop, so the tests that
-matter most are the ones about keeping it inside its box -- it runs in a
-scratch directory, and never with `--dangerously-skip-permissions`.
+matter most are the ones keeping it inside its box -- it runs in a scratch
+directory, never with `--dangerously-skip-permissions`, and is told plainly not
+to use tools.
 
-Everything here runs against a fake `agy`. The real one is not installed on
-every machine, and a test that quietly skips is a test that was never written.
+None of the wire format is documented, so every shape here was measured against
+agy 1.2.5 and the measurement is written down beside it. Everything runs
+against a fake `agy`: the real one is not installed on every machine, and a
+test that quietly skips is a test that was never written.
 """
 
 from __future__ import annotations
@@ -18,21 +21,31 @@ from pathlib import Path
 import pytest
 
 from app.engineer.antigravity import (
-    WINDOWS_COMMAND_LIMIT,
+    NO_TOOLS,
     AntigravityClient,
     antigravity_models,
     chain,
+    result_envelope,
+    stream_message,
 )
-from app.engineer.gemini import GeminiIncomplete, GeminiRefused, GeminiUnavailable
+from app.engineer.gemini import GeminiRefused, GeminiUnavailable
 
 ANSWER = {"status": "success", "response": '{"files": []}', "conversation_id": "c1",
           "usage": {"input_tokens": 100, "output_tokens": 200}}
 
 
+def events(result: dict | None) -> str:
+    """What `--output-format stream-json` prints: an init event, then a result."""
+    lines = [json.dumps({"event": "init", "init": {"model": "m"}})]
+    if result is not None:
+        lines.append(json.dumps({"event": "result", "result": result}))
+    return "\n".join(lines) + "\n"
+
+
 def fake_agy(calls: list, payload=ANSWER, returncode: int = 0, stderr: str = ""):
     def runner(command, **kwargs):
         calls.append({"command": command, **kwargs})
-        out = payload if isinstance(payload, str) else json.dumps(payload)
+        out = payload if isinstance(payload, str) else events(payload)
         return subprocess.CompletedProcess(command, returncode, out.encode("utf-8"), stderr.encode("utf-8"))
 
     return runner
@@ -45,13 +58,17 @@ def client_for(calls: list, tmp_path: Path, **overrides) -> AntigravityClient:
     return client
 
 
+def sent_prompt(call: dict) -> str:
+    return json.loads(call["input"].decode("utf-8"))["message"]["content"]
+
+
 # ---- keeping an agent inside its box --------------------------------------
 
 @pytest.mark.anyio
 async def test_it_never_runs_with_permissions_skipped(tmp_path):
     """`--dangerously-skip-permissions` auto-approves every tool call. An agent
-    with that flag pointed at a repository is a different product from this
-    one, which owns its own worktree, gate and commit."""
+    with that flag is a different product from this one, which owns its own
+    worktree, gate and commit."""
     calls: list = []
     await client_for(calls, tmp_path).generate(model="m", system="rules", prompt="task")
 
@@ -62,25 +79,26 @@ async def test_it_never_runs_with_permissions_skipped(tmp_path):
 async def test_it_runs_in_a_scratch_directory_not_the_worktree(tmp_path):
     """So an agent that decides to edit a file edits nothing that matters."""
     calls: list = []
-    client = client_for(calls, tmp_path)
 
-    await client.generate(model="m", system="rules", prompt="task")
+    await client_for(calls, tmp_path).generate(model="m", system="rules", prompt="task")
 
     assert Path(calls[0]["cwd"]) == tmp_path / "scratch"
     assert Path(calls[0]["cwd"]).is_dir()
 
 
 @pytest.mark.anyio
-async def test_the_answer_is_asked_for_as_json(tmp_path):
+async def test_the_prompt_tells_it_not_to_use_tools(tmp_path):
+    """Measured: given an engineering task it called `run_command` with
+    `Get-Location`, headless mode cannot prompt for that permission, the call
+    was auto-denied and it stopped with an empty response after 27,082 tokens.
+    The documented answer is --dangerously-skip-permissions; saying this
+    instead keeps the flag off, and zero tools were attempted."""
     calls: list = []
-    await client_for(calls, tmp_path).generate(model="gemini-3.8-flash-high",
-                                               system="rules", prompt="task")
+    await client_for(calls, tmp_path).generate(model="m", system="rules", prompt="task")
 
-    command = calls[0]["command"]
-    assert command[1] == "-p"
-    assert "rules" in command[2] and "task" in command[2], "the rules are prepended to the prompt"
-    assert command[command.index("--output-format") + 1] == "json"
-    assert command[command.index("--model") + 1] == "gemini-3.8-flash-high"
+    sent = sent_prompt(calls[0])
+    assert sent.startswith(NO_TOOLS)
+    assert "rules" in sent and "task" in sent
 
 
 @pytest.mark.anyio
@@ -95,10 +113,54 @@ async def test_slash_command_expansion_is_disabled(tmp_path):
     assert "--sandbox" in calls[0]["command"]
 
 
+# ---- the wire format ------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_the_stream_is_asked_for_in_both_directions(tmp_path):
+    calls: list = []
+    await client_for(calls, tmp_path).generate(model="gemini-3.8-flash-high", system="s", prompt="p")
+
+    command = calls[0]["command"]
+    assert command[command.index("--input-format") + 1] == "stream-json"
+    assert command[command.index("--output-format") + 1] == "stream-json"
+    assert command[command.index("--model") + 1] == "gemini-3.8-flash-high"
+    assert "-p" not in command, "with stream-json input, -p swallows the next flag as its value"
+
+
+@pytest.mark.anyio
+async def test_a_prompt_far_past_the_command_line_limit_is_sent_over_stdin(tmp_path):
+    """CreateProcess takes 32,767 characters for a whole command line and an
+    engineer prompt is 20,000-30,000, so the argument form was one larger
+    design away from truncating a prompt into plausible nonsense."""
+    calls: list = []
+    huge = "x" * 200_000
+
+    await client_for(calls, tmp_path).generate(model="m", system="s", prompt=huge)
+
+    assert huge not in " ".join(calls[0]["command"]), "the prompt never reaches the command line"
+    assert huge in calls[0]["input"].decode("utf-8")
+
+
+def test_the_stream_message_is_the_one_shape_that_answers():
+    """`{"type": "user", ...}` draws `stream input message is missing the
+    "event" field`; an unknown event name is ignored with a warning and exit 0;
+    `text` and `content` beside a correct event name are accepted and ignored,
+    reporting SUCCESS with an empty response."""
+    assert json.loads(stream_message("hello").decode("utf-8")) == {
+        "event": "user", "message": {"role": "user", "content": "hello"}}
+
+
+def test_the_message_is_one_ndjson_line():
+    """One NDJSON message per line is what `--input-format stream-json` reads;
+    a prompt's own newlines must not end the line early."""
+    raw = stream_message("first\nsecond").decode("utf-8")
+    assert raw.endswith("\n") and raw.count("\n") == 1
+
+
 @pytest.mark.anyio
 async def test_effort_is_not_sent_when_the_model_name_already_carries_it(tmp_path):
-    """Measured against agy 1.2.5: `--model gemini-3.8-flash-low conflicts with
-    --effort=medium`. The models are named with the effort built in."""
+    """Measured: `--model gemini-3.8-flash-low conflicts with --effort=medium`.
+    The models are named with the effort built in."""
     calls: list = []
     client = client_for(calls, tmp_path, effort="medium")
 
@@ -109,37 +171,28 @@ async def test_effort_is_not_sent_when_the_model_name_already_carries_it(tmp_pat
     assert calls[1]["command"][calls[1]["command"].index("--effort") + 1] == "medium"
 
 
-@pytest.mark.anyio
-async def test_an_uppercase_status_is_still_success(tmp_path):
-    """agy 1.2.5 answers "SUCCESS". Comparing case-sensitively turned a working
-    call into an outage."""
-    payload = {"status": "SUCCESS", "response": '{"files": []}'}
-    reply = await client_for([], tmp_path, fake={"payload": payload}).generate(
-        model="m", system="s", prompt="p")
-    assert reply.text == '{"files": []}'
+# ---- reading the stream back ----------------------------------------------
+
+def test_the_result_is_read_from_the_result_event():
+    stream = events({"status": "SUCCESS", "response": "answer"})
+    assert result_envelope(stream)["response"] == "answer"
 
 
-def test_the_executable_is_found_off_path_where_the_installer_puts_it(tmp_path, monkeypatch):
-    """The installer writes the PATH to the registry and broadcasts it, which a
-    running process never sees: CreateProcess resolves against the PARENT's
-    PATH. A service started before the install would otherwise never find it."""
-    binary = tmp_path / "agy" / "bin" / "agy.exe"
-    binary.parent.mkdir(parents=True)
-    binary.write_text("", encoding="utf-8")
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    monkeypatch.setattr("app.engineer.antigravity.shutil.which", lambda _name: None)
-
-    assert AntigravityClient().resolve() == str(binary)
+def test_a_truncated_line_in_the_stream_does_not_lose_the_result():
+    """A process that died mid-write leaves half a line behind."""
+    stream = events({"status": "SUCCESS", "response": "kept"}) + '{"event": "step_upda'
+    assert result_envelope(stream)["response"] == "kept"
 
 
-def test_resolution_gives_up_when_it_is_really_not_there(tmp_path, monkeypatch):
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    monkeypatch.setattr("app.engineer.antigravity.shutil.which", lambda _name: None)
+def test_step_events_are_not_mistaken_for_the_result():
+    stream = (json.dumps({"event": "step_update", "step_update": {"state": "DONE"}}) + "\n"
+              + events({"status": "SUCCESS", "response": "answer"}))
+    assert result_envelope(stream)["response"] == "answer"
 
-    assert AntigravityClient().resolve() is None
 
+def test_no_result_event_at_all_is_not_a_result():
+    assert result_envelope(events(None)) is None
 
-# ---- what it does with the answer -----------------------------------------
 
 @pytest.mark.anyio
 async def test_a_successful_envelope_yields_its_response_and_usage(tmp_path):
@@ -162,26 +215,38 @@ async def test_structured_output_wins_over_the_prose_response(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_plain_text_output_is_passed_through(tmp_path):
-    """The loop validates the answer itself, so text that is not an envelope is
-    still worth handing it rather than discarding."""
-    reply = await client_for([], tmp_path, fake={"payload": '{"files": []}'}).generate(
+async def test_an_uppercase_status_is_still_success(tmp_path):
+    """agy 1.2.5 answers "SUCCESS". Comparing case-sensitively turned a working
+    call into an outage."""
+    reply = await client_for([], tmp_path, fake={"payload": {"status": "SUCCESS",
+                                                             "response": '{"files": []}'}}).generate(
         model="m", system="s", prompt="p")
     assert reply.text == '{"files": []}'
 
+
+# ---- failures the loop has to tell apart ----------------------------------
 
 @pytest.mark.anyio
 async def test_an_error_in_the_envelope_is_a_refusal_not_an_outage(tmp_path):
     """A refusal is the model declining. Asking a different provider the same
     question would hide the reason, so it stops the run."""
-    payload = {"status": "error", "error": "blocked by safety settings"}
+    payload = {"status": "ERROR", "error": "blocked by safety settings"}
     with pytest.raises(GeminiRefused, match="safety"):
         await client_for([], tmp_path, fake={"payload": payload}).generate(model="m", system="s", prompt="p")
 
 
 @pytest.mark.anyio
-async def test_an_empty_response_is_unavailable(tmp_path):
-    payload = {"status": "success", "response": "  "}
+async def test_a_permission_denial_is_reported_as_itself(tmp_path):
+    """Unrecognisable as an empty response, and the fix is a different one."""
+    payload = {"status": "SUCCESS", "response": "",
+               "denied_actions": [{"action": "command", "display_name": "RunCommand"}]}
+    with pytest.raises(GeminiUnavailable, match="RunCommand"):
+        await client_for([], tmp_path, fake={"payload": payload}).generate(model="m", system="s", prompt="p")
+
+
+@pytest.mark.anyio
+async def test_an_empty_response_with_no_denial_is_unavailable(tmp_path):
+    payload = {"status": "SUCCESS", "response": "  "}
     with pytest.raises(GeminiUnavailable, match="empty response"):
         await client_for([], tmp_path, fake={"payload": payload}).generate(model="m", system="s", prompt="p")
 
@@ -194,7 +259,15 @@ async def test_a_nonzero_exit_with_no_output_names_the_stderr(tmp_path):
             model="m", system="s", prompt="p")
 
 
-# ---- not installed, and too long ------------------------------------------
+@pytest.mark.anyio
+async def test_a_stream_with_no_result_event_names_the_stderr(tmp_path):
+    """How an ignored input message ends: exit 0, an init event, nothing else."""
+    with pytest.raises(GeminiUnavailable, match="unsupported"):
+        await client_for([], tmp_path, fake={
+            "payload": None,
+            "stderr": 'warning: ignoring unsupported stream input message event "user_message"',
+        }).generate(model="m", system="s", prompt="p")
+
 
 @pytest.mark.anyio
 async def test_a_missing_executable_says_what_to_do(tmp_path):
@@ -206,19 +279,6 @@ async def test_a_missing_executable_says_what_to_do(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_a_prompt_too_long_for_a_windows_command_line_is_refused_early(tmp_path, monkeypatch):
-    """CreateProcess takes 32,767 characters and an engineer prompt is
-    20,000-30,000. A truncated prompt produces plausible nonsense, which is
-    worse than a refusal that says the measurement."""
-    monkeypatch.setattr("app.engineer.antigravity.os.name", "nt")
-    calls: list = []
-
-    with pytest.raises(GeminiIncomplete, match="command line"):
-        await client_for(calls, tmp_path).generate(model="m", system="s", prompt="x" * WINDOWS_COMMAND_LIMIT)
-    assert calls == [], "nothing is spent on a prompt that cannot be sent"
-
-
-@pytest.mark.anyio
 async def test_the_deadline_is_checked_before_spending_anything(tmp_path):
     calls: list = []
     client = client_for(calls, tmp_path, clock=lambda: 100.0)
@@ -226,6 +286,28 @@ async def test_the_deadline_is_checked_before_spending_anything(tmp_path):
     with pytest.raises(GeminiUnavailable, match="deadline"):
         await client.generate(model="m", system="s", prompt="p", deadline=50.0)
     assert calls == []
+
+
+# ---- finding the executable -----------------------------------------------
+
+def test_the_executable_is_found_off_path_where_the_installer_puts_it(tmp_path, monkeypatch):
+    """The installer writes the PATH to the registry and broadcasts it, which a
+    running process never sees: CreateProcess resolves against the PARENT's
+    PATH. A service started before the install would otherwise never find it."""
+    binary = tmp_path / "agy" / "bin" / "agy.exe"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("", encoding="utf-8")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr("app.engineer.antigravity.shutil.which", lambda _name: None)
+
+    assert AntigravityClient().resolve() == str(binary)
+
+
+def test_resolution_gives_up_when_it_is_really_not_there(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr("app.engineer.antigravity.shutil.which", lambda _name: None)
+
+    assert AntigravityClient().resolve() is None
 
 
 # ---- the chain ------------------------------------------------------------
@@ -244,8 +326,7 @@ async def refuses(_system, _prompt, _deadline):
 
 @pytest.mark.anyio
 async def test_the_chain_falls_through_an_unavailable_provider():
-    text, label = await chain([unavailable, answers])("s", "p", 1e9)
-    assert (text, label) == ("ok", "second")
+    assert await chain([unavailable, answers])("s", "p", 1e9) == ("ok", "second")
 
 
 @pytest.mark.anyio

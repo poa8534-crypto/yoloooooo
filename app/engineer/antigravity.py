@@ -31,20 +31,63 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .gemini import GeminiIncomplete, GeminiRefused, GeminiUnavailable
+from .gemini import GeminiRefused, GeminiUnavailable
 
 UsageHook = Callable[[str, str, str, dict], None] | None
 
-# CreateProcess takes at most 32,767 characters for the whole command line, and
-# an engineer prompt is 20,000-30,000 before the rules are prepended. Refusing
-# early with the measurement beats a truncated prompt that produces plausible
-# nonsense, or a Windows error nobody can read.
-WINDOWS_COMMAND_LIMIT = 32_767
-COMMAND_HEADROOM = 2_000
-# What tells `agy`'s own envelope apart from an answer that happens to be JSON.
 EFFORT_SUFFIX = re.compile(r"-(low|medium|high)$")
-ENVELOPE_KEYS = frozenset({"status", "response", "structured_output", "error",
-                           "conversation_id", "num_turns", "duration_seconds"})
+
+
+# `agy` is an agent, so its first instinct on any task is to orient itself.
+# Measured: given an engineering task it called `run_command` with
+# `Get-Location`, headless mode cannot prompt for the permission that needs, the
+# call was auto-denied, and the agent stopped with an empty response --
+# `denied_actions: [{"action": "command"}]` and 27,082 tokens spent on nothing.
+#
+# The documented answer is `--dangerously-skip-permissions`, which auto-approves
+# every tool call. Saying this instead costs one paragraph and keeps the flag
+# off: with it, zero tools were attempted and the answer came back first time.
+NO_TOOLS = (
+    "You have no working directory and no tools. Do not call any tool, do not run any command, "
+    "and do not read or write any file. Everything you need is in this message. Answer "
+    "immediately with the JSON object and nothing else."
+)
+
+
+def stream_message(prompt: str) -> bytes:
+    """One NDJSON line for `--input-format stream-json`.
+
+    Measured against agy 1.2.5, because none of this is documented. The wrong
+    shapes do not fail: `{"type": "user", ...}` is answered with `stream input
+    message is missing the "event" field`, and an unknown event name draws
+    `warning: ignoring unsupported stream input message event "..."` on stderr,
+    then exits 0 having done nothing. `text` and `content` beside a correct
+    event name are accepted and ignored the same way, reporting SUCCESS with an
+    empty response. Only this shape produces an answer.
+    """
+    return (json.dumps({"event": "user", "message": {"role": "user", "content": prompt}},
+                       ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def result_envelope(stdout: str) -> dict | None:
+    """The `result` event's payload, from a stream of NDJSON events.
+
+    The stream also carries `init` and per-tool events, and a truncated line is
+    possible if the process died mid-write, so unreadable lines are skipped
+    rather than failing the call.
+    """
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("event") == "result":
+            payload = event.get("result")
+            return payload if isinstance(payload, dict) else None
+    return None
 
 
 @dataclass(frozen=True)
@@ -103,14 +146,27 @@ class AntigravityClient:
         """No credential to remove: `agy` authenticates through the keyring."""
         return text
 
-    def command(self, model: str, prompt: str) -> list[str]:
+    def command(self, model: str) -> list[str]:
+        """The command, which never carries the prompt.
+
+        The prompt goes over stdin (`stream_message`) instead. Windows resolves
+        a process through CreateProcess, which takes 32,767 characters for the
+        whole command line, and an engineer prompt measures 20,000-30,000
+        before the rules are prepended -- so the argument form was one larger
+        design away from truncating a prompt into plausible nonsense. Over
+        stdin there is no limit to be near.
+
+        Note `-p` is absent: with `--input-format stream-json` it is not only
+        unnecessary, it swallows the next flag as its value.
+        """
         # `agy models` names its models with the effort built in --
         # `gemini-3.8-flash-high`, `gemini-3.1-pro-low` -- and passing --effort
         # as well is refused: "--model gemini-3.8-flash-low conflicts with
         # --effort=medium". So the flag is only sent when the name leaves the
         # question open.
         effort = [] if EFFORT_SUFFIX.search(model) else ["--effort", self.effort]
-        return [self.resolve() or self.executable, "-p", prompt, "--output-format", "json",
+        return [self.resolve() or self.executable,
+                "--input-format", "stream-json", "--output-format", "stream-json",
                 "--model", model, *effort,
                 "--print-timeout", f"{max(int(self.timeout), 60)}s",
                 # The prompt carries a Venture Scout design, which is assembled
@@ -140,16 +196,11 @@ class AntigravityClient:
         if deadline is not None and self.clock() >= deadline:
             raise GeminiUnavailable(f"{model}: the run's deadline passed before it was asked")
 
-        full = f"{system}\n\n{prompt}" if system else prompt
-        command = self.command(model, full)
-        length = sum(len(part) + 3 for part in command)
-        if os.name == "nt" and length > WINDOWS_COMMAND_LIMIT - COMMAND_HEADROOM:
-            raise GeminiIncomplete(
-                f"the prompt is {length} characters and Windows takes {WINDOWS_COMMAND_LIMIT} on a "
-                "command line; return a smaller answer or ask for fewer files")
+        full = "\n\n".join(part for part in (NO_TOOLS, system, prompt) if part)
+        command = self.command(model)
 
         try:
-            completed = await asyncio.to_thread(self._run, command)
+            completed = await asyncio.to_thread(self._run, command, stream_message(full))
         except FileNotFoundError:
             raise GeminiUnavailable(f"`{self.executable}` disappeared between the check and the call") from None
         except subprocess.TimeoutExpired:
@@ -160,22 +211,13 @@ class AntigravityClient:
         if completed.returncode != 0 and not stdout.strip():
             raise GeminiUnavailable(f"{model}: `{self.executable}` exited {completed.returncode}: {stderr[:300]}")
 
-        try:
-            envelope = json.loads(stdout)
-        except ValueError:
-            # `text` output, or a crash that still printed something. The loop
-            # validates the answer itself, so plain text is worth passing on.
-            if stdout.strip():
-                return self._reply(model, stdout.strip(), {})
-            raise GeminiUnavailable(f"{model}: `{self.executable}` printed nothing usable: {stderr[:300]}") from None
-
-        if not isinstance(envelope, dict):
-            raise GeminiUnavailable(f"{model}: expected a JSON object from `{self.executable}`")
-        if not ENVELOPE_KEYS & envelope.keys():
-            # Valid JSON that is not an envelope: `--output-format text` with a
-            # model that answered in JSON, which is the shape the loop asked
-            # for. Reading it as an empty envelope would throw the answer away.
-            return self._reply(model, stdout.strip(), {})
+        envelope = result_envelope(stdout)
+        if envelope is None:
+            # No result event. A message `agy` ignored ends this way, and so
+            # does a crash part-way through the stream, so the stderr is the
+            # only thing that says which.
+            raise GeminiUnavailable(
+                f"{model}: `{self.executable}` produced no result event: {stderr[:300]}")
 
         error = envelope.get("error")
         status = str(envelope.get("status") or "")
@@ -192,14 +234,24 @@ class AntigravityClient:
         if not isinstance(text, str):
             text = json.dumps(text, ensure_ascii=False)
         if not text.strip():
+            denied = envelope.get("denied_actions")
+            if denied:
+                # The specific way this fails, and unrecognisable as itself
+                # without naming the tool: the agent asked for a permission
+                # headless mode cannot grant, and stopped rather than answering.
+                names = ", ".join(str(action.get("display_name") or action.get("action"))
+                                  for action in denied if isinstance(action, dict))
+                raise GeminiUnavailable(
+                    f"{model}: `{self.executable}` stopped to ask permission for {names} and "
+                    "answered nothing; the prompt must tell it not to use tools")
             raise GeminiUnavailable(f"{model}: `{self.executable}` returned an empty response")
 
         usage = envelope.get("usage") if isinstance(envelope.get("usage"), dict) else {}
         return self._reply(model, text, usage)
 
-    def _run(self, command: list[str]) -> subprocess.CompletedProcess:
+    def _run(self, command: list[str], message: bytes) -> subprocess.CompletedProcess:
         return (self.runner or subprocess.run)(
-            command, cwd=str(self.workspace()), capture_output=True,
+            command, input=message, cwd=str(self.workspace()), capture_output=True,
             timeout=self.timeout, check=False)
 
     def _reply(self, model: str, text: str, usage: dict) -> AntigravityReply:
