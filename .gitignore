@@ -12,3 +12,11 @@ frontend/dist/
 # Playwright artifacts
 frontend/test-results/
 frontend/playwright-report/
+
+# Trained model weights: a build artifact, regenerable from repairs.jsonl and
+# the Colab notebook, both of which are a few hundred KB and ARE tracked. A
+# 365 MB adapter in git blocks the push (GitHub caps a file at 100 MB) and
+# every future clone pays for it forever.
+/training/artifacts/
+*.gguf
+*.safetensors
