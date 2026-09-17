@@ -1,7 +1,7 @@
 """`venture-engineer`: run the Roblox Engineer from a terminal on the game PC.
 
     venture-engineer check [--path DIR]    run the gate on a project (verify.ps1 + guard), no model
-    venture-engineer ping                  one tiny request per Gemini key, to prove both work
+    venture-engineer ping                  one tiny request per key and model, to see what answers today
     venture-engineer run TASK.json         build one system from an audited design
     venture-engineer usage                 today's Gemini calls and tokens per key
 
@@ -22,7 +22,15 @@ from pydantic import ValidationError
 from ..config import get_settings
 from .catalog import CatalogMissing
 from .gemini import GeminiClient, GeminiError
-from .runs import USAGE_PREFIX, NoDesign, NotConfigured, build_gate, game_repo, run_task
+from .runs import (
+    USAGE_PREFIX,
+    NoDesign,
+    NotConfigured,
+    build_gate,
+    engineer_models,
+    game_repo,
+    run_task,
+)
 from .schemas import EngineeringTask
 
 
@@ -42,24 +50,32 @@ def _check(path: str | None) -> int:
 
 
 async def _ping() -> int:
+    """Every configured key against every engineer model, without waiting on limits.
+
+    A rate-limited model is reported, not failed: it says what the engineer
+    will fall back from today, which is the point of asking.
+    """
     settings = get_settings()
-    failures = 0
-    for label, key in (("GEMINI_API_KEY_1", settings.gemini_api_key_1), ("GEMINI_API_KEY_2", settings.gemini_api_key_2)):
+    answered = 0
+    keys = [("GEMINI_API_KEY_1", settings.gemini_api_key_1), ("GEMINI_API_KEY_2", settings.gemini_api_key_2)]
+    for label, key in keys:
         if not key:
             print(f"{label}: not set")
-            failures += 1
             continue
-        client = GeminiClient(keys=[key], base_url=settings.gemini_base_url, timeout=120)
-        try:
-            reply = await client.generate(model=settings.gemini_pro_model, system="Reply with the JSON {\"ok\": true}.",
-                                          prompt="ping")
-            print(f"{label}: OK via {reply.model} ({reply.usage.get('total_tokens', 0)} tokens)")
-        except GeminiError as exc:
-            print(f"{label}: FAILED -- {exc}")
-            failures += 1
-        finally:
-            await client.close()
-    return 1 if failures else 0
+        for model in engineer_models(settings):
+            client = GeminiClient(keys=[key], base_url=settings.engineer_gemini_base_url, timeout=120)
+            try:
+                reply = await client.generate(model=model, system='Reply with the JSON {"ok": true}.',
+                                              prompt="ping", max_wait=0.0)
+                print(f"{label} {model}: OK ({reply.usage.get('total_tokens', 0)} tokens)")
+                answered += 1
+            except GeminiError as exc:
+                print(f"{label} {model}: {type(exc).__name__} -- {exc}")
+            finally:
+                await client.close()
+    uses = "keys 1 and 2" if settings.engineer_use_both_gemini_keys else "key 1 only (key 2 is Hermes's)"
+    print(f"\nThe engineer uses {uses}, trying models in order: {', '.join(engineer_models(settings))}.")
+    return 0 if answered else 1
 
 
 async def _run(task_file: str) -> int:

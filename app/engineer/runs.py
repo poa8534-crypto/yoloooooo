@@ -25,7 +25,7 @@ from ..security import redact
 from .catalog import load_services
 from .gate import Gate, run_command
 from .gemini import GeminiClient
-from .loop import EngineerLoop, EngineerResult, gemini_model
+from .loop import EngineerLoop, EngineerResult, gemini_models
 from .schemas import EngineeringTask
 from .workspace import Worktree
 
@@ -137,6 +137,24 @@ def game_repo(settings: Settings) -> Path:
     return repo
 
 
+def engineer_keys(settings: Settings) -> list[str]:
+    """Key 1, and key 2 only when asked: key 2 is Hermes's, and both share one quota."""
+    keys = [settings.gemini_api_key_1]
+    if settings.engineer_use_both_gemini_keys:
+        keys.append(settings.gemini_api_key_2)
+    return [key for key in keys if key]
+
+
+def engineer_models(settings: Settings) -> list[str]:
+    return [name.strip() for name in settings.engineer_gemini_models.split(",") if name.strip()]
+
+
+def build_client(settings: Settings, **kwargs) -> GeminiClient:
+    return GeminiClient(keys=engineer_keys(settings), base_url=settings.engineer_gemini_base_url,
+                        timeout=settings.engineer_gemini_timeout_seconds,
+                        max_output_tokens=settings.engineer_gemini_max_output_tokens, **kwargs)
+
+
 def build_gate(settings: Settings) -> Gate:
     repo = game_repo(settings)
     return Gate(load_services(settings.roblox_services_file), repo / settings.luau_definitions_file,
@@ -159,9 +177,9 @@ async def run_task(task: EngineeringTask, *, settings: Settings, factory, on_eve
         if on_event:
             on_event(entry)
 
-    client = GeminiClient.from_settings(settings, on_usage=usage_recorder(factory))
+    client = build_client(settings, on_usage=usage_recorder(factory))
     loop = EngineerLoop(
-        model=gemini_model(client, settings.gemini_pro_model), gate=gate,
+        model=gemini_models(client, engineer_models(settings)), gate=gate,
         known_services=gate.known_services,
         create_worktree=lambda name: Worktree.create(repo, settings.game_base_branch, worktrees, name),
         handoff_dir=settings.engineer_data_dir / "handoffs",

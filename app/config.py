@@ -78,18 +78,24 @@ class Settings(BaseSettings):
     max_search_results: int = Field(default=15, ge=1, le=50)
     tavily_daily_allowance: int = Field(default=50, ge=0)
     youtube_daily_allowance: int = Field(default=10000, ge=0)
-    # Roblox Engineer. Gemini does the heavy work and both keys carry it: calls
-    # alternate between them, and a rate-limited key hands over to the other
-    # instead of waiting. See app/engineer/gemini.py.
-    gemini_api_key_1: str = ""
+    # Roblox Engineer (app/engineer/). Its Gemini settings are its own: it calls
+    # the native generateContent API rather than the OpenAI-compatible surface
+    # the Scout uses above, and one answer can be a whole system, so it waits
+    # longer. Every name here is prefixed so it cannot shadow a Scout setting.
+    #
+    # Key 2 is Hermes's, and both keys were measured to share one project
+    # quota: a second key adds bookkeeping, not capacity. So the engineer uses
+    # key 1 unless told to use both.
     gemini_api_key_2: str = ""
-    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
-    # Pinned names, never `gemini-pro-latest`: a moving alias would change the
-    # engineer's behaviour underneath a run with nothing recorded.
-    gemini_pro_model: str = "gemini-3.1-pro-preview"
-    gemini_flash_model: str = "gemini-3.8-flash"
-    gemini_timeout_seconds: float = Field(default=900.0, gt=0)
-    gemini_max_output_tokens: int = Field(default=65_536, ge=1024)
+    engineer_use_both_gemini_keys: bool = False
+    engineer_gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    # Tried in order for every attempt: Pro for the heavy work, then Flash.
+    # Pro answered 429 RESOURCE_EXHAUSTED on both keys when measured, so a
+    # rate-limited model hands the attempt on instead of waiting it out, and is
+    # tried again on the next attempt. Pinned names, never a moving alias.
+    engineer_gemini_models: str = "gemini-3.1-pro-preview,gemini-3.8-flash"
+    engineer_gemini_timeout_seconds: float = Field(default=900.0, gt=0)
+    engineer_gemini_max_output_tokens: int = Field(default=65_536, ge=1024)
     # The game repository the engineer writes into. Unset means the engineer
     # refuses to run rather than guessing a path.
     game_project_dir: Path | None = None

@@ -1,16 +1,21 @@
-"""Gemini over REST, carried by two keys.
+"""Gemini over its native REST API, for the Roblox Engineer.
 
-The keys were bought for this work, so the client spends them rather than
-rationing them: calls alternate between the keys, and a key that answers 429
-cools down for the delay Google names while the other key takes the call. Only
-when both keys are cooling does a call wait, and never past its deadline.
+Rate limits are tracked per model, because Google's quotas are per model: Pro
+answering 429 says nothing about Flash. And by default a 429 cools every key
+for that model, because the keys were measured to share one project quota --
+switching keys after a 429 only earns a second 429.
+
+A caller can choose not to wait. `max_wait=0` turns "every key is rate limited
+for this model" into an immediate GeminiUnavailable, which is how the engineer
+hands an attempt from Pro to Flash instead of sitting out Pro's quota. With no
+`max_wait`, a call waits for the soonest key, but never past its deadline.
 
 What it will not do is retry a request Google refused outright. A 400, 401,
 403 or 404 is a wrong model name, a bad key or a rejected prompt; asking again
-spends quota on the same answer.
+spends time on the same answer.
 
 Keys travel in the `x-goog-api-key` header, never the URL, and every error
-message is scrubbed of both keys before it leaves this module.
+message is scrubbed of every key before it leaves this module.
 """
 
 from __future__ import annotations
@@ -23,9 +28,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from ..config import Settings
-
-RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+RETRYABLE_STATUS = {500, 502, 503, 504}
 DEFAULT_RATE_LIMIT_COOLDOWN = 30.0
 TRANSIENT_COOLDOWN = 5.0
 MAX_TRANSIENT_FAILURES = 6
@@ -38,7 +41,7 @@ class GeminiError(RuntimeError):
 
 
 class GeminiUnavailable(GeminiError):
-    """No key could answer before the deadline. Planned: the budget held."""
+    """No key could answer in time. Planned: a limit held, nothing is broken."""
 
     planned = True
 
@@ -67,8 +70,6 @@ class GeminiReply:
 class _Key:
     label: str
     secret: str
-    cooling_until: float = 0.0
-    calls: int = 0
 
 
 UsageHook = Callable[[str, str, str, dict[str, int]], None]
@@ -80,12 +81,16 @@ class GeminiClient:
     base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     timeout: float = 900.0
     max_output_tokens: int = 65_536
+    # Measured: both keys draw on one project quota. False only for keys in
+    # separate projects, where a 429 on one key says nothing about the other.
+    shared_quota: bool = True
     client: httpx.AsyncClient | None = None
     on_usage: UsageHook | None = None
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     _keys: list[_Key] = field(init=False)
     _next: int = field(init=False, default=0)
+    _cooling: dict[tuple[str, str], float] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         self._keys = [_Key(f"key{index}", secret)
@@ -93,12 +98,6 @@ class GeminiClient:
         self._owns_client = self.client is None
         if self.client is None:
             self.client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, connect=30.0))
-
-    @classmethod
-    def from_settings(cls, settings: Settings, **kwargs) -> GeminiClient:
-        return cls(keys=[settings.gemini_api_key_1, settings.gemini_api_key_2],
-                   base_url=settings.gemini_base_url, timeout=settings.gemini_timeout_seconds,
-                   max_output_tokens=settings.gemini_max_output_tokens, **kwargs)
 
     async def close(self) -> None:
         if self._owns_client and self.client is not None:
@@ -109,20 +108,32 @@ class GeminiClient:
             text = text.replace(key.secret, "[REDACTED]")
         return text
 
-    def _choose(self) -> _Key:
-        """The next key in rotation that is not cooling, else the soonest ready."""
+    def _ready_at(self, key: _Key, model: str) -> float:
+        return self._cooling.get((key.label, model), 0.0)
+
+    def _cool(self, key: _Key, model: str, seconds: float, *, every_key: bool) -> None:
+        until = self.clock() + seconds
+        for target in (self._keys if every_key else [key]):
+            self._cooling[(target.label, model)] = max(self._ready_at(target, model), until)
+
+    def _choose(self, model: str) -> _Key:
+        """The next key in rotation that is ready for this model, else the soonest ready."""
         now = self.clock()
         ordered = self._keys[self._next:] + self._keys[:self._next]
-        ready = [key for key in ordered if key.cooling_until <= now]
-        chosen = ready[0] if ready else min(self._keys, key=lambda key: key.cooling_until)
+        ready = [key for key in ordered if self._ready_at(key, model) <= now]
+        chosen = ready[0] if ready else min(self._keys, key=lambda key: self._ready_at(key, model))
         self._next = (self._keys.index(chosen) + 1) % len(self._keys)
         return chosen
 
-    async def generate(self, *, model: str, system: str, prompt: str,
-                       json_output: bool = True, deadline: float | None = None) -> GeminiReply:
-        """One completion. `deadline` is a `clock()` value this call must not wait past."""
+    async def generate(self, *, model: str, system: str, prompt: str, json_output: bool = True,
+                       deadline: float | None = None, max_wait: float | None = None) -> GeminiReply:
+        """One completion.
+
+        `deadline` is a `clock()` value this call must not wait past; `max_wait`
+        caps any single wait for a rate-limited or failing model.
+        """
         if not self._keys:
-            raise GeminiUnavailable("no Gemini API key is configured (GEMINI_API_KEY_1 / GEMINI_API_KEY_2)")
+            raise GeminiUnavailable("no Gemini API key is configured")
         body: dict = {
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -132,40 +143,43 @@ class GeminiClient:
             body["generationConfig"]["responseMimeType"] = "application/json"
         url = f"{self.base_url}/models/{model}:generateContent"
         transient = rate_limited = 0
+        last_problem = ""
         while True:
-            key = self._choose()
-            wait = key.cooling_until - self.clock()
+            key = self._choose(model)
+            wait = self._ready_at(key, model) - self.clock()
             if wait > 0:
+                if max_wait is not None and wait > max_wait:
+                    raise GeminiUnavailable(f"{model} is unavailable for another {wait:.0f}s: {last_problem}")
                 if deadline is not None and self.clock() + wait > deadline:
-                    raise GeminiUnavailable(
-                        f"every Gemini key is rate limited for another {wait:.0f}s, past this run's deadline")
+                    raise GeminiUnavailable(f"{model} is unavailable for another {wait:.0f}s, "
+                                            f"past this run's deadline: {last_problem}")
                 await self.sleep(wait)
             try:
                 response = await self.client.post(url, json=body, headers={"x-goog-api-key": key.secret})
             except httpx.HTTPError as exc:
                 transient += 1
-                key.cooling_until = self.clock() + TRANSIENT_COOLDOWN * transient
+                last_problem = self.scrub(f"{type(exc).__name__}: {exc}")
                 if transient >= MAX_TRANSIENT_FAILURES:
-                    raise GeminiUnavailable(self.scrub(f"Gemini unreachable: {type(exc).__name__}: {exc}")) from None
+                    raise GeminiUnavailable(f"Gemini unreachable: {last_problem}") from None
+                self._cool(key, model, TRANSIENT_COOLDOWN * transient, every_key=False)
                 continue
-            key.calls += 1
             if response.status_code == 200:
                 return self._reply(response, model, key)
-            detail = self.scrub(_error_message(response))
+            last_problem = f"{response.status_code} {self.scrub(_error_message(response))}"
             self._record(key, model, "rate_limited" if response.status_code == 429 else "error", {})
             if response.status_code == 429:
                 rate_limited += 1
                 if rate_limited >= MAX_RATE_LIMITS_PER_CALL:
-                    raise GeminiUnavailable(f"Gemini rate limited {rate_limited} times in one call: {detail}")
-                key.cooling_until = self.clock() + _retry_delay(response)
+                    raise GeminiUnavailable(f"{model} rate limited {rate_limited} times in one call: {last_problem}")
+                self._cool(key, model, _retry_delay(response), every_key=self.shared_quota)
                 continue
             if response.status_code in RETRYABLE_STATUS:
                 transient += 1
-                key.cooling_until = self.clock() + TRANSIENT_COOLDOWN * transient
                 if transient >= MAX_TRANSIENT_FAILURES:
-                    raise GeminiUnavailable(f"Gemini kept failing ({response.status_code}): {detail}")
+                    raise GeminiUnavailable(f"{model} kept failing: {last_problem}")
+                self._cool(key, model, TRANSIENT_COOLDOWN * transient, every_key=False)
                 continue
-            raise GeminiRefused(f"Gemini refused the request ({response.status_code}): {detail}")
+            raise GeminiRefused(f"Gemini refused the request for {model}: {last_problem}")
 
     def _reply(self, response: httpx.Response, model: str, key: _Key) -> GeminiReply:
         data = response.json()

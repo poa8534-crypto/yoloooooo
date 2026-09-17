@@ -461,8 +461,10 @@ wired into the dashboard. It writes into a separate repository, the game
   +--------------------------------------------------------------+
   | app/engineer/loop.py  EngineerLoop, up to N attempts          |
   |                                                               |
-  |  Gemini Pro (app/engineer/gemini.py)                   [LLM]  |
-  |    both keys, alternating; a 429 hands over to the other key  |
+  |  Gemini (app/engineer/gemini.py)                       [LLM]  |
+  |    Pro, then Flash, per attempt: a rate-limited model hands   |
+  |    the attempt on at once. Key 1 only by default -- key 2 is  |
+  |    Hermes's, and both keys share one project quota.           |
   |         |                                                     |
   |  schema + path + service-name checks                   [GATE] |
   |    refused answers never reach the disk or the tools          |

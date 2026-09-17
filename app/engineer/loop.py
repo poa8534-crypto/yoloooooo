@@ -259,10 +259,31 @@ def _strip_fence(text: str) -> str:
     return stripped
 
 
-def gemini_model(client, model_name: str) -> ModelCall:
-    """Adapt GeminiClient to the loop: (system, prompt, deadline) -> (text, label)."""
+def gemini_models(client, models: list[str]) -> ModelCall:
+    """Adapt GeminiClient to the loop, trying `models` in order for each attempt.
+
+    Every model but the last is asked not to wait: if it is rate limited or
+    failing, the attempt moves to the next model at once. The last model may
+    wait, up to the run's deadline. Each attempt starts again from the first,
+    so Pro is used again as soon as its quota returns.
+    """
+    if not models:
+        raise ValueError("at least one Gemini model is required")
+
     async def call(system: str, prompt: str, deadline: float) -> tuple[str, str]:
-        reply = await client.generate(model=model_name, system=system, prompt=prompt, deadline=deadline)
-        return reply.text, f"{reply.model} ({reply.key_label})"
+        passed_over: list[str] = []
+        for index, model in enumerate(models):
+            last = index == len(models) - 1
+            try:
+                reply = await client.generate(model=model, system=system, prompt=prompt,
+                                              deadline=deadline, max_wait=None if last else 0.0)
+            except GeminiUnavailable as exc:
+                if last:
+                    raise GeminiUnavailable("; ".join([*passed_over, str(exc)])) from None
+                passed_over.append(str(exc))
+                continue
+            label = f"{reply.model} ({reply.key_label})"
+            return reply.text, label + (f" after {len(passed_over)} unavailable model(s)" if passed_over else "")
+        raise AssertionError("unreachable")
     return call
 
