@@ -41,15 +41,20 @@ def known_services() -> frozenset[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("src", type=Path, help="the game repo's src directory")
-    parser.add_argument("--services", type=Path, default=None,
-                        help="path to Services.luau (default: <src>/shared/Services.luau)")
+    parser.add_argument("--services", type=Path, action="append", default=None,
+                        help="path to a generated Services.luau; repeatable "
+                             "(default: <src>/shared/Services.luau and <src>/client/Services.luau)")
     args = parser.parse_args()
 
     src: Path = args.src
     if not src.is_dir():
         print(f"guard: not a directory: {src}", file=sys.stderr)
         return 2
-    services = args.services or (src / "shared" / "Services.luau")
+    # The client gets its own generated copy: it cannot reach the shared one at
+    # run time, because its scripts are copied into Player.PlayerScripts and the
+    # walk up resolves to a different tree (app/engineer/luau_guard.py).
+    services = tuple(args.services) if args.services else (
+        src / "shared" / "Services.luau", src / "client" / "Services.luau")
 
     names = known_services()
     if not names:

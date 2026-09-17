@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .luau_guard import check_project
-from .workspace import SERVICES_PATH
+from .workspace import CLIENT_SERVICES_PATH, SERVICES_PATH
 
 OUTPUT_LIMIT = 6000
 _SELENE_COUNTS = re.compile(r"^\s*(\d+)\s+(?:errors?|warnings?|parse errors?)\s*$", re.MULTILINE | re.IGNORECASE)
@@ -200,7 +200,9 @@ class Gate:
         source_root = root / "src"
         if not source_root.is_dir():
             return CheckResult("guard", False, f"no src directory in {root}")
-        violations = check_project(source_root, root / SERVICES_PATH, self.known_services)
+        violations = check_project(source_root,
+                                   (root / SERVICES_PATH, root / CLIENT_SERVICES_PATH),
+                                   self.known_services)
         # check_project reports paths relative to src/; report them from the project root.
         return CheckResult("guard", not violations, "\n".join(f"src/{violation}" for violation in violations))
 

@@ -63,6 +63,22 @@ FORBIDDEN_GLOBALS: dict[str, str] = {
 # and `local s: any = script` passes that reading while restoring the hole in
 # full. The ban stays where it can be decided from the token stream alone.
 SCRIPT_GLOBAL = "script"
+# Rojo maps src/client to StarterPlayer.StarterPlayerScripts.Client, and at run
+# time Roblox COPIES StarterPlayerScripts into Player.PlayerScripts. Inside that
+# copied folder relative depth is preserved, so `script.Parent.Sibling` is the
+# same instance in Studio and in a live game. One step further up is not: in the
+# sourcemap it is StarterPlayerScripts, in a live game it is PlayerScripts, and
+# above that the trees diverge entirely (Player, Players, DataModel against
+# StarterPlayer, DataModel). luau-lsp resolves against the sourcemap, so a
+# require that walks out of the client folder type-checks against a tree that
+# will not exist when it runs.
+CLIENT_ROOT = "src/client/"
+CLIENT_REQUIRE_MESSAGE = (
+    "a client require may not reach above its own folder: client scripts are copied into "
+    "Player.PlayerScripts at run time, so anything above them is a different tree than the one "
+    "luau-lsp checked. Require siblings (`require(script.Parent.Thing)`) and reach services "
+    "through the generated client Services module."
+)
 SCRIPT_MESSAGE = (
     "`script` is a sourcemap node, so nothing reached from it is type-checked; "
     "it is allowed only as `require(script.Parent.X)` -- reach instances through "
@@ -227,6 +243,35 @@ def _position(source: str, offset: int) -> tuple[int, int]:
     return line, offset - starts[line - 1] + 1
 
 
+def require_spans(tokens: list[Token]) -> list[range]:
+    """One range of token indices per `require(...)` argument list.
+
+    Separate from `require_argument_span`, which merges every argument into one
+    set: a per-require range is what lets a rule count something inside a single
+    require without a second require in the same file changing the answer.
+    """
+    spans: list[range] = []
+    for index, token in enumerate(tokens):
+        if token.kind != "name" or token.text != "require":
+            continue
+        previous = tokens[index - 1] if index else None
+        if previous is not None and previous.kind == "op" and previous.text in (".", ":"):
+            continue
+        if index + 1 >= len(tokens) or tokens[index + 1].text != "(":
+            continue
+        depth = 0
+        for position in range(index + 1, len(tokens)):
+            text = tokens[position].text
+            if tokens[position].kind == "op" and text == "(":
+                depth += 1
+            elif tokens[position].kind == "op" and text == ")":
+                depth -= 1
+                if depth == 0:
+                    spans.append(range(index + 2, position))
+                    break
+    return spans
+
+
 def check_source(source: str, path: str) -> list[Violation]:
     """Violations in one generated file (not the Services module)."""
     def violation(offset: int, rule: str, message: str) -> Violation:
@@ -289,6 +334,13 @@ def check_source(source: str, path: str) -> list[Violation]:
               and tokens[index + 1].text == "(" and tokens[index + 2].kind == "number"):
             found.append(violation(token.offset, "asset-require",
                                    "require by asset id loads unreviewed remote code (a common backdoor)"))
+
+    if path.replace("\\", "/").startswith(CLIENT_ROOT):
+        for span in require_spans(tokens):
+            climbs = [i for i in span if tokens[i].kind == "name" and tokens[i].text == "Parent"]
+            if len(climbs) > 1:
+                found.append(violation(tokens[climbs[1]].offset, "client-require-escapes",
+                                       CLIENT_REQUIRE_MESSAGE))
     return found
 
 
@@ -342,16 +394,23 @@ def check_services_module(source: str, path: str, known_services: frozenset[str]
     return found
 
 
-def check_project(src_root: Path, services_module: Path, known_services: frozenset[str]) -> list[Violation]:
-    """Every Luau file under `src_root`, reported relative to it."""
-    services_module = services_module.resolve()
+def check_project(src_root: Path, services_module: Path | tuple[Path, ...],
+                  known_services: frozenset[str]) -> list[Violation]:
+    """Every Luau file under `src_root`, reported relative to it.
+
+    More than one generated Services module is allowed -- the client gets its
+    own copy, because it cannot reach the shared one at run time -- and each is
+    held to the same byte-identity check.
+    """
+    modules = (services_module,) if isinstance(services_module, Path) else tuple(services_module)
+    generated = {module.resolve() for module in modules}
     found: list[Violation] = []
     for file in sorted(p for p in src_root.rglob("*") if p.suffix in (".luau", ".lua") and p.is_file()):
         relative = file.relative_to(src_root).as_posix()
         # Bytes, decoded without newline translation: the Services module's
         # identity check is byte-exact, and a CRLF or BOM copy must not pass it.
         source = file.read_bytes().decode("utf-8", "replace")
-        if file.resolve() == services_module:
+        if file.resolve() in generated:
             found.extend(check_services_module(source, relative, known_services))
         else:
             found.extend(check_source(source, relative))

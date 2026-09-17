@@ -296,3 +296,67 @@ def test_calling_the_datamodel_through_the_module_passes_the_guard():
 
 def test_bare_bindtoclose_is_still_refused():
     assert "forbidden-global" in rules("game:BindToClose(save)")
+
+
+# ---- client code: the one tree that is not the tree luau-lsp checked --------
+#
+# Rojo maps src/client to StarterPlayer.StarterPlayerScripts.Client, and Roblox
+# COPIES StarterPlayerScripts into Player.PlayerScripts at run time. Inside the
+# copied folder relative depth survives, so `script.Parent.Thing` is the same
+# instance in both trees. One step further up is not: the sourcemap says
+# StarterPlayerScripts, a live game says PlayerScripts, and above that they
+# diverge completely -- Player, Players, DataModel against StarterPlayer,
+# DataModel. luau-lsp resolves against the sourcemap, so an escaping require
+# type-checks perfectly against a tree that will not exist when it runs.
+
+def client(code: str) -> list[str]:
+    return [v.rule for v in check_source("--!strict\n" + code, "src/client/Controller.luau")]
+
+
+@pytest.mark.parametrize("code", [
+    "local S = require(script.Parent.Services)",
+    "local M = require(script.Parent.Hud)",
+    "local M = require(script.Parent.Widgets.Button)",
+    'local M = require(script.Parent:WaitForChild("Hud"))',
+])
+def test_a_client_require_that_stays_in_its_folder_is_allowed(code):
+    assert client(code) == [], code
+
+
+@pytest.mark.parametrize("code", [
+    "local S = require(script.Parent.Parent.Shared.Thing)",
+    "local S = require(script.Parent.Parent.Parent.ReplicatedStorage.Shared.Services)",
+    'local S = require(script.Parent.Parent:WaitForChild("Shared").Thing)',
+])
+def test_a_client_require_that_climbs_out_is_refused(code):
+    assert "client-require-escapes" in client(code), code
+
+
+def test_the_message_says_why_the_type_checker_disagrees():
+    """It is fed back to the model, which has just watched luau-lsp accept the
+    line it is being told to change."""
+    [violation] = [v for v in check_source(
+        "--!strict\nlocal S = require(script.Parent.Parent.Shared.Thing)",
+        "src/client/Controller.luau") if v.rule == "client-require-escapes"]
+    assert "PlayerScripts" in violation.message
+
+
+def test_the_same_require_is_fine_on_the_server():
+    """Server scripts are not copied anywhere; their tree is the one in the
+    sourcemap, so the rule would be false alarm there."""
+    assert rules("local S = require(script.Parent.Parent.Parent.ReplicatedStorage.Shared.Services)") == []
+
+
+def test_the_rule_counts_climbs_per_require_not_per_file():
+    source = ("--!strict\nlocal A = require(script.Parent.One)\n"
+              "local B = require(script.Parent.Two)\n")
+    assert check_source(source, "src/client/Controller.luau") == []
+
+
+def test_a_walk_that_nets_back_to_where_it_started_is_refused_anyway():
+    """`script.Parent.Nodes.Parent` ends up back in the client folder, so it
+    does not really escape. The rule counts climbs and cannot tell a net-zero
+    walk from an escape without resolving the tree, and no legitimate require
+    needs the form -- requiring a folder is not requiring a module. Refusing it
+    is the conservative side of a line that has to be drawn somewhere."""
+    assert "client-require-escapes" in client("local M = require(script.Parent.Nodes.Parent)")

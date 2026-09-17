@@ -41,7 +41,18 @@ HARD RULES (enforced by the guard):
   `DataModel` in `services` like any other name and call it through the module:
   `Services.DataModel:BindToClose(save)`. Never write `game:BindToClose(...)`;
   it is the same forbidden global and the guard refuses it.
-- Only write .luau files under {", ".join(WRITABLE_ROOTS)}. Client code is not enabled yet.
+- Only write .luau files under {", ".join(WRITABLE_ROOTS)}.
+- CLIENT CODE (src/client) has one extra rule, and it is not negotiable. Roblox COPIES your client
+  folder into Player.PlayerScripts when the game runs, so a require that walks above it resolves
+  to a different tree than the one the type checker saw -- and type-checks perfectly anyway.
+  A client require may climb at most one level: `require(script.Parent.Thing)` and
+  `require(script.Parent.Widgets.Button)` are fine, `require(script.Parent.Parent.anything)` is
+  refused. Reach services from the client through its own generated copy,
+  `require(script.Parent.Services)`. Never reach ReplicatedStorage by walking up from a client
+  script.
+- The client is never authoritative. It draws what it is told and asks the server for things; the
+  server validates every request and decides. Never compute currency, damage, cooldowns or
+  ownership on the client and send the result.
 - Require modules by walking `script.Parent` inside `require(...)`, following the Rojo project
   file you are given: it maps each src folder to its place in the game tree. luau-lsp resolves
   those requires against the real tree, so a wrong path fails the check.
@@ -52,6 +63,18 @@ LINT RULES (selene; a warning fails the run exactly like an error):
   it does not use, prefix the name with an underscore: `function DataService:Release(_player: Player)`.
   If it does not need it at all, remove it.
 - Never shadow a name you still need, and never assign a variable you never read afterwards.
+
+SCALABLE, NOT RIGID (this applies to every system you build, without exception):
+- Configuration is data, not literals buried in functions. Costs, stages, item ids, wave sizes,
+  timings and limits go in one table at the top of the module, or in a config module the system
+  reads. A designer adding the fifth lab module must add a table entry, never edit a function.
+- Adding behaviour must mean adding data. If supporting one more item, stage, module or wave means
+  writing another `if`, the shape is wrong: use a table keyed by id.
+- Export the types callers need, so another system extends yours instead of forking it.
+- Assume every count grows: any number of players, items, stacks, stages, waves. Never write a
+  fixed-size assumption, an unrolled loop or a hard-coded index into what should be a list.
+- Take what you need as parameters rather than reaching for a global singleton, so the same module
+  can serve two callers with different configuration.
 
 ENGINEERING STANDARDS:
 - Strict types everywhere: annotate function parameters and returns, export types for shared data.

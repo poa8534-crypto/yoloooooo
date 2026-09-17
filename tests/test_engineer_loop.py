@@ -164,7 +164,7 @@ async def test_the_same_failure_three_times_stops_early(repo, tmp_path):
 @pytest.mark.parametrize("bad, expected", [
     ("not json at all", "not the required JSON"),
     (answer(path="../../escape.luau"), "'..' path segments"),
-    (answer(path="src/client/Controller.luau"), "src/server, src/shared"),
+    (answer(path="src/client/init.client.lua"), "must be .luau"),
     (answer(path=SERVICES_PATH), "Services module is generated"),
     (answer(services=("Players", "MadeUpService")), "not Roblox services: MadeUpService"),
 ])

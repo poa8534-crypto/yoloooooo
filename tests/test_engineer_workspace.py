@@ -8,6 +8,7 @@ import pytest
 
 from app.engineer.luau_guard import render_services_module
 from app.engineer.workspace import (
+    CLIENT_SERVICES_PATH,
     SERVICES_PATH,
     UnsafePath,
     Worktree,
@@ -31,7 +32,6 @@ def test_paths_inside_the_writable_roots_are_accepted(path):
     "src/server/x.lua", "src/server/x.txt", "default.project.json", "src/serverx/a.luau",
     SERVICES_PATH, "src/shared/services.luau", "src/server//x.luau", "src/server/./x.luau",
     "src/server/CON.luau", "src/server/nul.server.luau", "src/server/a b.luau", "src/server/.hidden.luau",
-    "src/client/Controller.luau",  # client code is not enabled; see WRITABLE_ROOTS
 ])
 def test_unsafe_or_unsupported_paths_are_refused(path):
     with pytest.raises(UnsafePath):
@@ -182,3 +182,15 @@ def test_sources_are_read_back_with_the_line_endings_they_were_written_with(game
 
     assert sources == {"src/shared/Hello.luau": "--!strict\nreturn {}\n"}
     assert all("\r" not in text for text in sources.values())
+
+
+def test_client_code_is_writable_now_that_its_require_form_is_pinned_down():
+    """Client scripts are copied into Player.PlayerScripts at run time, so only
+    requires that stay inside the copied folder are safe. That is a guard rule
+    (`client-require-escapes`), not a reason to refuse the path."""
+    assert validate_path("src/client/Controller.luau") == "src/client/Controller.luau"
+
+
+def test_the_generated_client_services_module_cannot_be_written_by_the_model():
+    with pytest.raises(UnsafePath, match="generated"):
+        validate_path(CLIENT_SERVICES_PATH)

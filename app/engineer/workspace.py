@@ -22,14 +22,19 @@ from pathlib import Path, PurePosixPath
 from .luau_guard import render_services_module
 
 SERVICES_PATH = "src/shared/Services.luau"
+# The client cannot require the shared module: at run time its scripts are
+# copied into Player.PlayerScripts, so the walk up to ReplicatedStorage resolves
+# to a different tree than the one luau-lsp checked (see luau_guard.CLIENT_ROOT).
+# It gets its own generated copy, reached sideways as `script.Parent.Services`,
+# which is stable in both trees.
+CLIENT_SERVICES_PATH = "src/client/Services.luau"
 PROJECT_FILE = "default.project.json"
-# src/client is deliberately absent. Client scripts in StarterPlayerScripts are
-# copied under Player.PlayerScripts at run time, so a `script.Parent...` require
-# that luau-lsp resolves against the sourcemap points somewhere else in a live
-# game. No client require form has been verified to be both type-checked and
-# correct at run time, and the checks cannot see the difference, so the engineer
-# writes server and shared code only until one has.
-WRITABLE_ROOTS = ("src/server", "src/shared")
+# src/client is writable, with one rule the guard enforces: a client require may
+# not walk above its own folder. Inside the folder Roblox copies into
+# Player.PlayerScripts the relative depth is preserved, so `script.Parent.Thing`
+# is the same instance in the sourcemap and in a live game. One step further up
+# is not, and the checks cannot see the difference.
+WRITABLE_ROOTS = ("src/server", "src/shared", "src/client")
 READABLE_ROOTS = ("src/server", "src/client", "src/shared")
 _SEGMENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 _WINDOWS_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
@@ -73,7 +78,7 @@ def validate_path(path: str) -> str:
         raise UnsafePath(f"{path!r}: files may only be written under {', '.join(WRITABLE_ROOTS)}")
     if not path.endswith(".luau"):
         raise UnsafePath(f"{path!r}: generated files must be .luau")
-    if path.lower() == SERVICES_PATH.lower():
+    if path.lower() in (SERVICES_PATH.lower(), CLIENT_SERVICES_PATH.lower()):
         raise UnsafePath(f"{path!r}: the Services module is generated; request services in `services` instead")
     for part in parts:
         if not _SEGMENT.match(part) or part.endswith(".") or part.split(".")[0].lower() in _WINDOWS_RESERVED:
@@ -176,10 +181,18 @@ class Worktree:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(normalize_source(content))
             written.append(relative)
-        module = self.path / SERVICES_PATH
-        module.parent.mkdir(parents=True, exist_ok=True)
-        module.write_bytes(render_services_module(services).encode("utf-8"))
-        return [*written, SERVICES_PATH]
+        rendered = render_services_module(services).encode("utf-8")
+        generated = [SERVICES_PATH]
+        # The client gets its own copy whenever there is client code to read it.
+        # Byte-identical to the shared one, and checked the same way, so there is
+        # one generator and not two standards.
+        if any(path.startswith("src/client/") for path in written):
+            generated.append(CLIENT_SERVICES_PATH)
+        for relative in generated:
+            module = self.path / relative
+            module.parent.mkdir(parents=True, exist_ok=True)
+            module.write_bytes(rendered)
+        return [*written, *generated]
 
     def commit(self, paths: list[str], message: str, *, allow_empty: bool = False) -> str:
         git(["add", "--", *paths], self.path)
