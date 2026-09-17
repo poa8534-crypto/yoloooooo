@@ -103,6 +103,26 @@ ENGINEERING STANDARDS:
 - No per-frame allocation in hot paths; no polling loops where an event exists.
 - Small modules with one responsibility; a server entry script wires them together.
 
+SYNTAX THAT HAS ACTUALLY REFUSED RUNS (measured; each one cost six attempts):
+- A function passed as an ARGUMENT closes with `end)`, not `end`. The call opened a paren and the
+  anonymous function does not close it:
+      task.delay(delaySeconds, function()
+          model:Destroy()
+      end)   -- the `)` is part of the closing line
+  Two of six attempts on one system ended with `end` there. The parser then reports the error at
+  the NEXT statement, which looks innocent, so re-read the last line of every callback you write:
+  `end)` for task.delay / task.spawn / task.defer / :Connect / pcall / table.sort.
+- Filling an optional local by assigning into it does not make it non-optional. Luau narrows on
+  what the local was DECLARED as, so this still fails strict mode on every later use:
+      local goal = model:FindFirstChild("PrimaryGoal") :: ObjectValue?
+      if goal == nil then goal = Instance.new("ObjectValue") end
+      goal.Value = target   -- TypeError: Value of type 'ObjectValue?' could be nil
+  Produce the value once and bind it to a local that was never optional:
+      local existing = model:FindFirstChild("PrimaryGoal") :: ObjectValue?
+      local goal: ObjectValue = if existing then existing else Instance.new("ObjectValue")
+  The same applies to any `Instance?` from FindFirstChild, WaitForChild with a timeout, or
+  :FindFirstChildOfClass -- check it once, bind the checked value, use the bound name.
+
 WRITING COMMENTS (measured, and it has refused a whole run):
 - Every line of a comment needs its own `--`. A wrapped second line without one is not a comment,
   it is Luau, and it fails to parse. Prefer `--[[ ]]` for anything longer than one line.
