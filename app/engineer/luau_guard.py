@@ -318,7 +318,9 @@ def check_project(src_root: Path, services_module: Path, known_services: frozens
     found: list[Violation] = []
     for file in sorted(p for p in src_root.rglob("*") if p.suffix in (".luau", ".lua") and p.is_file()):
         relative = file.relative_to(src_root).as_posix()
-        source = file.read_text(encoding="utf-8")
+        # Bytes, decoded without newline translation: the Services module's
+        # identity check is byte-exact, and a CRLF or BOM copy must not pass it.
+        source = file.read_bytes().decode("utf-8", "replace")
         if file.resolve() == services_module:
             found.extend(check_services_module(source, relative, known_services))
         else:

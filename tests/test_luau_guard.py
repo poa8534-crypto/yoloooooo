@@ -221,3 +221,17 @@ def test_the_services_module_may_still_use_game():
     `game`, which check_services_module handles instead."""
     source = render_services_module(["Players"])
     assert check_services_module(source, "Services.luau", KNOWN) == []
+
+
+def test_check_project_reads_bytes_so_a_crlf_services_module_is_refused(tmp_path):
+    """`Path.read_text` translates CRLF to LF on every platform, so a CRLF copy
+    of the Services module used to compare equal to generator output and pass
+    the byte-identity check that exists to refuse it."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    module = shared / "Services.luau"
+    module.write_bytes(render_services_module(["Players"]).replace("\n", "\r\n").encode("utf-8"))
+
+    violations = check_project(tmp_path, module, KNOWN)
+
+    assert [v.rule for v in violations] == ["services-module-edited"]
