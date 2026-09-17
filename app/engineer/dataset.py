@@ -2,19 +2,32 @@
 
 The valuable shape is not "prompt -> good code". It is
 
-    prompt -> the code this model actually wrote -> the exact tool output that
-    refused it -> code that passes
+    the prompt the model will actually see on a retry -- task, rules, its own
+    refused answer, the exact tool output that refused it -- answered with code
+    that passes
 
-because the first three come free from every failed run and the fourth is the
-only part a person has to supply. A model trained on that is being taught what
-its own mistakes look like from the compiler's side, which is the thing a
-downloaded corpus cannot contain.
+because everything but the last part comes free from every failed run.
+
+TRAIN/SERVE SYMMETRY is why the example is three messages and not five. The
+obvious framing is user -> assistant(broken) -> tool(errors) -> assistant(fixed),
+which reads well and is wrong to train on: the usual recipe trains on every
+assistant turn, so the model would be taught to produce the broken answer as
+well as the fix, and masking one assistant turn but not the other is a footgun
+nobody will remember in six months. The loop already puts the refused attempt
+and its feedback inside the NEXT prompt (`<previous_attempt>` in
+app/engineer/prompts.py), so the honest example is that prompt, answered
+correctly. One assistant turn, and it is the only thing worth imitating.
+
+Where a later attempt exists in the same run, its stored prompt is used
+verbatim -- it is exactly what the model saw, including the feedback. Only the
+final attempt of a run needs its retry prompt synthesised, and those are marked
+`prompt: "synthesised"` in the metadata.
 
 A repair is only emitted when the fix is KNOWN GOOD -- a later attempt in the
 same run that passed the gate, or the file as it stands on the game
 repository's base branch, which is there because it passed. A failing attempt
 followed by another failing attempt is not a repair, and training on it would
-teach the model that its second guess was right.
+teach the model its wrong second guess was right.
 """
 
 from __future__ import annotations
@@ -26,6 +39,13 @@ from pathlib import Path
 
 from .capture import Attempt
 from .prompts import SYSTEM
+
+RETRY_TEMPLATE = """{prompt}
+
+<previous_attempt number="{attempt}">
+Your previous answer was refused. Fix every problem below and return the complete answer again.
+{feedback}
+</previous_attempt>"""
 
 
 def _answer(files: dict[str, str], services: Iterable[str], summary: str) -> str:
@@ -41,17 +61,33 @@ def tool_message(attempt: Attempt) -> str:
                        for check in attempt.failures()) or "The attempt was refused."
 
 
+def retry_prompt(attempt: Attempt, following: Attempt | None) -> tuple[str, str]:
+    """(the prompt a retry sees, where it came from).
+
+    `following` is the next attempt of the same run, whose stored prompt IS the
+    retry prompt -- the loop built it from this attempt's failure. Using it
+    means the training example is byte-identical to what the model is sent at
+    inference, which no reconstruction can promise.
+    """
+    if following is not None:
+        return following.prompt, "captured"
+    return RETRY_TEMPLATE.format(prompt=attempt.prompt, attempt=attempt.attempt,
+                                 feedback=tool_message(attempt)), "synthesised"
+
+
 @dataclass(frozen=True)
 class Repair:
     run_id: str
     attempt: int
     model: str
-    source: str  # "attempt" (a later attempt passed) or "human" (the accepted file)
+    source: str  # where the fix came from: "attempt" or "human"
+    prompt: str  # how the user turn was built: "captured" or "synthesised"
     messages: list[dict]
 
     def to_json(self) -> str:
         return json.dumps({"messages": self.messages, "metadata": {
-            "run_id": self.run_id, "attempt": self.attempt, "model": self.model, "fix_source": self.source,
+            "run_id": self.run_id, "attempt": self.attempt, "model": self.model,
+            "fix_source": self.source, "prompt": self.prompt,
         }}, ensure_ascii=False)
 
 
@@ -70,19 +106,19 @@ def repairs(attempts: list[Attempt], accepted: dict[str, str] | None = None) -> 
     for run_id, run in by_run.items():
         run = sorted(run, key=lambda a: a.attempt)
         passing = next((a for a in run if a.passed and a.files), None)
-        for attempt in run:
+        for index, attempt in enumerate(run):
             if attempt.passed:
                 continue
             fix = _fix_for(attempt, passing, accepted)
             if fix is None:
                 continue
             files, source = fix
+            prompt, origin = retry_prompt(attempt, run[index + 1] if index + 1 < len(run) else None)
             yield Repair(run_id=run_id, attempt=attempt.attempt, model=attempt.model, source=source,
+                         prompt=origin,
                          messages=[
                              {"role": "system", "content": SYSTEM},
-                             {"role": "user", "content": attempt.prompt},
-                             {"role": "assistant", "content": attempt.answer.strip()},
-                             {"role": "tool", "content": tool_message(attempt)},
+                             {"role": "user", "content": prompt},
                              {"role": "assistant", "content": _answer(
                                  files, attempt.services or (), "Fixed every problem the checks reported.")},
                          ])

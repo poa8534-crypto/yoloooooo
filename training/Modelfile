@@ -1,0 +1,20 @@
+# venture-coder:14b -- qwen2.5-coder with a LoRA trained on this project's own
+# gate refusals. Build it after downloading the GGUF from the Colab notebook:
+#
+#     ollama create venture-coder:14b -f training/Modelfile
+#
+# `engineer_ollama_models` names this model first, so the engineer picks it up
+# with no code change and falls back to stock qwen when it is not installed.
+
+FROM ./venture-coder.Q4_K_M.gguf
+
+# 16384 matches engineer_ollama_context in app/config.py. A repair prompt is
+# about 6,000 tokens before the model writes anything, so a smaller window
+# silently truncates the rules or the compiler output it is meant to read.
+PARAMETER num_ctx 16384
+
+# Low, because the answer must be a single parseable JSON object holding Luau
+# that passes a type checker. There is nothing here worth being creative about.
+PARAMETER temperature 0.2
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.05
