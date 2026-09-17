@@ -117,7 +117,11 @@ class Settings(BaseSettings):
     # that sets it keeps working: it becomes the whole chain.
     engineer_provider: Literal["gemini", "ollama", "antigravity"] | None = None
     engineer_antigravity_executable: str = "agy"
-    engineer_antigravity_models: str = "gemini-3.8-flash-high"
+    # Tried in order. Flash 3.8 throughout, at descending effort: a rate-limited
+    # high is a reason to think less about the same problem, not to change model
+    # underneath a run. `agy models` names the effort inside the model, so these
+    # are three efforts of one model rather than three models.
+    engineer_antigravity_models: str = "gemini-3.8-flash-high,gemini-3.8-flash-medium"
     engineer_antigravity_effort: Literal["low", "medium", "high"] = "medium"
     engineer_antigravity_timeout_seconds: float = Field(default=900.0, gt=0)
     engineer_ollama_base_url: str = "http://127.0.0.1:11434"
