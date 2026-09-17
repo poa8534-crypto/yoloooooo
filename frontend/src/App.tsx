@@ -47,6 +47,19 @@ type Calibration = {
   phase: string; complete_clusters: number; required_clusters: number; scoring_active: boolean
   model_version: string | null; heldout_precision: number | null; heldout_recommendations: number | null; reason: string
 }
+// Cheap enough to poll. The "Running" badge used to be read out of the full
+// run list, which packs an evidence packet and re-verifies citations for every
+// candidate of the last twenty-five runs -- seven seconds of work on a
+// five-second timer, so a finished run went on claiming to be running.
+type AgentStatus = {
+  hunter: {
+    running: boolean
+    runs: Array<{ id: string; niche: string; status: string; stage: string; elapsed_seconds: number }>
+    latest: null | { id: string; niche: string; status: string; completed_at: string | null }
+  }
+  scout: { running: boolean; jobs: Array<{ id: string; status: string; candidate_id: string | null }> }
+  observed_at: string
+}
 type DependencyReport = { name: string; configured: boolean; state: string; detail: string; checked_at: string | null }
 type Health = {
   status: string; database: string
@@ -215,6 +228,45 @@ function toneFor(value: string): Tone {
 
 function Badge({ children, tone = 'insufficient' }: { children: ReactNode; tone?: Tone }) {
   return <span className={`evidence-badge ${tone}`}><i />{children}</span>
+}
+
+// Both agent pages were one long scroll of stacked panels -- seven on Meta
+// Hunter -- so reading the pipeline meant scrolling past the form, and the
+// report was below a history table nobody had asked to see. Same panels, one
+// screen at a time.
+function TabBar({ tabs, active, onSelect, label }: {
+  tabs: Array<{ id: string; label: string; badge?: ReactNode }>
+  active: string; onSelect: (id: string) => void; label: string
+}) {
+  return <div className="tab-bar" role="tablist" aria-label={label}>
+    {tabs.map(tab => <button key={tab.id} role="tab" type="button"
+      id={`tab-${tab.id}`} aria-controls={`panel-${tab.id}`}
+      aria-selected={active === tab.id} className={active === tab.id ? 'tab active' : 'tab'}
+      onClick={() => onSelect(tab.id)}>
+      {tab.label}{tab.badge !== undefined && <em>{tab.badge}</em>}
+    </button>)}
+  </div>
+}
+
+function TabPanel({ id, active, children }: { id: string; active: string; children: ReactNode }) {
+  if (id !== active) return null
+  return <div role="tabpanel" id={`panel-${id}`} aria-labelledby={`tab-${id}`} className="tab-panel">
+    {children}
+  </div>
+}
+
+// `source_backed_design_speculative` rendered raw was wider than the card that
+// held it, so the badge overflowed and pushed the counts beside it off the
+// edge. Same states, said in words that fit.
+const EVIDENCE_LABEL: Record<string, string> = {
+  source_backed: 'Source-backed',
+  source_backed_design_speculative: 'Source-backed · speculative',
+  source_backed_design_incomplete: 'Source-backed · unresolved',
+  blocked: 'Blocked by gates',
+  unknown: 'Unknown',
+}
+function evidenceLabel(state: string): string {
+  return EVIDENCE_LABEL[state] || (state || 'unknown').replaceAll('_', ' ')
 }
 
 function EmptyState({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
@@ -768,8 +820,23 @@ function MetaHunterPage({ runs, health, onStart, onResume, busy, onInspectFact }
   // guessing.
   const [reportId, setReportId] = useState("")
   const latest = runs.find(r => r.id === reportId) || runs[0]
+  const [tab, setTab] = useState('run')
+  // A run starting is the moment the pipeline becomes the interesting panel,
+  // so the page moves there rather than leaving the operator on the form.
+  const wasActive = useRef(false)
+  useEffect(() => {
+    if (!!active && !wasActive.current) setTab('pipeline')
+    wasActive.current = !!active
+  }, [active])
   return <section className="workspace"><div className="agent-boundary"><Badge tone="proposal">Agent authority: proposal only</Badge><p>Meta Hunter can suggest concepts and search heuristics. It cannot create URLs, platform metrics, scores, confidence values or verdicts.</p><strong>Invariant enforced</strong></div>
-    <div className="agent-columns"><article className="data-panel"><div className="panel-heading"><div><span>Research configuration</span><h2>Meta Hunter parameters</h2></div><Badge tone={active ? 'inference' : 'insufficient'}>{active ? active.status : 'Idle'}</Badge></div><form onSubmit={submit}><label>Research niche or question<input value={niche} minLength={3} required onChange={event => setNiche(event.target.value)} placeholder="e.g. cooperative cozy farming" /></label><div className="form-grid"><label>Region<input value="Global" disabled /></label><label>Corpus language<input value="English" disabled /></label><label>Candidate cap<input value="30 unique games · up to 3 concepts" disabled /></label><label>Search policy<input value="Discovery → primary evidence" disabled /></label></div>{(() => {
+    <TabBar label="Meta Hunter sections" active={tab} onSelect={setTab} tabs={[
+      { id: 'run', label: 'Run' },
+      { id: 'pipeline', label: 'Pipeline', badge: active ? 'live' : undefined },
+      { id: 'sources', label: 'Sources' },
+      { id: 'history', label: 'History', badge: runs.length || undefined },
+      { id: 'report', label: 'Report' },
+    ]} />
+    <TabPanel id="run" active={tab}><div className="agent-columns"><article className="data-panel"><div className="panel-heading"><div><span>Research configuration</span><h2>Meta Hunter parameters</h2></div><Badge tone={active ? 'inference' : 'insufficient'}>{active ? active.status : 'Idle'}</Badge></div><form onSubmit={submit}><label>Research niche or question<input value={niche} minLength={3} required onChange={event => setNiche(event.target.value)} placeholder="e.g. cooperative cozy farming" /></label><div className="form-grid"><label>Region<input value="Global" disabled /></label><label>Corpus language<input value="English" disabled /></label><label>Candidate cap<input value="30 unique games · up to 3 concepts" disabled /></label><label>Search policy<input value="Discovery → primary evidence" disabled /></label></div>{(() => {
       // Three actions, and the difference between them matters: Start is a new
       // niche, Restart re-runs the last one from nothing, Resume continues an
       // interrupted run from its checkpoint without re-spending what it paid.
@@ -793,6 +860,9 @@ function MetaHunterPage({ runs, health, onStart, onResume, busy, onInspectFact }
       </small></>
     })()}</form></article>
       <article className="data-panel"><div className="panel-heading"><div><span>Immutable safety rules</span><h2>Protected invariants</h2></div></div><div className="invariant-list">{[['Evidence firewall', true], ['URLs from model', false], ['Platform metrics from model', false], ['Model-authored verdicts', false], ['Strict JSON schema', true], ['Fail-closed mode', true]].map(([label, enabled]) => <div key={String(label)}><span>{label}</span><Badge tone={enabled ? 'verified' : 'conflict'}>{enabled ? 'Enabled · locked' : 'Disabled · locked'}</Badge></div>)}</div></article></div>
+    <div className="api-readiness"><span>Tavily <b>{health?.connectors.tavily_configured ? 'Configured — not a live authentication check' : 'Missing key'}</b></span><span>YouTube <b>{health?.connectors.youtube_configured ? 'Configured — not a live authentication check' : 'Missing key'}</b></span><span>Roblox <b>Public interface</b></span><span>Qwen <b>{health?.ollama.primary_present ? '14B ready' : 'Unavailable'}</b></span></div>
+    </TabPanel>
+    <TabPanel id="pipeline" active={tab}>
     <article className="data-panel"><div className="panel-heading"><div><span>Reported run state</span><h2>Pipeline</h2></div>{latest && <Badge tone={toneFor(latest.status)}>{latest.status}</Badge>}</div>
       {latest ? <div className="run-state"><strong>{latest.niche}</strong><p className="mono">{latest.message}</p><small>{active ? 'This run is still in progress.' : `Finished ${formatDate(latest.completed_at || latest.created_at)}`}</small></div> : <EmptyState title="No run reported yet">Start a research run to see its reported state.</EmptyState>}
       {(() => {
@@ -812,7 +882,12 @@ function MetaHunterPage({ runs, health, onStart, onResume, busy, onInspectFact }
           {current >= 0 && <small className="gate-hint">Phases come from the stage the run persists to its checkpoint, not from a fixed script.</small>}
         </>
       })()}</article>
+    </TabPanel>
+    <TabPanel id="history" active={tab}>
     <article className="data-panel"><div className="panel-heading"><div><span>Append-only run records</span><h2>Run history</h2></div></div>{runs.length ? <div className="table-scroll"><table><thead><tr><th>Niche</th><th>Status</th><th>Started</th><th>Candidates</th><th>Result</th></tr></thead><tbody>{runs.map(run => <tr key={run.id}><td><strong>{run.niche}</strong><small><code>{run.id}</code></small></td><td><Badge tone={toneFor(run.status)}>{run.status}</Badge></td><td>{formatDate(run.created_at)}</td><td className="numeric">{run.candidates.length}</td><td>{run.message}</td></tr>)}</tbody></table></div> : <EmptyState title="No Meta Hunter runs">Submit the first niche above when you are ready to collect evidence.</EmptyState>}</article>
+    </TabPanel>
+    <TabPanel id="sources" active={tab}>
+    {!latest?.progress && <EmptyState title="No run to report on">Discovery sources appear once a run has searched for something.</EmptyState>}
     {latest?.progress && <article className="data-panel"><div className="panel-heading"><div><span>Where the games came from</span><h2>Discovery sources</h2></div></div>
       <p className="body-copy">Every source is asked and the run keeps whatever answers. One being unavailable is recorded as an abstention, not a failure.</p>
       {(() => { const totals = discoveryTotals(latest.progress?.discovery_sources)
@@ -831,8 +906,11 @@ function MetaHunterPage({ runs, health, onStart, onResume, busy, onInspectFact }
         <p>Written from your niche by the query planner, then reused every round.</p>
         <ul>{latest.progress!.search_queries!.map(q => <li key={q}><code>{q}</code></li>)}</ul></details>}
     </article>}
+    </TabPanel>
+    <TabPanel id="report" active={tab}>
+    {!latest && <EmptyState title="Nothing to report yet">A finished run writes its report here.</EmptyState>}
     {latest && <><label>Inspect research run<select value={latest.id} onChange={e => setReportId(e.target.value)}>{runs.map(r => <option key={r.id} value={r.id}>{r.niche} — {r.status}</option>)}</select></label>{latest.progress && <article className="data-panel"><h3>{latest.progress.stage}</h3><p>{Math.round(latest.progress.elapsed_seconds)}s elapsed · {Math.round(latest.progress.remaining_seconds)}s {["queued", "running"].includes(latest.status) ? "remaining" : "unused budget"}</p><div className="metrics-grid compact">{Object.entries(latest.progress.usage).map(([key, value]) => <Metric key={key} label={key.replaceAll("_", " ")} value={value} note="Reserved attempts / captured entities" />)}</div>{latest.progress.questions.map(q => <p key={q.id}>{q.question} — {q.state}</p>)}</article>}<ResearchReport runId={latest.id} status={latest.status} onInspectFact={onInspectFact} /></>}
-    <div className="api-readiness"><span>Tavily <b>{health?.connectors.tavily_configured ? 'Configured — not a live authentication check' : 'Missing key'}</b></span><span>YouTube <b>{health?.connectors.youtube_configured ? 'Configured — not a live authentication check' : 'Missing key'}</b></span><span>Roblox <b>Public interface</b></span><span>Qwen <b>{health?.ollama.primary_present ? '14B ready' : 'Unavailable'}</b></span></div>
+    </TabPanel>
   </section>
 }
 
@@ -962,16 +1040,30 @@ function ResultDetail({ card, onClose }: { card: ResultCard; onClose: () => void
       .catch(caught => { if (!cancelled) setError((caught as Error).message) })
     return () => { cancelled = true }
   }, [card.audit_id])
-  return <div className="drawer-scrim open" onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
-    <aside role="dialog" aria-modal="true" aria-label={card.concept_title} className="evidence-drawer">
+  // A centre modal rather than a side drawer: the brief is the thing being
+  // read, and a 420px column made every build step wrap to three lines. Escape
+  // and a click on the backdrop both close it.
+  const panel = useRef<HTMLElement>(null)
+  useEffect(() => {
+    // Focus moves into the dialog and back out again on close. Without it the
+    // keyboard stays on the card behind the scrim, and Tab walks a page the
+    // reader cannot see.
+    const previous = document.activeElement as HTMLElement | null
+    panel.current?.focus()
+    const keydown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    document.addEventListener('keydown', keydown)
+    return () => { document.removeEventListener('keydown', keydown); previous?.focus?.() }
+  }, [onClose])
+  return <div className="modal-scrim" onMouseDown={event => { if (event.currentTarget === event.target) onClose() }}>
+    <aside ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label={card.concept_title} className="result-modal">
       <header><div><span>{card.niche || 'Audited concept'}</span><strong>{card.concept_title}</strong></div>
         <button aria-label="Close concept" onClick={onClose}>×</button></header>
-      <div className="drawer-body">
+      <div className="modal-body">
         {error && <div className="warning-box"><p>{error}</p></div>}
         {!audit && !error && <div className="drawer-loading">Reading the audit…</div>}
         {audit && <>
-          <Badge tone={audit.evidence_state === 'source_backed' ? 'verified' : 'insufficient'}>
-            {(audit.evidence_state || 'unknown').replaceAll('_', ' ')}</Badge>
+          <Badge tone={audit.evidence_state?.startsWith('source_backed') ? 'verified' : 'insufficient'}>
+            {evidenceLabel(audit.evidence_state || 'unknown')}</Badge>
           <OpportunityPanel universeId={card.universe_id} />
           {audit.proposal && <>
             <section><h2>Core loop</h2><p>{audit.proposal.core_loop}</p></section>
@@ -999,8 +1091,8 @@ function ResultStrip({ cards, onOpen }: { cards: ResultCard[]; onOpen: (card: Re
       <strong>{card.concept_title}</strong>
       <p>{card.core_loop}</p>
       <div className="concept-card-footer">
-        <Badge tone={card.evidence_state === 'source_backed' ? 'verified' : 'insufficient'}>
-          {card.evidence_state.replaceAll('_', ' ')}</Badge>
+        <Badge tone={card.evidence_state.startsWith('source_backed') ? 'verified' : 'insufficient'}>
+          {evidenceLabel(card.evidence_state)}</Badge>
         <small>{card.cited_facts} cited · {card.risks} risk(s)</small>
       </div>
     </button>)}
@@ -1048,6 +1140,7 @@ function ScoutQueueSection() {
   const [cards, setCards] = useState<ResultCard[]>([])
   const [chosen, setChosen] = useState<Set<string>>(new Set())
   const [panelOpen, setPanelOpen] = useState(false)
+  const [resultTab, setResultTab] = useState('latest')
   const [detail, setDetail] = useState<ResultCard | null>(null)
   const [jobs, setJobs] = useState<AuditJob[]>([])
   const [labels, setLabels] = useState<Record<string, JobLabel>>({})
@@ -1087,7 +1180,8 @@ function ScoutQueueSection() {
       // A reload used to empty this strip, so an audit that finished while the
       // page was closed left nothing to open. The jobs are on the server;
       // show the ones this queue started, newest last.
-      setJobs(previous => previous.length ? previous : [...(recent.jobs || [])].reverse())
+      setJobs(previous => previous.length ? previous
+        : [...(recent.jobs || []).slice(0, 6)].reverse())
       // Everything routed is selected by default; the panel is for removing,
       // not for opting in. A concept the operator already cleared stays
       // cleared across refreshes.
@@ -1201,6 +1295,14 @@ function ScoutQueueSection() {
           </small></>}
     </article>
 
+    <TabBar label="Venture Scout results" active={resultTab} onSelect={setResultTab} tabs={[
+      { id: 'latest', label: 'Latest results', badge: Math.min(cards.length, 3) || undefined },
+      { id: 'runs', label: 'This run', badge: jobs.length || undefined },
+      { id: 'all', label: 'All audits', badge: cards.length || undefined },
+    ]} />
+
+    <TabPanel id="runs" active={resultTab}>
+    {!jobs.length && <EmptyState title="Nothing started yet">Start the queue and each audit appears here as its own card.</EmptyState>}
     {!!jobs.length && <article className="data-panel"><div className="panel-heading"><div>
       <span>{active.length ? `${active.length} running · ${done} finished`
         : `${done} finished`}</span>
@@ -1211,12 +1313,28 @@ function ScoutQueueSection() {
         behind it. Open a card for the full brief, or for what the audit is doing right now.</p>
       <JobStrip jobs={jobs} labels={labels} onOpen={openJob} />
     </article>}
+    </TabPanel>
 
+    <TabPanel id="latest" active={resultTab}>
+
+    <article className="data-panel latest-three"><div className="panel-heading"><div>
+      <span>The three most recent briefs, newest first</span><h2>Latest results</h2></div>
+      <Badge tone={cards.length ? 'verified' : 'insufficient'}>{cards.length} audited</Badge></div>
+      {cards.length
+        ? <ResultStrip cards={cards.slice(0, 3)} onOpen={setDetail} />
+        : <EmptyState title="No audited concepts yet">Run the queue and the finished briefs appear here.</EmptyState>}
+      {cards.length > 3 && <button className="text-button" onClick={() => setResultTab('all')}>
+        See the other {cards.length - 3}</button>}
+    </article>
+    </TabPanel>
+
+    <TabPanel id="all" active={resultTab}>
     <article className="data-panel"><div className="panel-heading"><div>
-      <span>Scroll sideways; open one for the full brief</span><h2>Audited concepts</h2></div>
+      <span>Every audit in the ledger, newest first</span><h2>All audits</h2></div>
       <Badge>{cards.length}</Badge></div>
       <ResultStrip cards={cards} onOpen={setDetail} />
     </article>
+    </TabPanel>
 
     {panelOpen && queue && <ScoutQueuePanel queue={queue.queued} chosen={chosen} busy={busy}
       onToggle={id => setChosen(previous => {
@@ -1505,8 +1623,23 @@ export default function App() {
   const [updatedAt, setUpdatedAt] = useState('')
   const [refreshErrors, setRefreshErrors] = useState<string[]>([])
   const candidates = useMemo(() => runs.flatMap(run => run.candidates), [runs])
-  const metaRunning = runs.some(run => ['queued', 'running'].includes(run.status))
+  const [agents, setAgents] = useState<AgentStatus | null>(null)
+  // Read from the cheap endpoint, not from the run list. A badge that says an
+  // agent is working has to be able to stop saying it promptly.
+  const metaRunning = agents ? agents.hunter.running : false
   const scoutReady = candidates.length > 0
+
+  useEffect(() => {
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout>
+    const tick = async () => {
+      try { const next = await api<AgentStatus>('/api/agents/status'); if (!stopped) setAgents(next) }
+      catch { /* a missed poll leaves the previous reading; the next one corrects it */ }
+      if (!stopped) timer = setTimeout(tick, 3000)
+    }
+    void tick()
+    return () => { stopped = true; clearTimeout(timer) }
+  }, [])
 
   const loadMatching = useCallback(async () => {
     const [status, reviews] = await Promise.all([
@@ -1545,11 +1678,26 @@ export default function App() {
 
   useEffect(() => { void loadAll() }, [loadAll])
 
+  // A run finishing is the one moment the heavy data is certainly stale, and
+  // waiting out the slow timer for it would leave the concepts it just wrote
+  // invisible for up to twenty seconds.
+  const wasRunning = useRef(false)
+  useEffect(() => {
+    const running = agents?.hunter.running ?? false
+    if (wasRunning.current && !running) void loadAll()
+    wasRunning.current = running
+  }, [agents?.hunter.running, loadAll])
+
   useEffect(() => {
     let stopped = false
     let timer: ReturnType<typeof setTimeout>
-    const tick = async () => { await loadAll(); if (!stopped) timer = setTimeout(tick, 5000) }
-    timer = setTimeout(tick, 5000)
+    // Twenty seconds, not five. One pass is seconds of database work -- an
+    // evidence packet and a citation re-verification per candidate -- and
+    // running it continuously kept the machine busy answering a question
+    // nothing on screen changes that fast. Anything that does need to be
+    // current is on /api/agents/status, which costs milliseconds.
+    const tick = async () => { await loadAll(); if (!stopped) timer = setTimeout(tick, 20_000) }
+    timer = setTimeout(tick, 20_000)
     return () => { stopped = true; clearTimeout(timer) }
   }, [loadAll])
 

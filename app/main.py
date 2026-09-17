@@ -476,6 +476,52 @@ async def run_scout_queue(selection: ScoutQueueRun, db: Session = Depends(get_db
     return {"started": scout_queue.label(db, started), "skipped": skipped}
 
 
+@app.get("/api/agents/status")
+def agents_status(db: Session = Depends(get_db)):
+    """Which agents are working, answered cheaply enough to poll.
+
+    The sidebar's "Running" badge was read out of `/api/research-runs`, which
+    builds a full candidate view -- an evidence packet and a citation
+    re-verification -- for every candidate of the last twenty-five runs. At 256
+    candidates that is seven seconds of database work, polled on a five-second
+    timer, so the badge was always reporting the state of the run as it had
+    been several seconds earlier and a finished run kept claiming to be
+    running until the next slow answer landed.
+
+    This reads the run rows and nothing else. No candidate is loaded, no
+    evidence is packed, and no citation is re-checked.
+    """
+    active = list(db.scalars(
+        select(ResearchRun)
+        .where(ResearchRun.status.in_([RunStatus.QUEUED.value, RunStatus.RUNNING.value]))
+        .order_by(ResearchRun.created_at.desc())
+    ))
+    latest = db.scalar(select(ResearchRun).order_by(ResearchRun.created_at.desc()).limit(1))
+    audits = [job for job in (app.state.audit_jobs.recent(20)
+                              if getattr(app.state, "audit_jobs", None) else [])
+              if job.get("status") in ACTIVE_AUDIT_STATES]
+    return {
+        "hunter": {
+            "running": bool(active),
+            "runs": [{"id": run.id, "niche": run.niche, "status": run.status,
+                      **{key: progress(db, run)[key] for key in ("stage", "elapsed_seconds")}}
+                     for run in active],
+            "latest": None if latest is None else {
+                "id": latest.id, "niche": latest.niche, "status": latest.status,
+                "completed_at": latest.completed_at.isoformat() if latest.completed_at else None,
+            },
+        },
+        "scout": {
+            "running": bool(audits),
+            "jobs": [{"id": job["id"], "status": job["status"],
+                      "candidate_id": job.get("candidate_id")} for job in audits],
+        },
+        # Stamped by the server so the page can say how old its answer is
+        # rather than presenting a stale reading as current.
+        "observed_at": datetime.now(UTC).isoformat(),
+    }
+
+
 @app.get("/api/scout/results")
 def scout_results(limit: int = 60, db: Session = Depends(get_db)):
     return {"cards": scout_queue.audited(db, limit=limit)}

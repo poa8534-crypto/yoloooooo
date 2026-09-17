@@ -251,6 +251,7 @@ test.describe('errors', () => {
 test.describe('meta hunter', () => {
   test('choosing a run loads that run\'s report', async ({ page }) => {
     await page.goto('/#/meta')
+    await page.getByRole('tab', { name: /^Report/ }).click()
     const picker = page.getByLabel('Inspect research run')
     await expect(picker).toBeVisible()
     const options = await picker.locator('option').allInnerTexts()
@@ -356,6 +357,7 @@ test.describe('discovery is visible', () => {
 
   test('the Meta Hunter page shows which sources were asked', async ({ page }) => {
     await page.goto('/#/meta')
+    await page.getByRole('tab', { name: /^Sources/ }).click()
     const panel = page.locator('.data-panel', { hasText: 'Discovery sources' })
     await expect(panel).toBeVisible()
     for (const label of ['Roblox search', 'Local search (SearxNG)', 'Tavily']) {
@@ -377,6 +379,7 @@ test.describe('discovery is visible', () => {
       await route.fulfill({ json: runs })
     })
     await page.goto('/#/meta')
+    await page.getByRole('tab', { name: /^Sources/ }).click()
     const fold = page.locator('details.brief-fold', { hasText: 'Planned searches' })
     await expect(fold).toBeVisible()
     await fold.locator('summary').click()
@@ -481,7 +484,8 @@ test.describe('the Hunter to Scout queue', () => {
         created_at: '2026-09-15T00:00:00+00:00' })) } })
     })
     await page.goto('/#/scout')
-    const strip = page.locator(".data-panel", { hasText: "Audited concepts" }).locator(".card-strip")
+    await page.getByRole('tab', { name: /^All audits/ }).click()
+    const strip = page.locator(".data-panel", { hasText: "All audits" }).locator(".card-strip")
     await expect(strip).toBeVisible()
     await expect(strip.locator('.concept-card')).toHaveCount(8)
     // The strip scrolls; the document must not.
@@ -813,6 +817,9 @@ test.describe('audits from a run are cards, not a list of identifiers', () => {
   ]
   const strip = (page: import('@playwright/test').Page) =>
     page.locator('.data-panel', { hasText: 'Audit runs' }).locator('.card-strip')
+  const openRunsTab = async (page: import('@playwright/test').Page) => {
+    await page.getByRole('tab', { name: /^This run/ }).click()
+  }
 
   test.beforeEach(async ({ page }) => {
     await page.route('**/api/audit-jobs', route =>
@@ -821,11 +828,13 @@ test.describe('audits from a run are cards, not a list of identifiers', () => {
 
   test('every started audit gets its own card', async ({ page }) => {
     await page.goto('/#/scout')
+    await openRunsTab(page)
     await expect(strip(page).locator('.concept-card')).toHaveCount(3)
   })
 
   test('a card is named by its concept, not by a truncated identifier', async ({ page }) => {
     await page.goto('/#/scout')
+    await openRunsTab(page)
     const cards = strip(page).locator('.concept-card')
     await expect(cards).toHaveCount(3)
     await expect(strip(page)).toContainText('Lantern Bay')
@@ -838,6 +847,7 @@ test.describe('audits from a run are cards, not a list of identifiers', () => {
     // The endpoint answers newest first, which puts the audit you started last
     // on the left and reads backwards against the order you chose them in.
     await page.goto('/#/scout')
+    await openRunsTab(page)
     const cards = strip(page).locator('.concept-card')
     await expect(cards.nth(0)).toContainText('Reef Wardens')
     await expect(cards.nth(2)).toContainText('Lantern Bay')
@@ -846,6 +856,7 @@ test.describe('audits from a run are cards, not a list of identifiers', () => {
   test('every card is clickable', async ({ page }) => {
     // The original complaint: the three lines could not be opened at all.
     await page.goto('/#/scout')
+    await openRunsTab(page)
     await expect(strip(page).locator('button.concept-card')).toHaveCount(3)
     for (const card of await strip(page).locator('.concept-card').all()) {
       await expect(card).toBeEnabled()
@@ -854,6 +865,7 @@ test.describe('audits from a run are cards, not a list of identifiers', () => {
 
   test('a running card says which pass it is on', async ({ page }) => {
     await page.goto('/#/scout')
+    await openRunsTab(page)
     const card = strip(page).locator('.concept-card', { hasText: 'Tide Market' })
     await expect(card).toContainText('Pass 2')
     await expect(card).toContainText('running')
@@ -872,6 +884,7 @@ test.describe('audits from a run are cards, not a list of identifiers', () => {
                   differentiator: 'Shared nets.', build_steps: ['Build the dock'],
                   risks: [], questions: [], supporting_fact_ids: [] } } }))
     await page.goto('/#/scout')
+    await openRunsTab(page)
     await strip(page).locator('.concept-card', { hasText: 'Lantern Bay' }).click()
     const dialog = page.getByRole('dialog', { name: 'Lantern Bay' })
     await expect(dialog).toBeVisible()
@@ -882,6 +895,7 @@ test.describe('audits from a run are cards, not a list of identifiers', () => {
 
   test('opening a running card shows what it is doing right now', async ({ page }) => {
     await page.goto('/#/scout')
+    await openRunsTab(page)
     await strip(page).locator('.concept-card', { hasText: 'Tide Market' }).click()
     const dialog = page.getByRole('dialog', { name: 'Audit progress' })
     await expect(dialog).toBeVisible()
@@ -894,6 +908,7 @@ test.describe('audits from a run are cards, not a list of identifiers', () => {
     // most of the width with the next one peeking, and the number that would
     // catch a real regression is the one where it becomes a sliver.
     await page.goto('/#/scout')
+    await openRunsTab(page)
     const box = await strip(page).locator('.concept-card').first().boundingBox()
     const row = await strip(page).boundingBox()
     expect(box!.width).toBeGreaterThanOrEqual(Math.min(300, row!.width * 0.7))
@@ -903,6 +918,7 @@ test.describe('audits from a run are cards, not a list of identifiers', () => {
     async ({ page }, testInfo) => {
       test.skip(testInfo.project.name !== 'desktop', 'about the widest layout only')
       await page.goto('/#/scout')
+      await openRunsTab(page)
       const box = await strip(page).locator('.concept-card').first().boundingBox()
       const row = await strip(page).boundingBox()
       expect(box!.width).toBeGreaterThan(320)
@@ -919,6 +935,7 @@ test.describe('audits from a run are cards, not a list of identifiers', () => {
     await page.route('**/api/audit-jobs/*/restart', route => route.fulfill({ json: {
       ...JOBS[0], id: 'restarted-one', status: 'queued', audit_id: null } }))
     await page.goto('/#/scout')
+    await openRunsTab(page)
     await expect(strip(page).locator('.concept-card')).toHaveCount(3)
     await page.getByRole('button', { name: 'Restart last audit' }).click()
     await expect(strip(page)).toContainText('Tide Market')
@@ -927,9 +944,186 @@ test.describe('audits from a run are cards, not a list of identifiers', () => {
 
   test('the page itself does not scroll sideways because of the strip', async ({ page }) => {
     await page.goto('/#/scout')
+    await openRunsTab(page)
     await expect(strip(page).locator('.concept-card').first()).toBeVisible()
     const pageScrolls = await page.evaluate(() =>
       document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)
     expect(pageScrolls).toBe(false)
+  })
+})
+
+test.describe('one screen at a time', () => {
+  // Meta Hunter was seven stacked panels in one scroll: reading the pipeline
+  // meant scrolling past the form, and the report sat under a history table
+  // nobody had asked to see.
+  test('Meta Hunter opens on the run form, not on everything at once', async ({ page }) => {
+    await page.goto('/#/meta')
+    const tabs = page.getByRole('tablist', { name: 'Meta Hunter sections' })
+    await expect(tabs).toBeVisible()
+    await expect(page.getByRole('tab', { name: /^Run/ })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.data-panel', { hasText: 'Meta Hunter parameters' })).toBeVisible()
+    await expect(page.locator('.data-panel', { hasText: 'Run history' })).toHaveCount(0)
+  })
+
+  test('each tab shows its own panel and hides the others', async ({ page }) => {
+    await page.goto('/#/meta')
+    await page.getByRole('tab', { name: /^History/ }).click()
+    await expect(page.locator('.data-panel', { hasText: 'Run history' })).toBeVisible()
+    await expect(page.locator('.data-panel', { hasText: 'Meta Hunter parameters' })).toHaveCount(0)
+    await page.getByRole('tab', { name: /^Pipeline/ }).click()
+    await expect(page.locator('.data-panel', { hasText: 'Pipeline' }).first()).toBeVisible()
+    await expect(page.locator('.data-panel', { hasText: 'Run history' })).toHaveCount(0)
+  })
+
+  test('a tab with nothing to show says so rather than rendering blank', async ({ page }) => {
+    await page.route('**/api/research-runs?*', route => route.fulfill({ json: [] }))
+    await page.goto('/#/meta')
+    await page.getByRole('tab', { name: /^Report/ }).click()
+    await expect(page.locator('.tab-panel')).toContainText('Nothing to report yet')
+  })
+
+  test('the Hunter page fits without a long scroll', async ({ page }) => {
+    // The complaint was the scroll itself. One tab's worth of panels should
+    // not run to several screens.
+    await page.goto('/#/meta')
+    const ratio = await page.evaluate(() =>
+      document.documentElement.scrollHeight / window.innerHeight)
+    expect(ratio).toBeLessThan(2.2)
+  })
+})
+
+test.describe('the brief pops out and scrolls', () => {
+  const CARD = {
+    audit_id: 'audit-9', candidate_id: 'c1', proposal_id: 'p1', universe_id: '77',
+    niche: 'Something to do with pets, kids love pets so look for something in that region and twist it with another niche, maybe hatch a pet and fight a boss monster or something with a Pokemon twist',
+    concept_title: 'Pet Adventure Simulator: Quest for Lost Treasures',
+    core_loop: 'Players hatch pets that guide them through exploration zones.',
+    evidence_state: 'source_backed_design_speculative', risks: 3, cited_facts: 2,
+    created_at: '2026-09-16T00:00:00+00:00',
+  }
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/api/scout/results*', route => route.fulfill({ json: { cards: [CARD] } }))
+    await page.route('**/api/audits/audit-9', route => route.fulfill({ json: {
+      candidate_id: 'c1', audit_id: 'audit-9', evidence_state: 'source_backed_design_speculative',
+      risks: ['Retention is unproven'],
+      proposal: { concept_title: CARD.concept_title, core_loop: CARD.core_loop,
+                  differentiator: 'Shared nets.',
+                  build_steps: Array.from({ length: 12 }, (_, i) => `Step ${i + 1}: build something substantial enough to need scrolling`),
+                  risks: [], questions: [], supporting_fact_ids: [] } } }))
+  })
+
+  test('the latest results are the first thing on the page', async ({ page }) => {
+    await page.goto('/#/scout')
+    const panel = page.locator('.data-panel', { hasText: 'Latest results' })
+    await expect(panel).toBeVisible()
+    await expect(panel.locator('.concept-card')).toHaveCount(1)
+  })
+
+  test('a card opens a centre modal, not a side drawer', async ({ page }) => {
+    await page.goto('/#/scout')
+    await page.locator('.concept-card').first().click()
+    const modal = page.locator('.result-modal')
+    await expect(modal).toBeVisible()
+    const centred = await page.evaluate(() => {
+      const box = document.querySelector('.result-modal')!.getBoundingClientRect()
+      const left = box.left, right = window.innerWidth - box.right
+      return Math.abs(left - right) < 24
+    })
+    expect(centred, 'the brief is pinned to one edge').toBe(true)
+  })
+
+  test('the brief scrolls inside the modal, not the page behind it', async ({ page }) => {
+    await page.goto('/#/scout')
+    await page.locator('.concept-card').first().click()
+    await expect(page.locator('.modal-body')).toContainText('Step 12')
+    const scrolls = await page.evaluate(() => {
+      const body = document.querySelector('.modal-body')!
+      return body.scrollHeight > body.clientHeight + 4
+    })
+    expect(scrolls, 'the long brief is not scrollable').toBe(true)
+  })
+
+  test('escape closes it', async ({ page }) => {
+    await page.goto('/#/scout')
+    await page.locator('.concept-card').first().click()
+    await expect(page.locator('.result-modal')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.result-modal')).toHaveCount(0)
+  })
+
+  test('nothing on a card prints outside it', async ({ page }) => {
+    // A niche is whatever was typed into the run box, which in practice is a
+    // paragraph, and the evidence state used to render as the raw
+    // `source_backed_design_speculative` -- wider than the card that held it.
+    await page.goto('/#/scout')
+    const card = page.locator('.concept-card').first()
+    await expect(card).toBeVisible()
+    const overflow = await card.evaluate(node => {
+      const box = node.getBoundingClientRect()
+      return [...node.querySelectorAll('*')]
+        .map(child => child.getBoundingClientRect())
+        .filter(c => c.width > 0)
+        .map(c => Math.max(c.right - box.right, box.left - c.left, c.bottom - box.bottom))
+        .reduce((worst, value) => Math.max(worst, value), 0)
+    })
+    expect(Math.round(overflow), 'content spills past the card edge').toBeLessThanOrEqual(1)
+  })
+
+  test('the evidence state is readable words, not a database value', async ({ page }) => {
+    await page.goto('/#/scout')
+    const card = page.locator('.concept-card').first()
+    await expect(card).not.toContainText('source_backed_design_speculative')
+    await expect(card).toContainText('Source-backed')
+  })
+})
+
+test.describe('the Running badge stops saying Running', () => {
+  // It was read out of the full run list, which packs an evidence packet and
+  // re-verifies citations for every candidate of the last twenty-five runs --
+  // seven seconds of work on a five-second timer. A finished run went on
+  // claiming to be running until the next slow answer landed.
+  const status = (running: boolean) => ({
+    hunter: {
+      running,
+      runs: running ? [{ id: 'r1', niche: 'pet hatching', status: 'running',
+                         stage: 'Investigating round 2', elapsed_seconds: 42 }] : [],
+      latest: { id: 'r1', niche: 'pet hatching', status: running ? 'running' : 'complete',
+                completed_at: running ? null : '2026-09-17T00:00:00+00:00' },
+    },
+    scout: { running: false, jobs: [] },
+    observed_at: '2026-09-17T00:00:00+00:00',
+  })
+  const badge = (page: import('@playwright/test').Page) =>
+    page.locator('.app-sidebar button', { hasText: 'Meta Hunter' }).locator('em')
+
+  test('a working run shows it', async ({ page }) => {
+    await page.route('**/api/agents/status', route => route.fulfill({ json: status(true) }))
+    await page.goto('/#/home')
+    await expect(badge(page)).toBeVisible()
+  })
+
+  test('it clears when the run finishes, without a manual refresh', async ({ page }) => {
+    let running = true
+    await page.route('**/api/agents/status', route => route.fulfill({ json: status(running) }))
+    await page.goto('/#/home')
+    await expect(badge(page)).toBeVisible()
+    running = false
+    // The status poll is on a three-second cycle; nothing is clicked here.
+    await expect(badge(page)).toHaveCount(0, { timeout: 15_000 })
+  })
+
+  test('the badge does not read the slow run list', async ({ page }) => {
+    // The run list says a run is going; the status endpoint says it is not.
+    // The badge has to believe the one it can ask often.
+    await page.route('**/api/agents/status', route => route.fulfill({ json: status(false) }))
+    await page.route('**/api/research-runs?*', async route => {
+      const runs = await (await route.fetch()).json()
+      if (runs[0]) runs[0] = { ...runs[0], status: 'running' }
+      await route.fulfill({ json: runs })
+    })
+    await page.goto('/#/home')
+    await expect(page.locator('.app-sidebar')).toBeVisible()
+    await page.waitForTimeout(4000)
+    await expect(badge(page)).toHaveCount(0)
   })
 })

@@ -170,6 +170,7 @@ test.describe('meta hunter pipeline', () => {
     // The fixture seeds one complete run, so the last phase is current and the
     // earlier ones are behind it.
     await page.goto('/#/meta')
+      await page.getByRole('tab', { name: /^Pipeline/ }).click()
     const phases = page.locator('.pipeline-list li')
     await expect(phases).toHaveCount(5)
     await expect(page.locator('.pipeline-list li.current')).toHaveCount(1)
@@ -181,6 +182,7 @@ test.describe('meta hunter pipeline', () => {
     // The list used to highlight nothing at all, so a run deep in the audit
     // looked identical to one that had just started.
     await page.goto('/#/meta')
+      await page.getByRole('tab', { name: /^Pipeline/ }).click()
     await expect(page.locator('.pipeline-list li[aria-current="step"]')).toHaveCount(1)
   })
 
@@ -204,6 +206,7 @@ test.describe('meta hunter pipeline', () => {
         await route.fulfill({ json: runs })
       })
       await page.goto('/#/meta')
+      await page.getByRole('tab', { name: /^Pipeline/ }).click()
       const current = page.locator('.pipeline-list li.current')
       await expect(current).toHaveCount(1)
       await expect(current).toContainText('Handed to Scout')
@@ -223,6 +226,7 @@ test.describe('meta hunter pipeline', () => {
       await route.fulfill({ json: runs })
     })
     await page.goto('/#/meta')
+      await page.getByRole('tab', { name: /^Pipeline/ }).click()
     await expect(page.locator('.pipeline-list li.current')).toContainText('round 2')
   })
 
@@ -237,6 +241,7 @@ test.describe('meta hunter pipeline', () => {
       await route.fulfill({ json: runs })
     })
     await page.goto('/#/meta')
+      await page.getByRole('tab', { name: /^Pipeline/ }).click()
     await expect(page.locator('.pipeline-list li.current')).toHaveCount(0)
     await expect(page.getByText(/does not recognise/i)).toBeVisible()
   })

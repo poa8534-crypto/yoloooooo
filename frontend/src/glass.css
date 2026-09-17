@@ -1,0 +1,308 @@
+/* Glass surfaces, tabs, and the pop-out brief.
+ *
+ * Loaded last, so it restyles what the earlier sheets laid out rather than
+ * replacing them.
+ *
+ * One deliberate restraint: this is a dense evidence dashboard, and the usual
+ * glassmorphism recipe -- low-contrast text floating on a photograph -- makes
+ * small numbers unreadable. So the glass is in the surfaces and the depth: a
+ * soft colour field behind the page, translucent blurred panels with a light
+ * top edge, and text that stays at full contrast on top of them. Nothing that
+ * has to be read is made faint to look like frosted glass.
+ */
+
+:root {
+  --glass-bg: rgba(255, 255, 255, 0.58);
+  --glass-bg-strong: rgba(255, 255, 255, 0.76);
+  --glass-line: rgba(255, 255, 255, 0.75);
+  --glass-edge: rgba(15, 23, 42, 0.08);
+  --glass-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  --glass-shadow-lifted: 0 24px 60px rgba(15, 23, 42, 0.18);
+  --glass-blur: 18px;
+  --glass-ink: #101828;
+  --glass-ink-soft: #475467;
+  --glass-accent: #3b6ef6;
+}
+
+/* The colour field. Fixed, so panels scroll over it rather than dragging it
+   along, which is what makes the blur read as depth instead of texture. */
+/* The base colour goes on `html`, not on `body`.
+ *
+ * A background set on `body` is propagated to the canvas, and a `z-index: -1`
+ * pseudo-element then paints *behind* that canvas paint -- so the gradient was
+ * there, correct, and invisible. Giving `html` its own background stops the
+ * propagation and the pseudo-element paints where it was meant to. */
+html { background: #e3eaf8; }
+body {
+  background: transparent;
+  color: var(--glass-ink);
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: -20vmax;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(38vmax 38vmax at 12% 8%, rgba(79, 140, 255, 0.55), transparent 62%),
+    radial-gradient(34vmax 34vmax at 88% 12%, rgba(255, 176, 108, 0.52), transparent 60%),
+    radial-gradient(42vmax 42vmax at 74% 88%, rgba(160, 128, 252, 0.5), transparent 64%),
+    radial-gradient(30vmax 30vmax at 20% 82%, rgba(72, 226, 200, 0.46), transparent 60%);
+}
+
+.app-shell { background: transparent; }
+
+.app-sidebar {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  border-right: 1px solid var(--glass-line);
+  box-shadow: 1px 0 24px rgba(15, 23, 42, 0.05);
+}
+
+.data-panel,
+.metric-cell,
+.engine-banner,
+.agent-boundary,
+.scout-guard,
+.context-banner,
+.empty-state {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  border: 1px solid var(--glass-line);
+  border-radius: 14px;
+  box-shadow: var(--glass-shadow);
+}
+
+.topbar {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border-bottom: 1px solid var(--glass-line);
+}
+
+button.primary {
+  background: linear-gradient(180deg, #4d7df8, #2f5fe0);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 10px;
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(47, 95, 224, 0.28);
+}
+button.primary:disabled { background: rgba(100, 116, 139, 0.35); box-shadow: none; color: #f8fafc; }
+button.secondary {
+  background: var(--glass-bg-strong);
+  border: 1px solid var(--glass-edge);
+  border-radius: 10px;
+  color: var(--glass-ink);
+}
+button.secondary:disabled { color: #98a2b3; }
+
+/* Tabs -------------------------------------------------------------------
+ * Both agent pages were one long scroll. These switch between the panels
+ * that used to be stacked.
+ */
+.tab-bar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px;
+  margin-bottom: 18px;
+  border-radius: 14px;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--glass-shadow);
+}
+.tab-bar .tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  min-height: 38px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--glass-ink-soft);
+  font: 500 14px/1.2 system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tab-bar .tab:hover { background: rgba(255, 255, 255, 0.6); color: var(--glass-ink); }
+.tab-bar .tab.active {
+  background: #fff;
+  color: var(--glass-ink);
+  border-color: var(--glass-edge);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1);
+  font-weight: 600;
+}
+.tab-bar .tab em {
+  font-style: normal;
+  font: 600 11px/1 ui-monospace, monospace;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(59, 110, 246, 0.14);
+  color: #2f5fe0;
+}
+.tab-panel { display: block; }
+
+/* Cards ------------------------------------------------------------------
+ * Every text run here is operator-supplied or model-written and none of it
+ * has a length limit, so each one is clamped. The niche is whatever was typed
+ * into the run box, which in practice is a paragraph.
+ */
+.concept-card {
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  backdrop-filter: blur(12px) saturate(140%);
+  border: 1px solid var(--glass-line);
+  border-radius: 14px;
+  box-shadow: var(--glass-shadow);
+  overflow: hidden;
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.concept-card:hover { transform: translateY(-3px); box-shadow: var(--glass-shadow-lifted); }
+.concept-card:active { transform: translateY(-1px); }
+
+.concept-card-niche {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.concept-card > strong {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.concept-card > p { -webkit-line-clamp: 3; overflow-wrap: anywhere; }
+
+/* The badge was `source_backed_design_speculative` rendered raw: wider than
+   the card, so it pushed the counts beside it off the edge. It is shorter now
+   and it may also wrap. */
+.concept-card-footer { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+.concept-card-footer .evidence-badge { max-width: 100%; white-space: normal; text-align: left; }
+.concept-card-footer small { white-space: nowrap; }
+
+/* Nothing in a panel may print outside it.
+ *
+ * `.concept-card` is deliberately absent: its `min-width: 300px` is what stops
+ * a long strip shrinking every card into a sliver, and listing it here
+ * overrode that -- cards came out 190px wide and the strip stopped scrolling,
+ * because there was nothing left to overflow. The card clips with `overflow:
+ * hidden` instead. */
+.data-panel, .queue-row, .metric-cell { min-width: 0; }
+.data-panel h2, .panel-heading strong, .run-state strong { overflow-wrap: anywhere; }
+.body-copy, .gate-hint, .run-state p { overflow-wrap: anywhere; }
+
+.latest-three .card-strip { padding-bottom: 6px; }
+.latest-three > .text-button { margin-top: 10px; }
+
+/* The pop-out brief ------------------------------------------------------
+ * A side drawer 420px wide turned every build step into three wrapped lines.
+ * This opens in the middle, scales in, and scrolls.
+ */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.42);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  animation: scrim-in .18s ease both;
+}
+.result-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(880px, 100%);
+  max-height: min(86vh, 900px);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.92);
+  -webkit-backdrop-filter: blur(26px) saturate(160%);
+  backdrop-filter: blur(26px) saturate(160%);
+  border: 1px solid var(--glass-line);
+  box-shadow: var(--glass-shadow-lifted);
+  overflow: hidden;
+  animation: modal-in .24s cubic-bezier(.2, .9, .3, 1) both;
+}
+.result-modal > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--glass-edge);
+}
+.result-modal > header span {
+  display: block;
+  font: 500 12px/1.4 system-ui, sans-serif;
+  color: var(--glass-ink-soft);
+  overflow-wrap: anywhere;
+}
+.result-modal > header strong {
+  display: block;
+  margin-top: 4px;
+  font: 600 20px/1.3 system-ui, sans-serif;
+  overflow-wrap: anywhere;
+}
+.result-modal > header button {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-edge);
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.modal-body {
+  padding: 20px 24px 28px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.modal-body section { margin-top: 20px; }
+.modal-body h2 { margin: 0 0 6px; font: 600 14px/1.3 system-ui, sans-serif; color: var(--glass-ink-soft); }
+.modal-body p, .modal-body li { overflow-wrap: anywhere; }
+.modal-body dl { margin-top: 22px; display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; }
+.modal-body dt { color: var(--glass-ink-soft); font-size: 13px; }
+.modal-body dd { margin: 0; overflow-wrap: anywhere; }
+
+@keyframes scrim-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(14px) scale(.965) }
+  to { opacity: 1; transform: none }
+}
+
+/* A motion preference is a statement about vestibular comfort, not a theme
+   choice, so the transform animations go and the panel simply appears. */
+@media (prefers-reduced-motion: reduce) {
+  .modal-scrim, .result-modal { animation: none; }
+  .concept-card { transition: none; }
+  .concept-card:hover { transform: none; }
+}
+
+@media (max-width: 760px) {
+  .modal-scrim { padding: 12px; align-items: flex-end; }
+  .result-modal { max-height: 92vh; width: 100%; }
+  .tab-bar { gap: 4px; padding: 5px; }
+  .tab-bar .tab { padding: 8px 12px; font-size: 13px; }
+}
+
+/* Backdrop-filter is not universal. Without it the translucent surfaces show
+   whatever is behind them unblurred, which over a gradient is unreadable, so
+   those surfaces go opaque instead. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .app-sidebar, .data-panel, .metric-cell, .engine-banner, .agent-boundary,
+  .scout-guard, .context-banner, .empty-state, .tab-bar, .concept-card,
+  .topbar, .result-modal { background: #fff; }
+  .modal-scrim { background: rgba(15, 23, 42, 0.62); }
+}
