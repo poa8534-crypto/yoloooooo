@@ -301,18 +301,23 @@ function TimelineChart({ points }: { points: TimelinePoint[] }) {
   </div>
 }
 
-function AppSidebar({ page, onNavigate, health, metaRunning, scoutReady }: { page: PageId; onNavigate: (page: PageId) => void; health: Health | null; metaRunning: boolean; scoutReady: boolean }) {
+function AppSidebar({ page, onNavigate, health, metaRunning, buildRunning, scoutReady }: { page: PageId; onNavigate: (page: PageId) => void; health: Health | null; metaRunning: boolean; buildRunning: boolean; scoutReady: boolean }) {
   return <aside className="app-sidebar">
     <div className="brand"><span className="brand-symbol">V</span><div><strong>Venture Agents</strong><small>Analyst workstation</small></div></div>
     <div className="node-status"><span>Node instance</span><strong>LOCAL NODE · {health?.status === 'ok' ? 'ONLINE' : 'CHECKING'}</strong><i className={health?.status === 'ok' ? 'online' : ''} /></div>
-    <nav aria-label="Main navigation">{navigation.map(section => <div className="nav-group" key={section.group}><span>{section.group}</span>{section.items.map(([id]) => <button key={id} aria-current={page === id ? 'page' : undefined} className={page === id ? 'active' : ''} onClick={() => onNavigate(id)}>{pageNames[id]}{id === 'meta' && metaRunning && <em>Running</em>}</button>)}</div>)}</nav>
+    <nav aria-label="Main navigation">{navigation.map(section => <div className="nav-group" key={section.group}><span>{section.group}</span>{section.items.map(([id]) => <button key={id} aria-current={page === id ? 'page' : undefined} className={page === id ? 'active' : ''} onClick={() => onNavigate(id)}>{pageNames[id]}{id === 'meta' && metaRunning && <em>Running</em>}{id === 'engineering' && buildRunning && <em>Building</em>}</button>)}</div>)}</nav>
     <div className="sidebar-footer"><span>Local to this PC</span><small>{health?.database === 'connected' ? 'Evidence database connected' : 'Checking database'}</small></div>
   </aside>
 }
 
+// Pages that carry their own header. The Engineering Agent's first row is its
+// own identity, build target and status, so the generic title above it would be
+// the page's name printed twice with the live part pushed below the fold.
+const OWN_HEADER = new Set<PageId>(['engineering'])
+
 function TopBar({ page, calibration, refreshing, onRefresh }: { page: PageId; calibration: Calibration | null; refreshing: boolean; onRefresh: () => void }) {
   return <><header className="topbar"><span>Roblox research · local workspace</span><button className="secondary" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh data'}</button></header>
-  <div className="page-title"><h1>{pageNames[page]}</h1><Badge>{calibration?.scoring_active ? 'Scoring active' : 'Research only'}</Badge></div></>
+  {!OWN_HEADER.has(page) && <div className="page-title"><h1>{pageNames[page]}</h1><Badge>{calibration?.scoring_active ? 'Scoring active' : 'Research only'}</Badge></div>}</>
 }
 
 type TimelineRange = '7' | '30' | 'all'
@@ -1666,6 +1671,9 @@ export default function App() {
   // agent is working has to be able to stop saying it promptly.
   const metaRunning = agents ? agents.hunter.running : false
   const scoutReady = candidates.length > 0
+  // Read from the build history, which records a real status. The badge goes
+  // out the moment the build record says the build is no longer running.
+  const [buildRunning, setBuildRunning] = useState(false)
 
   useEffect(() => {
     let stopped = false
@@ -1674,6 +1682,24 @@ export default function App() {
       try { const next = await api<AgentStatus>('/api/agents/status'); if (!stopped) setAgents(next) }
       catch { /* a missed poll leaves the previous reading; the next one corrects it */ }
       if (!stopped) timer = setTimeout(tick, 3000)
+    }
+    void tick()
+    return () => { stopped = true; clearTimeout(timer) }
+  }, [])
+
+  useEffect(() => {
+    // The same statuses the Engineering Agent treats as live, so the badge and
+    // the page can never disagree about whether a build is running.
+    const LIVE_BUILD = new Set(['queued', 'planning', 'generating', 'validating',
+      'waiting_for_studio', 'syncing', 'building', 'playtesting', 'repairing'])
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout>
+    const tick = async () => {
+      try {
+        const answer = await api<{ builds: Array<{ status: string }> }>('/api/builds?limit=5')
+        if (!stopped) setBuildRunning(answer.builds.some(build => LIVE_BUILD.has(build.status)))
+      } catch { /* a missed poll leaves the previous reading */ }
+      if (!stopped) timer = setTimeout(tick, 5000)
     }
     void tick()
     return () => { stopped = true; clearTimeout(timer) }
@@ -1798,9 +1824,9 @@ export default function App() {
   }
 
   return <div className="app-shell">
-    <AppSidebar page={page} onNavigate={navigate} health={health} metaRunning={metaRunning} scoutReady={scoutReady} />
+    <AppSidebar page={page} onNavigate={navigate} health={health} metaRunning={metaRunning} buildRunning={buildRunning} scoutReady={scoutReady} />
     <div className="app-content"><TopBar page={page} calibration={calibration} refreshing={refreshing} onRefresh={loadAll} />
-      <main id="primary-workspace"><p className="data-freshness" role="status">{refreshing ? 'Refreshing data…' : updatedAt ? 'Last complete refresh: ' + formatDate(updatedAt) : 'Waiting for data'}{refreshErrors.length > 0 ? ' · Some panels are stale or unavailable.' : ''}</p>{refreshErrors.length > 0 && <div className="warning-box">{refreshErrors.map(message => <p key={message}>{message}</p>)}</div>}
+      <main id="primary-workspace">{!OWN_HEADER.has(page) && <p className="data-freshness" role="status">{refreshing ? 'Refreshing data…' : updatedAt ? 'Last complete refresh: ' + formatDate(updatedAt) : 'Waiting for data'}{refreshErrors.length > 0 ? ' · Some panels are stale or unavailable.' : ''}</p>}{refreshErrors.length > 0 && <div className="warning-box">{refreshErrors.map(message => <p key={message}>{message}</p>)}</div>}
         {error && <div role="alert" className="global-alert"><strong>Request failed safely</strong><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError('')}>×</button></div>}
         {notice && <div className="global-notice"><span>{notice}</span><button aria-label="Dismiss notification" onClick={() => setNotice('')}>×</button></div>}
         {page === 'home' && <CommandCenter summary={summary} timeline={timeline} sources={sources} runs={runs} health={health} calibration={calibration} onSource={openSource} onNavigate={navigate} onCandidate={setSelectedIdea} />}

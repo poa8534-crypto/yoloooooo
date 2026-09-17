@@ -35,6 +35,10 @@ code { overflow-wrap: anywhere; }
 .nav-group > span { text-transform: none; letter-spacing: 0; color: #62656b; }
 .nav-group button { color: #404349; border: 0; border-radius: 6px; min-height: 43px; font-size: 14px; padding: 9px 12px; }
 .nav-group button.active { background: #eaf0ff; color: #234bad; box-shadow: none; border: 0; }
+/* The "Running"/"Building" word on the active item. styles.css tints it for a
+   dark active background that this sheet replaces with a light one, where the
+   pale tint read as an empty box: the badge was there and said nothing. */
+.nav-group button.active em { color: #2f55b8; }
 .nav-group button:hover { background: #edeef0; }
 .sidebar-footer { border-color: #e2e3e0; color: #62656b; display: grid; gap: 6px; font-size: 13px; }
 /* No margin. `.app-shell` is a grid and the sidebar already occupies its own

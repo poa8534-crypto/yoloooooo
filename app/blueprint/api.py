@@ -370,17 +370,20 @@ def studio(token: str = "") -> dict:
         return {"bridge": "online", "plugin_connected": False,
                 "detail": "The bridge is running. Paste its pairing token to see Studio's state.",
                 "needs_token": True}
+    began = time.perf_counter()
     try:
         answer = httpx.get(f"{BRIDGE_URL}/bridge/status", timeout=3.0,
                            headers={"X-Bridge-Token": token})
     except httpx.HTTPError as exc:
         return {"bridge": "online", "plugin_connected": False, "detail": str(exc)[:200]}
+    # Measured, not claimed: the round trip to the bridge this request just made.
+    latency_ms = round((time.perf_counter() - began) * 1000, 1)
     if answer.status_code == 401:
         return {"bridge": "online", "plugin_connected": False,
                 "detail": "The bridge refused that token. It prints the right one when it starts.",
                 "needs_token": True}
     state = answer.json()
-    return {"bridge": "online", **state}
+    return {"bridge": "online", "latency_ms": latency_ms, **state}
 
 
 build_router = APIRouter(prefix="/api/builds", tags=["build"])
@@ -438,13 +441,13 @@ async def start_build(request: BuildRequest) -> dict:
 
 
 @build_router.get("")
-def builds(blueprint_id: str = "") -> dict:
+def builds(blueprint_id: str = "", limit: int = 20) -> dict:
     """Build history, newest first. Reproducibility: every build carries the
     specification revision and content hash it was made from."""
     from ..db import SessionLocal
     from .builds import list_builds
 
-    return {"builds": list_builds(SessionLocal, blueprint_id)}
+    return {"builds": list_builds(SessionLocal, blueprint_id, max(1, min(limit, 100)))}
 
 
 @build_router.get("/{build_id}")
@@ -456,6 +459,107 @@ def build(build_id: str) -> dict:
         return read_build(SessionLocal, build_id)
     except KeyError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such build") from None
+
+
+def _studio_location(source_path: str) -> tuple[str, str]:
+    """Where a generated file lands in the DataModel, or ("", "") if nowhere.
+
+    The same mapping the sync uses, so the explorer shows the tree the build
+    would really produce rather than a second opinion about it.
+    """
+    from ..bridge.from_project import Unmappable, studio_path
+
+    try:
+        return studio_path(source_path)
+    except Unmappable:
+        return "", ""
+
+
+def _system_durations(events: list[dict]) -> dict[str, float]:
+    """How long each system actually took, from the recorded timestamps.
+
+    Measured, not estimated: the clock starts at the event that says the
+    Engineer was asked and stops at the event that records what came back.
+    A system with no end event is left out entirely rather than counted as
+    however long it has been running, which would make an average drift
+    upward the longer you watch it.
+    """
+    from datetime import datetime
+
+    started: dict[str, str] = {}
+    spans: dict[str, float] = {}
+    for event in events:
+        detail = str(event.get("detail") or "")
+        name = detail.split(":", 1)[0].strip()
+        if not name:
+            continue
+        if event.get("stage") == "generating" and "asking the Engineer" in detail:
+            started[name] = str(event.get("at") or "")
+        elif event.get("stage") in {"system_built", "system_refused", "system_failed"}:
+            begin, end = started.get(name), str(event.get("at") or "")
+            if not begin or not end:
+                continue
+            try:
+                spans[name] = (datetime.fromisoformat(end)
+                               - datetime.fromisoformat(begin)).total_seconds()
+            except ValueError:
+                continue
+    return spans
+
+
+def _sync_state(events: list[dict]) -> dict:
+    """What Studio was sent and what it reported back.
+
+    Empty until the build actually queues a batch. The UI must be able to say
+    "nothing has been sent" rather than show a tree implying it has.
+    """
+    sent: dict = {"batch_id": "", "operations": 0, "sent_at": "",
+                  "applied": None, "skipped": None, "failed": None, "reported_at": ""}
+    for event in events:
+        if event.get("stage") == "syncing" and event.get("batch_id"):
+            sent["batch_id"] = event["batch_id"]
+            sent["operations"] = event.get("operations") or 0
+            sent["sent_at"] = event.get("at") or ""
+        if event.get("stage") == "studio_result":
+            result = event.get("result") or {}
+            sent["applied"] = result.get("applied")
+            sent["skipped"] = result.get("skipped")
+            sent["failed"] = result.get("failed_count")
+            sent["reported_at"] = event.get("at") or ""
+    return sent
+
+
+def _explorer(nodes: list[dict]) -> list[dict]:
+    """The DataModel tree these systems map to, as nested rows.
+
+    Built from the same path mapping the sync uses. Every leaf carries the
+    state of the system it came from, so a folder of waiting modules cannot be
+    mistaken for a folder of applied ones.
+    """
+    root: dict[str, dict] = {}
+    for node in nodes:
+        location = node.get("studio_path") or ""
+        if not location:
+            continue
+        here = root
+        segments = location.split("/")
+        for depth, segment in enumerate(segments):
+            leaf = depth == len(segments) - 1
+            entry = here.setdefault(segment, {
+                "name": segment, "children": {},
+                "class": node["studio_class"] if leaf else "Folder",
+                "system": node["id"] if leaf else "",
+                "state": node["state"] if leaf else "",
+            })
+            here = entry["children"]
+
+    def flatten(level: dict) -> list[dict]:
+        rows = []
+        for entry in sorted(level.values(), key=lambda item: (not item["children"], item["name"])):
+            rows.append({**entry, "children": flatten(entry["children"])})
+        return rows
+
+    return flatten(root)
 
 
 @build_router.get("/{build_id}/graph")
@@ -510,6 +614,7 @@ def build_graph(build_id: str) -> dict:
         if system is None:
             continue
         outcome = outcomes.get(name)
+        location, script_class = _studio_location(system.path)
         if outcome is None:
             state = "building" if name == current else "waiting"
         elif outcome["status"] == "built":
@@ -525,6 +630,9 @@ def build_graph(build_id: str) -> dict:
             "depends_on": system.depends_on, "state": state,
             "detail": (outcome or {}).get("reason") or (outcome or {}).get("detail") or "",
             "branch": (outcome or {}).get("branch"),
+            "commit": (outcome or {}).get("commit") or "",
+            "attempts": (outcome or {}).get("attempts") or 0,
+            "studio_path": location, "studio_class": script_class,
             "order": spec.build_order.index(name),
         })
 
@@ -535,6 +643,24 @@ def build_graph(build_id: str) -> dict:
     counts: dict[str, int] = {}
     for node in nodes:
         counts[node["state"]] = counts.get(node["state"], 0) + 1
+
+    # Facts about how long this has taken, and nothing beyond them. There is no
+    # countdown here on purpose: a "4m 28s remaining" is a guess dressed as a
+    # measurement, and the systems already written differ in size from the ones
+    # that have not been started.
+    durations = _system_durations(record["events"])
+    attempted = sum(node["attempts"] for node in nodes)
+    pace = {
+        "started_at": record["created_at"],
+        "completed_at": record.get("completed_at") or "",
+        "systems_measured": len(durations),
+        "average_system_seconds": (round(sum(durations.values()) / len(durations), 1)
+                                   if durations else None),
+        "slowest_system_seconds": round(max(durations.values()), 1) if durations else None,
+        "per_system_seconds": {name: round(value, 1) for name, value in durations.items()},
+        "attempts_spent": attempted,
+        "systems_accepted": counts.get("built", 0),
+    }
 
     return {
         "build_id": build_id,
@@ -554,8 +680,105 @@ def build_graph(build_id: str) -> dict:
         "edges": edges,
         "current": current,
         "counts": {**counts, "total": len(nodes)},
+        "pace": pace,
+        "sync": _sync_state(record["events"]),
+        "explorer": _explorer(nodes),
         "events": record["events"][-200:],
     }
+
+
+@build_router.get("/{build_id}/systems/{system}/source")
+def system_source(build_id: str, system: str) -> dict:
+    """The Luau the gate accepted for one system, read from its commit.
+
+    Not the worktree: the worktree is removed when the run ends, and the commit
+    is the thing the six checks were actually run against. A system that was
+    refused has no accepted source, and says so rather than showing the last
+    rejected attempt as though it had passed.
+    """
+    from ..db import SessionLocal
+    from ..engineer.runs import game_repo
+    from .builds import files_on_branch, read_build
+
+    try:
+        record = read_build(SessionLocal, build_id)
+    except KeyError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such build") from None
+
+    outcome = (record.get("systems") or {}).get(system)
+    if outcome is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            f"{system} has no recorded outcome in this build")
+    if outcome.get("status") != "built":
+        return {"system": system, "state": outcome.get("status"), "source": "",
+                "path": "", "commit": "", "branch": outcome.get("branch") or "",
+                "detail": outcome.get("reason") or outcome.get("detail") or "",
+                "lines": 0}
+
+    reference = outcome.get("commit") or outcome.get("branch") or ""
+    repo = game_repo(get_settings())
+    files = files_on_branch(repo, reference) if reference else {}
+    for path, source in files.items():
+        if path.rsplit("/", 1)[-1].removesuffix(".luau") == system:
+            return {"system": system, "state": "built", "source": source, "path": path,
+                    "commit": outcome.get("commit") or "", "branch": outcome.get("branch") or "",
+                    "detail": "", "lines": len(source.splitlines())}
+    raise HTTPException(status.HTTP_404_NOT_FOUND,
+                        f"{system} was accepted on {reference} but no file for it is there")
+
+
+class OpenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=1, max_length=200, description="the bridge pairing token")
+
+
+@build_router.post("/{build_id}/systems/{system}/open")
+def open_in_studio(build_id: str, system: str, request: OpenRequest) -> dict:
+    """Ask Studio to open this system's script in its editor.
+
+    A real operation over the real bridge, so it fails honestly when Studio is
+    not connected instead of pretending to have opened something.
+    """
+    from ..bridge.protocol import OpenScript, OperationBatch
+    from ..db import SessionLocal
+    from .builds import read_build
+
+    try:
+        record = read_build(SessionLocal, build_id)
+    except KeyError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such build") from None
+
+    blueprint = _load(record["blueprint_id"])
+    try:
+        spec = compile_spec(blueprint)
+    except NotReady as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+
+    wanted = next((entry for entry in spec.systems if entry.name == system), None)
+    if wanted is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{system} is not in this specification")
+    location, _ = _studio_location(wanted.path)
+    if not location:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"{wanted.path} does not map into the DataModel")
+
+    batch = OperationBatch(
+        build_id=build_id, batch_id=f"open-{system}-{int(time.time())}"[:64],
+        operations=[OpenScript(operation_id="open-1", sequence=0, path=location)],
+    )
+    try:
+        queued = httpx.post(f"{BRIDGE_URL}/bridge/batches", timeout=10.0,
+                            headers={"X-Bridge-Token": request.token},
+                            json=batch.model_dump(by_alias=True, mode="json"))
+    except httpx.HTTPError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "The local bridge is not running.") from None
+    if queued.status_code == 401:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "The bridge refused that token.")
+    if queued.status_code != 202:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                            f"the bridge refused the batch: {queued.text[:200]}")
+    return {"opened": location, "batch_id": batch.batch_id}
 
 
 @build_router.get("/{build_id}/events")
