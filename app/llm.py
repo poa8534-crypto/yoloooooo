@@ -23,6 +23,16 @@ class LLMUnavailable(RuntimeError):
     pass
 
 
+# Backends that speak OpenAI's chat-completions shape: base URL, key, and the
+# setting name to quote when the key is missing. Ollama is absent on purpose --
+# it has its own wire format and is handled separately.
+OPENAI_COMPATIBLE = {
+    "gemini": lambda s: (s.gemini_base_url, s.gemini_api_key_1, "GEMINI_API_KEY_1"),
+    "openrouter": lambda s: (s.openrouter_base_url, s.openrouter_api_key,
+                             "OPENROUTER_API_KEY"),
+}
+
+
 def fence_untrusted(text: str, limit: int = UNTRUSTED_TEXT_LIMIT) -> str:
     """Make third-party text safe to place inside a fenced prompt block.
 
@@ -113,8 +123,10 @@ class OllamaProposalClient:
 
     def __init__(self, settings: Settings | None = None, client: httpx.AsyncClient | None = None):
         self.settings = settings or get_settings()
-        timeout = (self.settings.gemini_timeout_seconds if self.settings.llm_provider == "gemini"
-                   else self.settings.ollama_timeout_seconds)
+        timeouts = {"gemini": self.settings.gemini_timeout_seconds,
+                    "openrouter": self.settings.openrouter_timeout_seconds}
+        timeout = timeouts.get(self.settings.llm_provider,
+                               self.settings.ollama_timeout_seconds)
         self.client = client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
 
@@ -133,6 +145,14 @@ class OllamaProposalClient:
             return (
                 ("gemini", self.settings.gemini_primary_model),
                 ("gemini", self.settings.gemini_fallback_model),
+                ("ollama", self.settings.ollama_primary_model),
+            )
+        if self.settings.llm_provider == "openrouter":
+            # Never the whole chain. Union Alpha's operator is anonymous, and a
+            # preview that is free for a week is not something to make
+            # load-bearing, so the local model is always behind it.
+            return (
+                ("openrouter", self.settings.openrouter_model),
                 ("ollama", self.settings.ollama_primary_model),
             )
         return (
@@ -159,11 +179,12 @@ class OllamaProposalClient:
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": prompt + correction}]
 
-        if provider == "gemini":
-            if not self.settings.gemini_api_key_1:
+        if provider in OPENAI_COMPATIBLE:
+            base_url, key, key_name = OPENAI_COMPATIBLE[provider](self.settings)
+            if not key:
                 raise LLMUnavailable(
-                    "llm_provider is 'gemini' but no key is configured; set "
-                    "GEMINI_API_KEY_1 in .env or set llm_provider back to 'ollama'"
+                    f"provider '{provider}' has no key configured; set "
+                    f"{key_name} in .env or choose a provider that is configured"
                 )
             body = {
                 "model": model,
@@ -177,8 +198,8 @@ class OllamaProposalClient:
             }
             # The key travels in a header, never in the URL, so it cannot reach
             # a proxy log or an exception's request line.
-            return (f"{self.settings.gemini_base_url}/chat/completions",
-                    {"Authorization": f"Bearer {self.settings.gemini_api_key_1}"},
+            return (f"{base_url}/chat/completions",
+                    {"Authorization": f"Bearer {key}"},
                     body)
 
         return (f"{self.settings.ollama_base_url}/api/chat", {}, {
@@ -192,7 +213,7 @@ class OllamaProposalClient:
 
     def _read(self, provider: str, payload: dict) -> tuple[str, str | None]:
         """Message content and the model's own reasoning, per backend."""
-        if provider == "gemini":
+        if provider in OPENAI_COMPATIBLE:
             message = payload["choices"][0]["message"]
             # Google returns reasoning on some models under a separate key; it
             # is treated exactly like Ollama's `thinking` -- shown, never used.

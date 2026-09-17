@@ -40,6 +40,10 @@ def settings(**overrides) -> SimpleNamespace:
         gemini_primary_model="gemini-primary",
         gemini_fallback_model="gemini-fallback",
         gemini_timeout_seconds=5.0,
+        openrouter_base_url="https://openrouter.invalid/api/v1",
+        openrouter_api_key="",
+        openrouter_model="stealth/union-alpha",
+        openrouter_timeout_seconds=5.0,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -149,7 +153,7 @@ async def test_a_missing_key_says_so_once_rather_than_four_times():
     def handler(request):
         raise AssertionError("a request was sent with no key configured")
 
-    with pytest.raises(LLMUnavailable, match="no key is configured"):
+    with pytest.raises(LLMUnavailable, match="has no key configured"):
         await generate(client(handler, gemini_api_key_1=""))
 
 
@@ -186,3 +190,65 @@ async def test_the_local_provider_is_untouched_by_any_of_this():
 
     assert result.model == "local-primary"
     assert "format" in seen[0] and "response_format" not in seen[0]
+
+
+# ---- Union Alpha, via OpenRouter -------------------------------------------
+#
+# A stealth model: frontier-class on the published benchmarks, free during a
+# roughly week-long preview, and operated by a party nobody can name. The last
+# fact is why it is wired as a candidate rather than as infrastructure.
+
+@pytest.mark.asyncio
+async def test_union_alpha_is_reached_through_the_openai_shape():
+    seen: list[httpx.Request] = []
+
+    def handler(request):
+        seen.append(request)
+        return gemini_reply(VALID)
+
+    result = await generate(client(handler, llm_provider="openrouter",
+                                   openrouter_api_key="SYNTHETIC_OR_KEY_000"))
+
+    assert result.model == "stealth/union-alpha"
+    assert str(seen[0].url).startswith("https://openrouter.invalid/api/v1")
+    assert seen[0].headers["authorization"] == "Bearer SYNTHETIC_OR_KEY_000"
+    assert "SYNTHETIC_OR_KEY_000" not in str(seen[0].url)
+
+
+@pytest.mark.asyncio
+async def test_an_anonymous_model_is_never_the_whole_chain():
+    """The preview is free for about a week and the operator is unnamed. The
+    local model sits behind it so neither fact can take the system down."""
+    models: list[str] = []
+
+    def handler(request):
+        models.append(_json.loads(request.content)["model"])
+        return gemini_reply({"concept_title": "missing the required fields"})
+
+    with pytest.raises(LLMUnavailable):
+        await generate(client(handler, llm_provider="openrouter",
+                              openrouter_api_key="SYNTHETIC_OR_KEY_000"))
+
+    assert models == ["stealth/union-alpha"] * 2 + ["local-primary"] * 2
+
+
+@pytest.mark.asyncio
+async def test_it_is_not_in_the_default_chain():
+    """Captured evidence must not reach an anonymous operator because someone
+    set a key. Choosing it has to be a deliberate act."""
+    def handler(request):
+        return gemini_reply(VALID)
+
+    for provider in ("ollama", "gemini"):
+        agent = client(handler, llm_provider=provider,
+                       openrouter_api_key="SYNTHETIC_OR_KEY_000")
+        assert all(name != "openrouter" for name, _ in agent.routes), provider
+
+
+@pytest.mark.asyncio
+async def test_a_missing_openrouter_key_names_the_setting_to_fix():
+    def handler(request):
+        raise AssertionError("a request was sent with no key configured")
+
+    with pytest.raises(LLMUnavailable, match="OPENROUTER_API_KEY"):
+        await generate(client(handler, llm_provider="openrouter", openrouter_api_key=""))

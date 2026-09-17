@@ -70,6 +70,15 @@ class Settings(BaseSettings):
     gemini_primary_model: str = "gemini-3.8-flash"
     gemini_fallback_model: str = "gemini-3.6-flash"
     gemini_timeout_seconds: float = 180.0
+    # OpenRouter, which is how Union Alpha is reachable. Kept separate from
+    # Gemini because the operator is different in a way that matters: Union
+    # Alpha is a stealth model whose provider is anonymous, so a prompt sent
+    # there goes to a party nobody can name. Nothing carrying captured evidence
+    # should default to it, which is why it is never in the default chain.
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_api_key: str = ""
+    openrouter_model: str = "stealth/union-alpha"
+    openrouter_timeout_seconds: float = 180.0
     scout_deliberation_passes: int = Field(default=3, ge=1, le=3)
     snapshot_hour: int = 2
     snapshot_minute: int = 0

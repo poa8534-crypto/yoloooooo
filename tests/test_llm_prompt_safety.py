@@ -62,6 +62,10 @@ def _client(handler) -> OllamaProposalClient:
         gemini_primary_model="gemini-primary",
         gemini_fallback_model="gemini-fallback",
         gemini_timeout_seconds=5.0,
+        openrouter_base_url="https://openrouter.invalid/api/v1",
+        openrouter_api_key="",
+        openrouter_model="stealth/union-alpha",
+        openrouter_timeout_seconds=5.0,
     )
     return OllamaProposalClient(
         settings=settings,
