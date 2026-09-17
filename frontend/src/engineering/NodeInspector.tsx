@@ -27,23 +27,34 @@ export function NodeInspector({ node, buildId, token, pace, onOpened }: {
   buildId: string
   token: string
   pace: Pace
-  onOpened: (message: string) => void
+  onOpened: (message: string, failed?: boolean) => void
 }) {
   const [tab, setTab] = useState<Tab>('overview')
   const [source, setSource] = useState<SystemSource | null>(null)
   const [sourceError, setSourceError] = useState('')
   const [loading, setLoading] = useState(false)
-
-  useEffect(() => { setTab('overview'); setSource(null); setSourceError('') }, [node.id])
+  // The build and system a source read was already attempted for, so a
+  // failure is not retried on every render.
+  const [asked, setAsked] = useState('')
 
   useEffect(() => {
-    if (tab !== 'source' || source || loading) return
+    setTab('overview'); setSource(null); setSourceError(''); setAsked('')
+  }, [node.id])
+
+  useEffect(() => {
+    // Keyed on what was asked for rather than on whether a request is in
+    // flight. Depending on `loading` meant a FAILED read reset it to false
+    // without setting `source`, the guard let the effect straight back in, and
+    // one 404 became an unbounded loop against the endpoint.
+    const wanted = `${buildId}:${node.id}`
+    if (tab !== 'source' || asked === wanted) return
+    setAsked(wanted)
     setLoading(true)
     engineeringApi.source(buildId, node.id)
       .then(setSource)
       .catch(caught => setSourceError((caught as Error).message))
       .finally(() => setLoading(false))
-  }, [tab, source, loading, buildId, node.id])
+  }, [tab, asked, buildId, node.id])
 
   const took = pace.per_system_seconds[node.id]
 
@@ -100,7 +111,7 @@ export function NodeInspector({ node, buildId, token, pace, onOpened }: {
             onClick={() => {
               engineeringApi.open(buildId, node.id, token)
                 .then(answer => onOpened(`Studio was asked to open ${answer.opened}`))
-                .catch(caught => onOpened((caught as Error).message))
+                .catch(caught => onOpened((caught as Error).message, true))
             }}>
             Open in Studio
           </button>

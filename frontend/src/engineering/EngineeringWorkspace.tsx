@@ -45,7 +45,9 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
   const [selected, setSelected] = useState<GraphNode | null>(null)
   const [studio, setStudio] = useState<StudioStatus | null>(null)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  // A message and whether it is a failure. They were one string, so the
+  // bridge refusing to open a script appeared in the box that means "done".
+  const [notice, setNotice] = useState<{ text: string; failed: boolean } | null>(null)
   const token = typeof sessionStorage === 'undefined'
     ? '' : sessionStorage.getItem('venture.bridgeToken') ?? ''
 
@@ -185,9 +187,10 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
       </div>
 
       {error && <div className="warning-box" role="alert"><p>{error}</p></div>}
-      {notice && <div className="notice-box" role="status">
-        <p>{notice}</p>
-        <button type="button" onClick={() => setNotice('')} aria-label="Dismiss">×</button>
+      {notice && <div className="notice-box" data-failed={notice.failed}
+        role={notice.failed ? 'alert' : 'status'}>
+        <p>{notice.text}</p>
+        <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss">×</button>
       </div>}
 
       <div className="engineering-grid">
@@ -286,7 +289,8 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
 
         {selected && graph
           ? <NodeInspector node={selected} buildId={graph.build_id} token={token}
-            pace={pace} onOpened={setNotice} />
+            pace={pace}
+            onOpened={(text, failed = false) => setNotice({ text, failed })} />
           : (
             <aside className="node-inspector panel" aria-label="Build goal">
               <header className="inspector-head">

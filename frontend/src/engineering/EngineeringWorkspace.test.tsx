@@ -531,3 +531,79 @@ describe('a system the project already had', () => {
     expect(screen.getByText('Working on InfectedService')).toBeTruthy()
   })
 })
+
+describe('mistakes that only show up at runtime', () => {
+  it('asks for a system source once, even when the read fails', async () => {
+    // The effect used to depend on whether a request was in flight. A failed
+    // read set that back to false without setting the source, the guard let it
+    // straight back in, and one 404 became an unbounded loop of requests.
+    serve({ source: { detail: 'no such build' }, steer: undefined })
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/source')) return reply({ detail: 'no such build' }, 404)
+      if (url.includes('/directives')) return reply(steering())
+      if (url.includes('/graph')) return reply(graph())
+      if (url.includes('/api/builds')) {
+        return reply({ builds: [{ id: 'build-1', title: 'Lab', status: 'generating',
+          spec_revision: 4, content_hash: 'cf986b30', created_at: '2026-09-17T23:19:40',
+          completed_at: null }] })
+      }
+      return reply({ bridge: 'offline', plugin_connected: false, detail: 'offline' })
+    })
+
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+    await userEvent.click(screen.getByLabelText(/ResearchService, Built/))
+    await userEvent.click(screen.getByRole('tab', { name: /luau code/i }))
+
+    await waitFor(() => expect(screen.getByText('no such build')).toBeTruthy())
+    // Let several render cycles go by; a retrying effect would fire on each.
+    await new Promise(resolve => setTimeout(resolve, 60))
+
+    const reads = fetchMock.mock.calls.filter(call => String(call[0]).includes('/source'))
+    expect(reads.length).toBe(1)
+  })
+
+  it('renders two modules with the same name in different branches', async () => {
+    // ReplicatedStorage/Shared and ServerScriptService/Server can each hold a
+    // Config. The tree keyed rows by depth and name, so React saw one key twice.
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {})
+    serve({ graph: graph({ explorer: [
+      explorerRow('ReplicatedStorage', [
+        explorerRow('Shared', [explorerRow('Config', [], 'built', 'Config')])]),
+      explorerRow('ServerScriptService', [
+        explorerRow('Server', [explorerRow('Config', [], 'waiting', 'Config')])]),
+    ] }) })
+
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    const explorer = await screen.findByLabelText('Roblox Studio explorer')
+    expect(within(explorer).getAllByText('Config').length).toBe(2)
+    expect(warn.mock.calls.some(call => String(call[0]).includes('same key'))).toBe(false)
+    warn.mockRestore()
+  })
+
+  it('shows a bridge refusal as a failure rather than as a result', async () => {
+    // The message and the "it worked" box were one string, so the bridge
+    // refusing to open a script appeared in the box that means done.
+    sessionStorage.setItem('venture.bridgeToken', 'a-token')
+    serve()
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/open')) return reply({ detail: 'The Studio plugin is not connected.' }, 503)
+      if (url.includes('/graph')) return reply(graph())
+      if (url.includes('/api/builds')) {
+        return reply({ builds: [{ id: 'build-1', title: 'Lab', status: 'generating',
+          spec_revision: 4, content_hash: 'cf986b30', created_at: '2026-09-17T23:19:40',
+          completed_at: null }] })
+      }
+      return reply({ bridge: 'offline', plugin_connected: false, detail: 'offline' })
+    })
+
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+    await userEvent.click(screen.getByLabelText(/ResearchService, Built/))
+    await userEvent.click(screen.getByRole('button', { name: /open in studio/i }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('The Studio plugin is not connected.')
+  })
+})

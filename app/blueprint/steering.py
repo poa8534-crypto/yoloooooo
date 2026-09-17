@@ -59,10 +59,6 @@ def directives_of(record: dict) -> list[dict]:
     return list(record.get("directives") or [])
 
 
-def active(record: dict) -> list[dict]:
-    return [entry for entry in directives_of(record) if entry["status"] != "stale"]
-
-
 def new_directive(text: str, system: str, *, reachable: list[str]) -> dict:
     """Validate and build one directive, or refuse with a usable reason.
 

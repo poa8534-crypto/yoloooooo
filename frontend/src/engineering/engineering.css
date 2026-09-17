@@ -194,6 +194,11 @@
   border: 1px solid rgba(37, 99, 235, 0.22);
   border-radius: 8px;
 }
+.notice-box[data-failed='true'] {
+  background: var(--refused-wash);
+  border-color: rgba(180, 83, 9, 0.28);
+  color: var(--refused);
+}
 .notice-box p { margin: 0; }
 .notice-box button {
   margin-left: auto; border: 0; background: transparent; cursor: pointer;

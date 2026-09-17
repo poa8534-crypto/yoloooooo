@@ -9,9 +9,12 @@ import type { ExplorerRow, SyncState } from './api'
 // "not sent yet" is a different state from "sent and applied", and only the
 // build record can tell them apart.
 
-function rowsOf(rows: ExplorerRow[], depth = 0): ReactElement[] {
+function rowsOf(rows: ExplorerRow[], depth = 0, prefix = ''): ReactElement[] {
   return rows.flatMap(row => [
-    <li key={`${depth}-${row.name}`} data-depth={depth} data-state={row.state || undefined}
+    // Keyed by full path. Depth and name alone collide: ReplicatedStorage/Shared
+    // and ServerScriptService/Server can each hold a module of the same name at
+    // the same depth, and React would see one key twice.
+    <li key={`${prefix}/${row.name}`} data-depth={depth} data-state={row.state || undefined}
       data-kind={row.children.length ? 'folder' : 'script'}>
       <span className="explorer-icon" aria-hidden="true">
         {row.children.length ? '▸' : row.class === 'Script' ? '⬢' : '◧'}
@@ -19,7 +22,7 @@ function rowsOf(rows: ExplorerRow[], depth = 0): ReactElement[] {
       <span className="explorer-name">{row.name}</span>
       {row.state && <span className="explorer-state" data-state={row.state}>{row.state}</span>}
     </li>,
-    ...rowsOf(row.children, depth + 1),
+    ...rowsOf(row.children, depth + 1, `${prefix}/${row.name}`),
   ])
 }
 
