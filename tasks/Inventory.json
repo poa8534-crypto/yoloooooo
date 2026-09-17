@@ -1,0 +1,16 @@
+{
+  "system": "Inventory",
+  "goal": "Hold what a survivor is carrying: stacks of items with a per-stack maximum and a total carry limit. Adding past the limit fails rather than silently dropping items, because a player who cannot tell the difference will assume the game lost their salvage.",
+  "acceptance_criteria": [
+    "A ModuleScript at src/server/Inventory.luau returns a table with Add, Remove, Count and Clear functions, all annotated.",
+    "An exported type describes a stack: its item id and its quantity.",
+    "Add refuses and changes nothing when the carry limit would be exceeded, and returns how many were actually added.",
+    "Remove refuses to take more of an item than the player holds, and drops a stack that reaches zero.",
+    "Every file begins with --!strict and the whole project passes scripts/verify.ps1."
+  ],
+  "audit_id": "f2f84b07-23b8-4df5-9755-d77f9cffe4fb",
+  "notes": [
+    "Keep it small: one module, under 120 lines. A short answer is a correct answer more often.",
+    "Return only the files you create. Do not return a file you are not changing."
+  ]
+}

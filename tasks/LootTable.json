@@ -1,0 +1,16 @@
+{
+  "system": "LootTable",
+  "goal": "Pick a reward from a weighted table when infected are cleared, so rare salvage stays rare. The roll must be reproducible from a seed for testing, and a table whose weights do not add up must be refused when it is built rather than silently favouring the first entry.",
+  "acceptance_criteria": [
+    "A ModuleScript at src/shared/LootTable.luau returns a constructor taking a list of entries, each with an id and a positive weight.",
+    "An exported type describes an entry, and the constructor refuses an empty table or a non-positive weight.",
+    "Rolling takes a Random and returns one entry id, so a caller can pass a seeded Random and get the same result twice.",
+    "The chance of an entry is its weight over the total, and the last entry is reachable.",
+    "Every file begins with --!strict and the whole project passes scripts/verify.ps1."
+  ],
+  "audit_id": "f2f84b07-23b8-4df5-9755-d77f9cffe4fb",
+  "notes": [
+    "Keep it small: one module, under 120 lines. A short answer is a correct answer more often.",
+    "Return only the files you create. Do not return a file you are not changing."
+  ]
+}

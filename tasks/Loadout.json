@@ -1,0 +1,16 @@
+{
+  "system": "Loadout",
+  "goal": "Remember which lab tools a survivor has equipped and enforce the rules about them: a limited number of slots, no duplicates, and only tools whose lab module the player has unlocked.",
+  "acceptance_criteria": [
+    "A ModuleScript at src/server/Loadout.luau returns a table with Equip, Unequip, Get and Clear functions, all annotated.",
+    "Equip returns both a boolean and a reason string, so a refused equip can tell the player why.",
+    "A full loadout, a duplicate tool and a tool the player has not unlocked are each refused with a distinct reason.",
+    "Get returns a copy, so a caller cannot edit a player's loadout without going through Equip.",
+    "Every file begins with --!strict and the whole project passes scripts/verify.ps1."
+  ],
+  "audit_id": "f2f84b07-23b8-4df5-9755-d77f9cffe4fb",
+  "notes": [
+    "Keep it small: one module, under 120 lines. A short answer is a correct answer more often.",
+    "Return only the files you create. Do not return a file you are not changing."
+  ]
+}

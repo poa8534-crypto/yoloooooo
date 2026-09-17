@@ -1,0 +1,16 @@
+{
+  "system": "SalvageNode",
+  "goal": "Track resource nodes that a survivor can harvest and that refill after a cooldown, so two players cannot drain the same node twice in the same second and an exhausted node comes back on its own.",
+  "acceptance_criteria": [
+    "A ModuleScript at src/server/SalvageNode.luau returns a table with Register, Harvest and Remaining functions, all annotated.",
+    "An exported type describes a node: its id, what it yields, how much it holds and its refill time in seconds.",
+    "Harvest returns how much was taken, which is zero for an exhausted node, and never takes more than the node holds.",
+    "A node refills over time from when it was last harvested, computed when it is read rather than on a loop.",
+    "Every file begins with --!strict and the whole project passes scripts/verify.ps1."
+  ],
+  "audit_id": "f2f84b07-23b8-4df5-9755-d77f9cffe4fb",
+  "notes": [
+    "Keep it small: one module, under 120 lines. A short answer is a correct answer more often.",
+    "Return only the files you create. Do not return a file you are not changing."
+  ]
+}

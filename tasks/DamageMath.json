@@ -1,0 +1,16 @@
+{
+  "system": "DamageMath",
+  "goal": "Shared, pure arithmetic for how much damage an attack does: a base amount, the attacker's weapon multiplier, and the target's armour resistance. Both the server's combat code and any preview the client shows must agree, so the sums live in one shared module and take no Instances.",
+  "acceptance_criteria": [
+    "A ModuleScript at src/shared/DamageMath.luau returns a table of pure annotated functions and touches no Roblox service.",
+    "An exported type describes an attack: its base damage, its multiplier and the target's resistance.",
+    "Resistance reduces damage on a curve that never reaches zero damage and never increases it, and the result is rounded to a whole number.",
+    "A non-finite or negative input yields zero rather than propagating, and this is stated in a comment.",
+    "Every file begins with --!strict and the whole project passes scripts/verify.ps1."
+  ],
+  "audit_id": "f2f84b07-23b8-4df5-9755-d77f9cffe4fb",
+  "notes": [
+    "Keep it small: one module, under 120 lines. A short answer is a correct answer more often.",
+    "Return only the files you create. Do not return a file you are not changing."
+  ]
+}
