@@ -24,7 +24,8 @@ def sanitize_url(url: str) -> str:
 def redact(value: str) -> str:
     from .config import get_settings
     settings = get_settings()
-    for secret in (settings.youtube_api_key, settings.tavily_api_key):
+    for secret in (settings.youtube_api_key, settings.tavily_api_key,
+                   settings.gemini_api_key_1, settings.gemini_api_key_2):
         if secret:
             value = value.replace(secret, "[REDACTED]").replace(quote(secret, safe=""), "[REDACTED]")
     value = URL_PATTERN.sub(lambda m: sanitize_url(m.group()), value)

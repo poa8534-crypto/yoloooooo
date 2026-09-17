@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import Field
@@ -59,6 +60,36 @@ class Settings(BaseSettings):
     max_search_results: int = Field(default=15, ge=1, le=50)
     tavily_daily_allowance: int = Field(default=50, ge=0)
     youtube_daily_allowance: int = Field(default=10000, ge=0)
+    # Roblox Engineer. Gemini does the heavy work and both keys carry it: calls
+    # alternate between them, and a rate-limited key hands over to the other
+    # instead of waiting. See app/engineer/gemini.py.
+    gemini_api_key_1: str = ""
+    gemini_api_key_2: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    # Pinned names, never `gemini-pro-latest`: a moving alias would change the
+    # engineer's behaviour underneath a run with nothing recorded.
+    gemini_pro_model: str = "gemini-3.1-pro-preview"
+    gemini_flash_model: str = "gemini-3.8-flash"
+    gemini_timeout_seconds: float = Field(default=900.0, gt=0)
+    gemini_max_output_tokens: int = Field(default=65_536, ge=1024)
+    # The game repository the engineer writes into. Unset means the engineer
+    # refuses to run rather than guessing a path.
+    game_project_dir: Path | None = None
+    game_base_branch: str = "master"
+    # Worktrees live outside both repositories: one per run, removed after it.
+    engineer_worktree_dir: Path | None = None
+    engineer_data_dir: Path = ROOT / "data" / "engineer"
+    # Written by scripts/refresh_roblox_services.py; the gate reads the same file.
+    roblox_services_file: Path = ROOT / "data" / "roblox-services.json"
+    # "verify-script" runs the game repo's scripts/verify.ps1, the one definition
+    # of acceptable (docs/GATING.md). "builtin" runs the same checks command by
+    # command, for machines without that script; it is not the default because
+    # two definitions drift.
+    engineer_gate: Literal["verify-script", "builtin"] = "verify-script"
+    engineer_max_attempts: int = Field(default=6, ge=1, le=20)
+    engineer_run_seconds: float = Field(default=5400.0, gt=0)
+    engineer_tool_timeout_seconds: float = Field(default=300.0, gt=0)
+    luau_definitions_file: str = "globalTypes.None.d.luau"
 
     @property
     def tz(self) -> ZoneInfo:

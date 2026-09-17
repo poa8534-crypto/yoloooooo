@@ -429,6 +429,83 @@ Roblox experience, and tying it wrongly poisons everything above it.
 
 ---
 
+## 11. ROBLOX ENGINEER — builds an audited design into Luau
+
+Command line on the game PC (`venture-engineer`, app/engineer/cli.py). Not yet
+wired into the dashboard. It writes into a separate repository, the game
+(`GAME_PROJECT_DIR`), and only ever onto its own branch.
+
+```
+  TASK.json  (system, goal, acceptance criteria, audit_id)
+         |
+         v
+  +--------------------------------------------------------------+
+  | app/engineer/runs.py  load_design                     [GATE]  |
+  | The audit must exist and must hold a design. A blocked audit  |
+  | or an invented idea has nothing to build from.                |
+  +--------------------------------------------------------------+
+         |
+         v
+  +--------------------------------------------------------------+
+  | app/engineer/workspace.py  Worktree.create            [DET]   |
+  | git worktree on branch engineer/<system>-<id>, cut from the   |
+  | base branch. The main checkout is never touched: you, Rojo    |
+  | and Hermes all write there.                                   |
+  +--------------------------------------------------------------+
+         |
+         v
+  PREFLIGHT  the untouched project must pass every check   [GATE]
+  (otherwise attempts would be blamed for a broken base)
+         |
+         v
+  +--------------------------------------------------------------+
+  | app/engineer/loop.py  EngineerLoop, up to N attempts          |
+  |                                                               |
+  |  Gemini Pro (app/engineer/gemini.py)                   [LLM]  |
+  |    both keys, alternating; a 429 hands over to the other key  |
+  |         |                                                     |
+  |  schema + path + service-name checks                   [GATE] |
+  |    refused answers never reach the disk or the tools          |
+  |         |                                                     |
+  |  reset worktree -> write (LF, no BOM) -> generate             |
+  |  Services.luau -> stylua format                        [DET]  |
+  |         |                                                     |
+  |  app/engineer/gate.py                                  [GATE] |
+  |    guard (in-process) + the game repo's scripts/verify.ps1,   |
+  |    the one definition of acceptable (docs/GATING.md); its     |
+  |    exit code decides, its output is the next prompt's feedback|
+  +--------------------------------------------------------------+
+         |                                   |
+       PASS                                FAIL x N, or the same
+         |                                 failure three times
+         v                                   v
+  commit to engineer/<run-id>       last checked attempt committed
+  (merging to master is the         to engineer/<run-id> as
+   gate's and a person's call)      "refused(...)": kept as evidence,
+                                    never merged; plus a Claude Code
+                                    handoff packet in
+                                    data/engineer/handoffs/<run>.md
+```
+
+The worktree is removed when a run ends; the branch stays whenever it holds a
+commit. A run that never wrote code deletes its empty branch.
+
+The guard (app/engineer/luau_guard.py) exists because luau-lsp does not
+type-check anything reached through `game` or `script`. Generated code may not
+name either, except `script` inside `require(...)`; services come from the
+generated `src/shared/Services.luau`, which casts each to its class. Service
+names are checked against `data/roblox-services.json`, the list
+scripts/refresh_roblox_services.py builds from Roblox's API dump and the gate
+also reads (app/engineer/catalog.py).
+
+Client code (`src/client`) is not written yet: client scripts move at run time,
+so a require path the type checker accepts can be wrong in a live game.
+
+Run records: `system_state` rows `engineer-run:<id>` (events, never code).
+Gemini usage per key per day: `gemini-usage:<date>` (visibility, not a cap).
+
+---
+
 ## What the whole thing refuses to do
 
 - Report a rate from one observation.
@@ -438,3 +515,4 @@ Roblox experience, and tying it wrongly poisons everything above it.
 - Present a probability before outcomes exist to calibrate it.
 - Score a candidate from fewer than three measured components.
 - Update or delete anything in the ledger.
+- Accept generated Luau that fails any check, or keep any of it.
