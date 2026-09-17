@@ -25,6 +25,7 @@ local HttpService = game:GetService("HttpService")
 local ScriptEditorService = game:GetService("ScriptEditorService")
 local RunService = game:GetService("RunService")
 local Selection = game:GetService("Selection")
+local StudioTestService = game:GetService("StudioTestService")
 
 local PLUGIN_VERSION = "0.1.0"
 local PROTOCOL_VERSION = 1
@@ -242,9 +243,49 @@ local function leafName(path: string): string
 	return parts[#parts]
 end
 
+--[[
+	Rebuild a Roblox value from the wire.
+
+	`{0, 5, 0}` on its own could be a Vector3, a Color3 or a size, so values
+	that are not scalars arrive tagged: `{type = "Vector3", value = {0, 5, 0}}`.
+	An unknown tag is an error rather than a guess, because a guess here writes
+	the wrong thing into a place and looks like it worked.
+]]
+local function decodeValue(value: any): (any, string?)
+	if type(value) ~= "table" then
+		return value, nil
+	end
+	local tag = value.type
+	local parts = value.value
+	if tag == nil or parts == nil then
+		return nil, 'a table value must be tagged, e.g. {type = "Vector3", value = {0, 5, 0}}'
+	end
+	if tag == "Vector3" then
+		return Vector3.new(parts[1], parts[2], parts[3]), nil
+	elseif tag == "Color3" then
+		return Color3.fromRGB(parts[1], parts[2], parts[3]), nil
+	elseif tag == "UDim2" then
+		return UDim2.new(parts[1], parts[2], parts[3], parts[4]), nil
+	elseif tag == "CFrame" then
+		return CFrame.new(parts[1], parts[2], parts[3]), nil
+	end
+	return nil, `{tostring(tag)} is not a value type this plugin rebuilds`
+end
+
 local function setProperty(instance: Instance, property: string, value: any): string?
+	local decoded, problem = decodeValue(value)
+	if problem ~= nil then
+		return `could not set {property}: {problem}`
+	end
+	-- Material and Font arrive as names; the Enum they belong to is decided by
+	-- the property, which is the only place that knows.
+	if property == "Material" and type(decoded) == "string" then
+		decoded = (Enum.Material :: any)[decoded]
+	elseif property == "Font" and type(decoded) == "string" then
+		decoded = (Enum.Font :: any)[decoded]
+	end
 	local ok, err = pcall(function()
-		(instance :: any)[property] = value
+		(instance :: any)[property] = decoded
 	end)
 	if not ok then
 		return `could not set {property}: {tostring(err)}`
@@ -422,23 +463,40 @@ end
 	Roblox exposes no API for it -- so `mode = "play"` is reported as unsupported
 	rather than quietly doing something else and calling it a playtest.
 ]]
+--[[
+	Start a test session.
+
+	`StudioTestService:ExecutePlayModeAsync` is the documented route for a
+	plugin to start Play mode -- a character, the full client-server split --
+	and is what "I see the game running" requires. `RunService:Run()` is the
+	lesser option: scripts execute, no character.
+
+	Whether the plugin keeps talking to the bridge once Play mode starts is
+	recorded in docs/STUDIO_EXPERIMENTS.md rather than assumed here, which is
+	why the result is reported before the call rather than after it.
+]]
 local function applyStartPlaytest(operation: any): (string, string, boolean)
-	if operation.mode == "play" then
-		return "failed",
-			"a plugin cannot start Play Solo; Roblox exposes no API for it. Use mode 'run', "
-				.. "or press Play in Studio",
-			false
-	end
 	if RunService:IsRunning() then
 		return "skipped", "already running", true
 	end
+
+	if operation.mode == "run" then
+		local ok, err = pcall(function()
+			RunService:Run()
+		end)
+		if not ok then
+			return "failed", `could not start run mode: {tostring(err)}`, false
+		end
+		return "applied", "run mode started", false
+	end
+
 	local ok, err = pcall(function()
-		RunService:Run()
+		StudioTestService:ExecutePlayModeAsync()
 	end)
 	if not ok then
-		return "failed", `could not start run mode: {tostring(err)}`, false
+		return "failed", `could not start play mode: {tostring(err)}`, false
 	end
-	return "applied", "run mode started", false
+	return "applied", "play mode started", false
 end
 
 local function applyStopPlaytest(_operation: any): (string, string, boolean)
@@ -454,12 +512,52 @@ local function applyStopPlaytest(_operation: any): (string, string, boolean)
 	return "applied", "stopped", false
 end
 
+local function applyCreateRemote(operation: any): (string, string, boolean)
+	local parent, err = resolve(operation.path, true)
+	if parent == nil then
+		return "failed", err or "unknown path", false
+	end
+	local name = leafName(operation.path)
+	local existing = parent:FindFirstChild(name)
+	if existing ~= nil then
+		if existing.ClassName ~= operation.remoteType then
+			return "failed", `{operation.path} already exists as a {existing.ClassName}`, false
+		end
+		return "skipped", "already present", true
+	end
+	local remote = Instance.new(operation.remoteType)
+	remote.Name = name
+	remote.Parent = parent
+	return "applied", "", false
+end
+
+local function applyOpenScript(operation: any): (string, string, boolean)
+	local parent, err = resolve(operation.path, false)
+	if parent == nil then
+		return "failed", err or "unknown path", false
+	end
+	local target = parent:FindFirstChild(leafName(operation.path))
+	if target == nil or not target:IsA("LuaSourceContainer") then
+		return "failed", `{operation.path} is not a script`, false
+	end
+	local ok, problem = pcall(function()
+		Selection:Set({ target })
+		ScriptEditorService:OpenScriptDocumentAsync(target)
+	end)
+	if not ok then
+		return "failed", `could not open it: {tostring(problem)}`, false
+	end
+	return "applied", "opened in the editor", false
+end
+
 local HANDLERS: { [string]: (any) -> (string, string, boolean) } = {
 	create_instance = applyCreateInstance,
 	create_script = applyCreateScript,
 	update_script = applyUpdateScript,
 	set_property = applySetProperty,
 	delete_instance = applyDelete,
+	create_remote = applyCreateRemote,
+	open_script = applyOpenScript,
 	start_playtest = applyStartPlaytest,
 	stop_playtest = applyStopPlaytest,
 }

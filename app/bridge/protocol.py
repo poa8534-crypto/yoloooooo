@@ -46,6 +46,26 @@ ALLOWED_CLASSES = frozenset({
     "Attachment", "PointLight", "Highlight",
 })
 SCRIPT_CLASSES = frozenset({"ModuleScript", "Script", "LocalScript"})
+REMOTE_CLASSES = frozenset({"RemoteEvent", "RemoteFunction", "BindableEvent", "BindableFunction"})
+
+# Properties a build may set, and nothing else. A whitelist rather than a
+# blacklist: Roblox adds properties faster than anyone maintains a list of the
+# dangerous ones, and the failure mode of guessing wrong is writing to something
+# that changes how a place behaves outside the build.
+#
+# Deliberately short. Everything here is needed to put a visible, moving
+# prototype on screen; the rest can be added when a build actually needs it.
+SETTABLE_PROPERTIES = frozenset({
+    "Name", "Anchored", "CanCollide", "CanTouch", "Transparency", "Position", "Size",
+    "Color", "BrickColor", "Material", "Orientation", "CFrame", "Value", "Text",
+    "TextColor3", "BackgroundColor3", "BackgroundTransparency", "Visible", "Enabled",
+    "Disabled", "Massless", "CastShadow", "Locked", "ZIndex", "TextSize", "Font",
+})
+
+# Value types the plugin knows how to rebuild. Kept beside the property
+# whitelist because the two travel together: a property that takes a Vector3 is
+# useless without a way to express one.
+VALUE_TYPES = frozenset({"Vector3", "Color3", "UDim2", "CFrame"})
 
 _SEGMENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_ .-]{0,62}$")
 MAX_SOURCE = 400_000
@@ -85,9 +105,10 @@ class OperationKind(str, enum.Enum):
     CREATE_INSTANCE = "create_instance"
     CREATE_SCRIPT = "create_script"
     UPDATE_SCRIPT = "update_script"
+    CREATE_REMOTE = "create_remote"
     SET_PROPERTY = "set_property"
     DELETE_INSTANCE = "delete_instance"
-    RUN_TEST = "run_test"
+    OPEN_SCRIPT = "open_script"
     START_PLAYTEST = "start_playtest"
     STOP_PLAYTEST = "stop_playtest"
 
@@ -123,6 +144,25 @@ class UpdateScript(_Base):
     source: str = Field(max_length=MAX_SOURCE)
 
 
+class CreateRemote(_Base):
+    """Its own operation rather than a create_instance, so a remote is always
+    created somewhere the client can see it and is never a surprise."""
+
+    operation: Literal[OperationKind.CREATE_REMOTE] = OperationKind.CREATE_REMOTE
+    path: str
+    remote_type: str = Field(default="RemoteEvent", alias="remoteType")
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class OpenScript(_Base):
+    """Open a script in Studio's editor, so the person sees code rather than a
+    message saying code exists."""
+
+    operation: Literal[OperationKind.OPEN_SCRIPT] = OperationKind.OPEN_SCRIPT
+    path: str
+
+
 class SetProperty(_Base):
     operation: Literal[OperationKind.SET_PROPERTY] = OperationKind.SET_PROPERTY
     path: str
@@ -135,12 +175,6 @@ class DeleteInstance(_Base):
     path: str
 
 
-class RunTest(_Base):
-    operation: Literal[OperationKind.RUN_TEST] = OperationKind.RUN_TEST
-    path: str
-    name: str = Field(default="", max_length=120)
-
-
 class StartPlaytest(_Base):
     operation: Literal[OperationKind.START_PLAYTEST] = OperationKind.START_PLAYTEST
     mode: Literal["run", "play"] = "run"
@@ -151,8 +185,8 @@ class StopPlaytest(_Base):
 
 
 Operation = Annotated[
-    Union[CreateInstance, CreateScript, UpdateScript, SetProperty, DeleteInstance,
-          RunTest, StartPlaytest, StopPlaytest],
+    Union[CreateInstance, CreateScript, UpdateScript, CreateRemote, SetProperty,
+          DeleteInstance, OpenScript, StartPlaytest, StopPlaytest],
     Field(discriminator="operation"),
 ]
 
@@ -262,6 +296,28 @@ def validate_batch(batch: OperationBatch) -> OperationBatch:
                     f"use create_script for {operation.class_name}, so its source is checked")
         if isinstance(operation, CreateScript) and operation.script_type not in SCRIPT_CLASSES:
             raise ProtocolError(f"{operation.script_type!r} is not a script class")
+        if isinstance(operation, CreateRemote) and operation.remote_type not in REMOTE_CLASSES:
+            raise ProtocolError(f"{operation.remote_type!r} is not a remote class; "
+                                f"allowed: {', '.join(sorted(REMOTE_CLASSES))}")
+        if isinstance(operation, SetProperty):
+            if operation.property not in SETTABLE_PROPERTIES:
+                raise ProtocolError(
+                    f"{operation.property!r} is not a property a build may set. The set is a "
+                    "whitelist on purpose; add it there when a build needs it.")
+            value = operation.value
+            tagged = (isinstance(value, dict) and isinstance(value.get("type"), str)
+                      and "value" in value)
+            if isinstance(value, (dict, list)) and not tagged:
+                # `[0, 5, 0]` could be a Vector3, a Color3 or a size, and the
+                # plugin would have to guess. A wrong guess writes the wrong
+                # thing into a place and looks like it worked.
+                raise ProtocolError(
+                    f"{operation.property!r}: a non-scalar value must be tagged, as "
+                    "{'type': 'Vector3', 'value': [0, 5, 0]}")
+            if tagged and value["type"] not in VALUE_TYPES:
+                raise ProtocolError(
+                    f"{value['type']!r} is not a value type the plugin rebuilds; "
+                    f"allowed: {', '.join(sorted(VALUE_TYPES))}")
 
     if sequences != sorted(sequences):
         raise ProtocolError("operations must be in ascending sequence order")

@@ -334,3 +334,108 @@ def test_delete_and_update_carry_paths_that_are_validated():
     with pytest.raises(PathError):
         validate_batch(batch(SetProperty(operation_id="a", sequence=0,
                                          path="CoreGui/Thing", property="Name", value="x")))
+
+
+# ---- the integration build -------------------------------------------------
+
+def test_the_smoke_batch_is_valid_and_builds_what_it_claims():
+    """Every value in it is fixed; no model is in this path, so a failure
+    running it is the pipeline rather than the generation."""
+    from app.bridge.smoke import smoke_batch
+
+    built = smoke_batch(build_id="smoke1")
+    paths = [getattr(op, "path", "") for op in built.operations]
+
+    assert "Workspace/GeneratedTest/Floor" in paths
+    assert "Workspace/GeneratedTest/RedBlock" in paths
+    assert "ReplicatedStorage/GeneratedTest/Config" in paths
+    assert "ServerScriptService/GeneratedTestRunner" in paths
+
+
+def test_the_smoke_batch_ends_by_starting_play_mode():
+    from app.bridge.protocol import OperationKind
+    from app.bridge.smoke import smoke_batch
+
+    built = smoke_batch(build_id="smoke1")
+    last = built.operations[-1]
+    assert last.operation is OperationKind.START_PLAYTEST
+    assert last.mode == "play", "Play mode is what puts a character in the place"
+
+
+def test_the_smoke_batch_can_be_built_without_starting_anything():
+    from app.bridge.protocol import OperationKind
+    from app.bridge.smoke import smoke_batch
+
+    kinds = {op.operation for op in smoke_batch(build_id="s", play=False).operations}
+    assert OperationKind.START_PLAYTEST not in kinds
+
+
+def test_the_smoke_script_sources_are_what_the_checklist_looks_for():
+    """The checklist tells a person what to look for; if it named something the
+    source does not contain, a working build would read as a failure."""
+    from app.bridge.smoke import CONFIG_SOURCE, RUNNER_SOURCE, expected_checklist
+
+    checklist = " ".join(expected_checklist())
+    assert "bobHeight" in CONFIG_SOURCE and "bobHeight" in checklist
+    assert "Heartbeat" in RUNNER_SOURCE and "Heartbeat" in checklist
+    assert "[GeneratedTest] runner started" in checklist
+    assert "runner started" in RUNNER_SOURCE
+
+
+def test_the_smoke_batch_survives_the_bridge(client):
+    from app.bridge.smoke import smoke_batch
+
+    payload = smoke_batch(build_id="smoke1").model_dump(by_alias=True, mode="json")
+    assert client.post("/bridge/batches", headers=auth(), json=payload).status_code == 202
+
+    handed = client.get("/bridge/work", headers=auth()).json()["batch"]
+    assert len(handed["operations"]) == len(payload["operations"])
+
+
+# ---- the property whitelist ------------------------------------------------
+
+def test_only_whitelisted_properties_may_be_set():
+    from app.bridge.protocol import SETTABLE_PROPERTIES
+
+    assert validate_batch(batch(SetProperty(operation_id="a", sequence=0,
+                                            path="Workspace/Thing", property="Anchored",
+                                            value=True)))
+    for needed in ("Name", "Anchored", "CanCollide", "Transparency", "Position",
+                   "Size", "Color", "Material"):
+        assert needed in SETTABLE_PROPERTIES
+
+
+@pytest.mark.parametrize("property_name", ["Parent", "Source", "ClassName", "RobloxLocked",
+                                           "Archivable", "Script"])
+def test_a_property_outside_the_whitelist_is_refused(property_name):
+    """A whitelist rather than a blacklist: Roblox adds properties faster than
+    anyone maintains a list of the dangerous ones."""
+    with pytest.raises(ProtocolError, match="not a property a build may set"):
+        validate_batch(batch(SetProperty(operation_id="a", sequence=0, path="Workspace/Thing",
+                                         property=property_name, value="x")))
+
+
+def test_a_bare_list_value_is_refused_because_it_is_ambiguous():
+    """`[0, 5, 0]` could be a Vector3, a Color3 or a size; the plugin would be
+    guessing, and a wrong guess writes the wrong thing and looks like it worked."""
+    with pytest.raises(ProtocolError, match="tagged"):
+        validate_batch(batch(SetProperty(operation_id="a", sequence=0, path="Workspace/Thing",
+                                         property="Position", value=[0, 5, 0])))
+
+
+def test_a_tagged_value_is_accepted():
+    from app.bridge.smoke import vector3
+
+    assert validate_batch(batch(SetProperty(operation_id="a", sequence=0, path="Workspace/Thing",
+                                            property="Position", value=vector3(0, 5, 0))))
+
+
+# ---- remotes ---------------------------------------------------------------
+
+def test_a_remote_class_outside_the_set_is_refused():
+    from app.bridge.protocol import CreateRemote
+
+    with pytest.raises(ProtocolError, match="not a remote class"):
+        validate_batch(batch(CreateRemote(operation_id="a", sequence=0,
+                                          path="ReplicatedStorage/Remotes/Fire",
+                                          remoteType="Part")))
