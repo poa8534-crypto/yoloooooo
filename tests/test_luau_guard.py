@@ -144,3 +144,80 @@ def test_check_project_exempts_only_the_services_module(tmp_path):
     violations = check_project(tmp_path, shared / "Services.luau", KNOWN)
 
     assert {(v.path, v.rule) for v in violations} == {("shared/Copy.luau", "forbidden-global")}
+
+
+# ---- `script`: the same hole reached without naming `game` -----------------
+#
+# luau-lsp accepted both of these on the real toolchain, because `script` is a
+# sourcemap node rather than a typed value:
+#
+#     script:FindFirstAncestorWhichIsA("DataModel"):MadeUp()
+#     script.Parent:MadeUp()
+#
+# The ban is narrow on purpose. From a typed receiver the same methods are
+# checked -- `Services.Players:FindFirstAncestorWhichIsA("DataModel"):MadeUp()`,
+# `Services.Workspace.Parent:MadeUp()` and
+# `Services.Workspace:FindFirstChild("Thing"):MadeUp()` are all rejected -- so
+# only the bare global is a hole.
+
+@pytest.mark.parametrize("code", [
+    'script:FindFirstAncestorWhichIsA("DataModel"):MadeUp()',
+    "script.Parent:MadeUp()",
+    "local x = script.Parent.NotARealChild",
+    "local s = script",
+    "local n = script.Name",
+    "local x = script.Parent.Parent.Parent",
+    'local s = `where: {script.Name}`',
+    "return script",
+])
+def test_reaching_through_script_is_refused(code):
+    assert "untyped-script" in rules(code), code
+
+
+@pytest.mark.parametrize("code", [
+    "local S = require(script.Parent.Services)",
+    'local S = require(script.Parent:WaitForChild("Services"))',
+    "local S = require(script.Parent.Parent.shared.Services)",
+])
+def test_require_is_the_one_way_script_may_be_used(code):
+    """It is the only route to the Services module, so banning it outright
+    would ban the thing the guard exists to make possible."""
+    assert rules(code) == [], code
+
+
+def test_a_legal_require_does_not_excuse_a_later_reach():
+    """The span is the require's own parentheses, not the rest of the file."""
+    source = "local S = require(script.Parent.Services)\nscript.Parent:MadeUp()"
+    assert rules(source) == ["untyped-script"]
+
+
+@pytest.mark.parametrize("code", [
+    "local x = obj.script",
+    "local x = obj:script()",
+    'local x = "script.Parent.Thing"',
+    "-- script.Parent is fine in a comment",
+])
+def test_the_word_script_elsewhere_is_not_the_global(code):
+    assert rules(code) == [], code
+
+
+def test_an_annotated_script_is_still_refused():
+    """`local s: Instance = script` really is type-safe, and is refused anyway:
+    admitting it means reading the annotation, and `local s: any = script`
+    passes that reading while restoring the hole in full."""
+    assert "untyped-script" in rules("local s: Instance = script")
+
+
+def test_the_message_names_the_one_legal_use():
+    """It is fed back to the model that wrote the violation, so it has to say
+    what to write instead."""
+    violation = next(v for v in check_source("--!strict\nscript.Parent:MadeUp()", "x.luau")
+                     if v.rule == "untyped-script")
+    assert "require(script.Parent.X)" in violation.message
+
+
+def test_the_services_module_may_still_use_game():
+    """The `script` rule must not leak into the one file allowed to touch
+    `game`, which check_services_module handles instead."""
+    source = render_services_module(["Players"])
+    assert check_services_module(source, "Services.luau", KNOWN) == []

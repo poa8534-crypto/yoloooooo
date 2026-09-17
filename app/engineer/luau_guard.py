@@ -40,6 +40,35 @@ FORBIDDEN_GLOBALS: dict[str, str] = {
     "shared": "shared global tables are untyped; require a module instead",
 }
 
+# `script` is a sourcemap node, not a typed value, so nothing reached from it is
+# checked. Both of these were accepted by luau-lsp on the real toolchain:
+#
+#     script:FindFirstAncestorWhichIsA("DataModel"):MadeUp()
+#     script.Parent:MadeUp()   /   script.Parent.NotARealChild
+#
+# They are the same hole as `game`, reached without naming it. What makes the
+# ban narrow rather than sweeping is that the methods themselves are fine: from
+# a *typed* receiver, luau-lsp rejects all of
+#
+#     Services.Players:FindFirstAncestorWhichIsA("DataModel"):MadeUp()
+#     Services.Workspace.Parent:MadeUp()
+#     Services.Workspace:FindFirstChild("Thing"):MadeUp()
+#     local s: Instance = script ; s:MadeUp()
+#
+# -- the last one catching `MadeUp` on `DataModel` itself. Only the bare global
+# is untyped, so only the bare global is banned.
+#
+# An annotated local (`local s: Instance = script`) is type-safe too, and is
+# deliberately still refused. Admitting it would mean reading the annotation,
+# and `local s: any = script` passes that reading while restoring the hole in
+# full. The ban stays where it can be decided from the token stream alone.
+SCRIPT_GLOBAL = "script"
+SCRIPT_MESSAGE = (
+    "`script` is a sourcemap node, so nothing reached from it is type-checked; "
+    "it is allowed only as `require(script.Parent.X)` -- reach instances through "
+    "a typed value instead, such as the Services module"
+)
+
 STRICT_HEADER = "--!strict"
 SERVICES_HEADER = (
     "--!strict\n"
@@ -199,6 +228,36 @@ def check_source(source: str, path: str) -> list[Violation]:
         line, column = _position(source, offset)
         return Violation(path, line, column, rule, message)
 
+    def require_argument_span(tokens: list[Token]) -> set[int]:
+        """Token indices inside the parentheses of a `require(...)` call.
+
+        `require(script.Parent.Services)` is the only way to reach the Services
+        module, so the `script` ban has to leave it alone. Spans are matched by
+        counting parentheses rather than by regex, so a nested call inside the
+        argument does not end the span early.
+        """
+        inside: set[int] = set()
+        for index, token in enumerate(tokens):
+            if token.kind != "name" or token.text != "require":
+                continue
+            previous = tokens[index - 1] if index else None
+            if previous is not None and previous.kind == "op" and previous.text in (".", ":"):
+                continue  # a field named `require`, not the global
+            if index + 1 >= len(tokens) or tokens[index + 1].text != "(":
+                continue
+            depth = 0
+            for position in range(index + 1, len(tokens)):
+                text = tokens[position].text
+                if tokens[position].kind == "op" and text == "(":
+                    depth += 1
+                elif tokens[position].kind == "op" and text == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                else:
+                    inside.add(position)
+        return inside
+
     found: list[Violation] = []
     if source.split("\n", 1)[0].strip() != STRICT_HEADER:
         found.append(Violation(path, 1, 1, "strict-mode",
@@ -208,6 +267,7 @@ def check_source(source: str, path: str) -> list[Violation]:
     except LuauSyntaxError as exc:
         return [*found, Violation(path, 1, 1, "syntax", str(exc))]
 
+    in_require = require_argument_span(tokens)
     for index, token in enumerate(tokens):
         if token.kind != "name":
             continue
@@ -215,7 +275,9 @@ def check_source(source: str, path: str) -> list[Violation]:
         # `obj.game` and `obj:game()` are fields, not the global.
         if previous is not None and previous.kind == "op" and previous.text in (".", ":"):
             continue
-        if token.text in FORBIDDEN_GLOBALS:
+        if token.text == SCRIPT_GLOBAL and index not in in_require:
+            found.append(violation(token.offset, "untyped-script", SCRIPT_MESSAGE))
+        elif token.text in FORBIDDEN_GLOBALS:
             found.append(violation(token.offset, "forbidden-global",
                                    f"`{token.text}`: {FORBIDDEN_GLOBALS[token.text]}"))
         elif (token.text == "require" and len(tokens) > index + 2
