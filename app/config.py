@@ -108,9 +108,25 @@ class Settings(BaseSettings):
     # exactly as they judge Gemini's, so a cheaper model costs attempts rather
     # than correctness. Gemini's free tier is 20 requests for Flash and zero
     # for Pro, which blocked two runs before a single file was written.
-    engineer_provider: Literal["gemini", "ollama"] = "gemini"
+    # Tried in order, first that answers wins. A provider that is not installed
+    # or not configured is skipped, so the chain is also how a machine without
+    # `agy` keeps working. Only "unavailable" moves down the chain: a refusal
+    # and a truncated answer belong to the attempt that got them.
+    engineer_providers: str = "antigravity,gemini,ollama"
+    # The single-provider setting the chain replaced. Still read, so an .env
+    # that sets it keeps working: it becomes the whole chain.
+    engineer_provider: Literal["gemini", "ollama", "antigravity"] | None = None
+    engineer_antigravity_executable: str = "agy"
+    engineer_antigravity_models: str = "gemini-3.8-flash-high"
+    engineer_antigravity_effort: Literal["low", "medium", "high"] = "medium"
+    engineer_antigravity_timeout_seconds: float = Field(default=900.0, gt=0)
     engineer_ollama_base_url: str = "http://127.0.0.1:11434"
-    engineer_ollama_models: str = "venture-coder:14b,qwen2.5-coder:14b,qwen3:14b"
+    # Tried in order. `venture-coder:14b` is reserved for the fine-tune and is
+    # skipped until it exists; `roblox-engineer:14b` is stock qwen2.5-coder
+    # repackaged with a Roblox system prompt, which is what it was before the
+    # name was corrected -- it had never been trained, and calling it
+    # venture-coder made every attempt it produced look like tuned output.
+    engineer_ollama_models: str = "venture-coder:14b,roblox-engineer:14b,qwen2.5-coder:14b"
     engineer_ollama_context: int = Field(default=16_384, ge=2048)
     # Sent with every request so an installed Modelfile cannot change how the
     # engineer generates. 1.0 is no repetition penalty, which is what code

@@ -22,6 +22,7 @@ from sqlalchemy import text
 from ..config import Settings
 from ..models import AuditRecord, SystemState
 from ..security import redact
+from .antigravity import AntigravityClient, antigravity_models, chain
 from .capture import AttemptRecorder
 from .catalog import load_services
 from .gate import Gate, run_command
@@ -155,24 +156,72 @@ def ollama_model_names(settings: Settings) -> list[str]:
     return [name.strip() for name in settings.engineer_ollama_models.split(",") if name.strip()]
 
 
-def build_client(settings: Settings, **kwargs):
-    """The backend `engineer_provider` names. Both answer the same `generate`."""
-    if settings.engineer_provider == "ollama":
+def provider_names(settings: Settings) -> list[str]:
+    """The chain, in order. `engineer_provider` still wins when it is set, so
+    an .env written before the chain existed keeps meaning what it said."""
+    if settings.engineer_provider:
+        return [settings.engineer_provider]
+    names = [name.strip().lower() for name in settings.engineer_providers.split(",") if name.strip()]
+    unknown = [name for name in names if name not in ("antigravity", "gemini", "ollama")]
+    if unknown:
+        raise NotConfigured(f"unknown engineer provider(s): {', '.join(unknown)}")
+    if not names:
+        raise NotConfigured("ENGINEER_PROVIDERS is empty; name at least one of antigravity, gemini, ollama")
+    return names
+
+
+def antigravity_model_names(settings: Settings) -> list[str]:
+    return [name.strip() for name in settings.engineer_antigravity_models.split(",") if name.strip()]
+
+
+def build_one_client(name: str, settings: Settings, **kwargs):
+    if name == "ollama":
         return OllamaClient(base_url=settings.engineer_ollama_base_url,
                             timeout=settings.engineer_ollama_timeout_seconds,
                             num_ctx=settings.engineer_ollama_context,
                             repeat_penalty=settings.engineer_ollama_repeat_penalty,
                             top_p=settings.engineer_ollama_top_p, **kwargs)
+    if name == "antigravity":
+        return AntigravityClient(executable=settings.engineer_antigravity_executable,
+                                 timeout=settings.engineer_antigravity_timeout_seconds,
+                                 effort=settings.engineer_antigravity_effort, **kwargs)
+    if not engineer_keys(settings):
+        raise NotConfigured("no Gemini key is set")
     return GeminiClient(keys=engineer_keys(settings), base_url=settings.engineer_gemini_base_url,
                         timeout=settings.engineer_gemini_timeout_seconds,
                         max_output_tokens=settings.engineer_gemini_max_output_tokens, **kwargs)
 
 
-def build_model_call(settings: Settings, client):
-    """Adapt whichever client was built into the loop's `ModelCall`."""
-    if settings.engineer_provider == "ollama":
-        return ollama_models(client, ollama_model_names(settings))
-    return gemini_models(client, engineer_models(settings))
+def build_clients(settings: Settings, **kwargs) -> list[tuple[str, object]]:
+    """One client per provider in the chain, in order.
+
+    A provider that cannot be built at all -- Gemini with no key -- is dropped
+    here rather than failing the run, because that is exactly the case the
+    chain exists to survive.
+    """
+    built: list[tuple[str, object]] = []
+    for name in provider_names(settings):
+        try:
+            built.append((name, build_one_client(name, settings, **kwargs)))
+        except NotConfigured:
+            continue
+    if not built:
+        raise NotConfigured("no engineer provider is configured: set a Gemini key, install `agy`, "
+                            "or run Ollama")
+    return built
+
+
+def build_model_call(settings: Settings, clients: list[tuple[str, object]]):
+    """One `ModelCall` for the whole chain."""
+    calls = []
+    for name, client in clients:
+        if name == "ollama":
+            calls.append(ollama_models(client, ollama_model_names(settings)))
+        elif name == "antigravity":
+            calls.append(antigravity_models(client, antigravity_model_names(settings)))
+        else:
+            calls.append(gemini_models(client, engineer_models(settings)))
+    return chain(calls)
 
 
 def build_gate(settings: Settings) -> Gate:
@@ -197,11 +246,11 @@ async def run_task(task: EngineeringTask, *, settings: Settings, factory, on_eve
         if on_event:
             on_event(entry)
 
-    client = build_client(settings, on_usage=usage_recorder(factory))
+    clients = build_clients(settings, on_usage=usage_recorder(factory))
     recorder = AttemptRecorder(settings.engineer_capture_dir,
                                on_error=lambda message: emit("capture_failed", message))
     loop = EngineerLoop(
-        model=build_model_call(settings, client), gate=gate,
+        model=build_model_call(settings, clients), gate=gate,
         known_services=gate.known_services,
         create_worktree=lambda name: Worktree.create(repo, settings.game_base_branch, worktrees, name),
         handoff_dir=settings.engineer_data_dir / "handoffs",
@@ -215,6 +264,7 @@ async def run_task(task: EngineeringTask, *, settings: Settings, factory, on_eve
         runs.fail(run_id, exc)
         raise
     finally:
-        await client.close()
+        for _name, client in clients:
+            await client.close()
     runs.finish(run_id, result)
     return result

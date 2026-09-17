@@ -93,16 +93,41 @@ async def _ping_ollama(settings) -> int:
     return 0 if answered else 1
 
 
+def _ping_antigravity(settings) -> int:
+    """Whether `agy` is installed. It authenticates through the system keyring,
+    so there is no key here to check and nothing to spend asking."""
+    from .antigravity import AntigravityClient
+
+    client = AntigravityClient(executable=settings.engineer_antigravity_executable)
+    found = client.resolve()
+    if found is None:
+        print(f"antigravity: `{settings.engineer_antigravity_executable}` is not installed")
+        return 0
+    print(f"antigravity: {found}")
+    print(f"  models: {settings.engineer_antigravity_models}, effort {settings.engineer_antigravity_effort}")
+    return 1
+
+
 async def _ping() -> int:
     """Every configured key against every engineer model, without waiting on limits.
 
     A rate-limited model is reported, not failed: it says what the engineer
     will fall back from today, which is the point of asking.
     """
+    from .runs import provider_names
+
     settings = get_settings()
     answered = 0
-    if settings.engineer_provider == "ollama":
-        return await _ping_ollama(settings)
+    names = provider_names(settings)
+    print("provider chain: " + " -> ".join(names))
+    print()
+    if "antigravity" in names:
+        answered += _ping_antigravity(settings)
+        print()
+    if "ollama" in names and await _ping_ollama(settings) == 0:
+        answered += 1
+    if "gemini" not in names:
+        return 0 if answered else 1
     keys = [("GEMINI_API_KEY_1", settings.gemini_api_key_1), ("GEMINI_API_KEY_2", settings.gemini_api_key_2)]
     for label, key in keys:
         if not key:
