@@ -113,8 +113,92 @@ class OllamaProposalClient:
 
     def __init__(self, settings: Settings | None = None, client: httpx.AsyncClient | None = None):
         self.settings = settings or get_settings()
-        self.client = client or httpx.AsyncClient(timeout=self.settings.ollama_timeout_seconds)
+        timeout = (self.settings.gemini_timeout_seconds if self.settings.llm_provider == "gemini"
+                   else self.settings.ollama_timeout_seconds)
+        self.client = client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
+
+    @property
+    def routes(self) -> tuple[tuple[str, str], ...]:
+        """Ordered (provider, model) attempts.
+
+        A Gemini configuration ends at the local model rather than at a
+        failure. Google answered 503 "high demand" to three of five probe
+        requests on the day this was written, and the dashboard it replaces was
+        entirely local and therefore always available. An audit that waits for
+        a slower model is better than one that fails closed because someone
+        else's capacity ran out.
+        """
+        if self.settings.llm_provider == "gemini":
+            return (
+                ("gemini", self.settings.gemini_primary_model),
+                ("gemini", self.settings.gemini_fallback_model),
+                ("ollama", self.settings.ollama_primary_model),
+            )
+        return (
+            ("ollama", self.settings.ollama_primary_model),
+            ("ollama", self.settings.ollama_fallback_model),
+        )
+
+    def _request(self, provider: str, model: str, prompt: str, schema: dict,
+                 retry: bool) -> tuple[str, dict, dict]:
+        """URL, headers and body for one completion.
+
+        The two backends are not interchangeable at the wire. Ollama takes a
+        JSON schema in `format` and reasoning in `think`; Google's
+        OpenAI-compatible surface takes `response_format` and has no `think`.
+        Building both here keeps `_complete`'s retry and fallback logic -- the
+        part that decides whether an answer is trustworthy -- identical for
+        either, so a provider swap cannot quietly change what gets accepted.
+        """
+        system = ("Return only schema-valid JSON. Evidence and decisions belong "
+                  "to deterministic code.")
+        correction = ("\nPrevious response was invalid. Correct schema fields, omit "
+                      "all digits and URLs in prose, and use only allowed evidence IDs."
+                      if retry else "")
+        messages = [{"role": "system", "content": system},
+                    {"role": "user", "content": prompt + correction}]
+
+        if provider == "gemini":
+            if not self.settings.gemini_api_key_1:
+                raise LLMUnavailable(
+                    "llm_provider is 'gemini' but no key is configured; set "
+                    "GEMINI_API_KEY_1 in .env or set llm_provider back to 'ollama'"
+                )
+            body = {
+                "model": model,
+                "messages": messages,
+                "temperature": 0.2,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "payload", "strict": True,
+                                    "schema": grammar_safe(schema)},
+                },
+            }
+            # The key travels in a header, never in the URL, so it cannot reach
+            # a proxy log or an exception's request line.
+            return (f"{self.settings.gemini_base_url}/chat/completions",
+                    {"Authorization": f"Bearer {self.settings.gemini_api_key_1}"},
+                    body)
+
+        return (f"{self.settings.ollama_base_url}/api/chat", {}, {
+            "model": model,
+            "stream": False,
+            "think": self.settings.ollama_think,
+            "format": grammar_safe(schema),
+            "options": {"num_ctx": self.settings.ollama_context, "temperature": 0.2},
+            "messages": messages,
+        })
+
+    def _read(self, provider: str, payload: dict) -> tuple[str, str | None]:
+        """Message content and the model's own reasoning, per backend."""
+        if provider == "gemini":
+            message = payload["choices"][0]["message"]
+            # Google returns reasoning on some models under a separate key; it
+            # is treated exactly like Ollama's `thinking` -- shown, never used.
+            return message["content"], message.get("reasoning_content")
+        message = payload["message"]
+        return message["content"], message.get("thinking")
 
     async def close(self) -> None:
         if self._owns_client:
@@ -298,46 +382,34 @@ class OllamaProposalClient:
         to think before it answers. The thinking never reaches the caller --
         only the schema-valid JSON in the message content does.
         """
-        for model in (self.settings.ollama_primary_model, self.settings.ollama_fallback_model):
+        for provider, model in self.routes:
             for attempt in range(2):
                 try:
                     if before_attempt:
                         before_attempt(model)
                     if say:
                         say("attempt", f"Asking {model}", model=model, attempt=attempt + 1)
-                    response = await self.client.post(
-                        f"{self.settings.ollama_base_url}/api/chat",
-                        json={
-                            "model": model,
-                            "stream": False,
-                            "think": self.settings.ollama_think,
-                            "format": grammar_safe(schema),
-                            "options": {
-                                "num_ctx": self.settings.ollama_context,
-                                "temperature": 0.2,
-                            },
-                            "messages": [
-                                {
-                                    "role": "system",
-                                    "content": "Return only schema-valid JSON. Evidence and decisions belong to deterministic code.",
-                                },
-                                {"role": "user", "content": prompt + ("\nPrevious response was invalid. Correct schema fields, omit all digits and URLs in prose, and use only allowed evidence IDs." if attempt or errors else "")},
-                            ],
-                        },
-                    )
+                    url, headers, body = self._request(
+                        provider, model, prompt, schema, retry=bool(attempt or errors))
+                    response = await self.client.post(url, headers=headers, json=body)
                     response.raise_for_status()
-                    message = response.json()["message"]
-                    if say and message.get("thinking"):
+                    content, thinking = self._read(provider, response.json())
+                    if say and thinking:
                         # The model's own reasoning, not the pipeline describing
                         # itself. Redacted and capped, reported under a distinct
                         # stage so nothing downstream can mistake it for
                         # evidence or for a decision the system made.
-                        say("reasoning", redact(str(message["thinking"]))[:REASONING_LIMIT], model=model)
-                    payload = model_type.model_validate_json(message["content"])
+                        say("reasoning", redact(str(thinking))[:REASONING_LIMIT], model=model)
+                    payload = model_type.model_validate_json(content)
                     if check:
                         check(payload)
                     return payload, model
-                except (httpx.HTTPError, KeyError, json.JSONDecodeError, ValidationError, ValueError) as exc:
+                except LLMUnavailable:
+                    # A misconfiguration, not a refusal. Trying the fallback
+                    # model would fail identically and bury the real cause
+                    # under four copies of itself.
+                    raise
+                except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError, ValidationError, ValueError) as exc:
                     # The exception type alone sent every investigation looking
                     # in the wrong place. Which field was refused, and why, is
                     # the part worth keeping.

@@ -53,6 +53,24 @@ class Settings(BaseSettings):
     # value, is what stops a run from overspending.
     ollama_timeout_seconds: float = 600.0
     ollama_think: bool = True
+    # Which backend answers a Scout audit. "ollama" keeps every prompt on this
+    # machine; "gemini" sends it to Google. That is a change in where the
+    # evidence goes, not only in which model reads it, so it is an explicit
+    # setting rather than an inference from whether a key happens to be set.
+    llm_provider: str = "ollama"
+    # Google AI Studio, through its OpenAI-compatible surface, which is the
+    # only one that accepts a JSON schema the way Ollama's `format` does.
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    # Key 1. Key 2 belongs to Hermes, so a runaway loop in one cannot exhaust
+    # the other -- though both keys were measured to share a single project
+    # quota, so that separation is bookkeeping, not protection.
+    gemini_api_key_1: str = ""
+    # Flash, not Pro, and measured rather than assumed: `gemini-3.1-pro-preview`
+    # answers 429 RESOURCE_EXHAUSTED on both keys today, while
+    # `gemini-3.8-flash` answers normally and carries the same 1M context.
+    gemini_primary_model: str = "gemini-3.8-flash"
+    gemini_fallback_model: str = "gemini-3.6-flash"
+    gemini_timeout_seconds: float = 180.0
     scout_deliberation_passes: int = Field(default=3, ge=1, le=3)
     snapshot_hour: int = 2
     snapshot_minute: int = 0

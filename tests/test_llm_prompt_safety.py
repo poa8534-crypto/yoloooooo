@@ -52,6 +52,16 @@ def _client(handler) -> OllamaProposalClient:
         # One pass: these tests pin single-completion behaviour. Deliberation
         # has its own tests.
         scout_deliberation_passes=1,
+        # The stand-in has to carry every field the client reads, or it stops
+        # standing in for Settings and starts hiding shape changes from these
+        # tests. `ollama` keeps them pinned to the local wire format they
+        # assert on; the Gemini path has its own tests.
+        llm_provider="ollama",
+        gemini_base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        gemini_api_key_1="",
+        gemini_primary_model="gemini-primary",
+        gemini_fallback_model="gemini-fallback",
+        gemini_timeout_seconds=5.0,
     )
     return OllamaProposalClient(
         settings=settings,
