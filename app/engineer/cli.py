@@ -34,6 +34,25 @@ from .runs import (
 from .schemas import EngineeringTask
 
 
+def use_utf8(stream) -> None:
+    """Make `stream` carry any check output without killing the run.
+
+    Windows gives this process a cp1252 stdout when it is redirected to a file,
+    and selene draws its diagnostics with box-drawing characters. Printing one
+    raised UnicodeEncodeError inside the event callback, which unwound the whole
+    loop: a real run died at attempt 1 of 6 on the encoding of a message about
+    why attempt 1 failed. `errors="replace"` keeps that impossible even for
+    output no encoding covers.
+    """
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        pass
+
+
 def _print_report(report) -> None:
     for check in report.checks:
         print(f"[{'PASS' if check.passed else 'FAIL'}] {check.name}")
@@ -49,6 +68,31 @@ def _check(path: str | None) -> int:
     return 0 if report.passed else 1
 
 
+async def _ping_ollama(settings) -> int:
+    """Which local models answer. No key and no quota, so the only questions
+    are whether the daemon is up and whether the model has been pulled."""
+    from .ollama import OllamaClient, ollama_models  # noqa: F401
+    from .runs import ollama_model_names
+
+    answered = 0
+    names = ollama_model_names(settings)
+    for model in names:
+        client = OllamaClient(base_url=settings.engineer_ollama_base_url, timeout=120)
+        try:
+            reply = await client.generate(model=model, system='Reply with the JSON {"ok": true}.',
+                                          prompt="ping")
+            print(f"local {model}: OK ({reply.usage.get('output_tokens', 0)} tokens)")
+            answered += 1
+        except GeminiError as exc:
+            print(f"local {model}: {type(exc).__name__} -- {exc}")
+        finally:
+            await client.close()
+    print()
+    print(f"The engineer runs locally at {settings.engineer_ollama_base_url}, "
+          f"trying models in order: {', '.join(names)}.")
+    return 0 if answered else 1
+
+
 async def _ping() -> int:
     """Every configured key against every engineer model, without waiting on limits.
 
@@ -57,6 +101,8 @@ async def _ping() -> int:
     """
     settings = get_settings()
     answered = 0
+    if settings.engineer_provider == "ollama":
+        return await _ping_ollama(settings)
     keys = [("GEMINI_API_KEY_1", settings.gemini_api_key_1), ("GEMINI_API_KEY_2", settings.gemini_api_key_2)]
     for label, key in keys:
         if not key:
@@ -92,7 +138,11 @@ async def _run(task_file: str) -> int:
         print(f"[{entry['stage']}] {entry['detail']}")
         for check in entry.get("checks", []):
             if not check["passed"]:
-                print(f"    {check['check']}: " + check["output"][:400].replace("\n", "\n        "))
+                # The whole recorded output, not a 400-character head: the
+                # output is already clipped to 1200 by GateReport.summary, and
+                # the first 400 characters of verify.ps1 are the checks that
+                # passed before the one that did not.
+                print(f"    {check['check']}: " + check["output"].replace("\n", "\n        "))
 
     result = await run_task(task, settings=settings, factory=SessionLocal, on_event=show)
     print(f"\n{result.status.upper()}: {result.reason}")
@@ -117,6 +167,8 @@ def _usage() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    use_utf8(sys.stdout)
+    use_utf8(sys.stderr)
     parser = argparse.ArgumentParser(prog="venture-engineer", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)

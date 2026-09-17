@@ -244,3 +244,55 @@ def test_check_project_reads_bytes_so_a_crlf_services_module_is_refused(tmp_path
     violations = check_project(tmp_path, module, KNOWN)
 
     assert [v.rule for v in violations] == ["services-module-edited"]
+
+
+# ---- the DataModel, which is not a service --------------------------------
+#
+# `BindToClose` lives only on the DataModel and the engineering standards
+# require saving there, while every route to it was banned. Six attempts of a
+# real run died on `game:BindToClose(...)` -- the model obeying one rule and
+# breaking another it had no way to keep.
+#
+# Measured on the real toolchain, which is why the cast is trusted:
+#     local dm = game :: DataModel
+#     dm:BindToClose(function() end)  -- accepted, a real method
+#     dm:MadeUpMethod()               -- rejected, Key not found in DataModel
+
+def test_the_datamodel_is_rendered_as_a_cast_not_a_getservice():
+    source = render_services_module(["Players", "DataModel"])
+    assert "\tDataModel = game :: DataModel,\n" in source
+    assert 'GetService("DataModel")' not in source, "DataModel is not a service"
+
+
+def test_a_module_exposing_the_datamodel_is_accepted():
+    source = render_services_module(["Players", "DataModel"])
+    assert check_services_module(source, "Services.luau", KNOWN) == []
+
+
+def test_the_datamodel_is_not_reported_as_an_unknown_service():
+    """It is a class, not a service, so the API dump does not tag it and the
+    service-name cache will never contain it."""
+    source = render_services_module(["DataModel"])
+    assert check_services_module(source, "Services.luau", frozenset()) == []
+
+
+def test_an_invented_service_is_still_refused_alongside_it():
+    source = render_services_module(["DataModel", "MadeUpService"])
+    assert [v.rule for v in check_services_module(source, "S.luau", KNOWN)] == ["unknown-service"]
+
+
+def test_a_hand_written_datamodel_line_is_still_an_edit():
+    """The module has to stay byte-identical to generator output, so a
+    plausible-looking variant is refused like any other edit."""
+    source = render_services_module(["DataModel"]).replace(
+        "\tDataModel = game :: DataModel,", "\tDataModel = game :: any,")
+    assert "services-module-edited" in [v.rule for v in check_services_module(source, "S.luau", KNOWN)]
+
+
+def test_calling_the_datamodel_through_the_module_passes_the_guard():
+    """What the engineer is now told to write."""
+    assert rules("local S = require(script.Parent.Services)\nS.DataModel:BindToClose(save)") == []
+
+
+def test_bare_bindtoclose_is_still_refused():
+    assert "forbidden-global" in rules("game:BindToClose(save)")

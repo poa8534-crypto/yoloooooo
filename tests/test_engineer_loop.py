@@ -273,3 +273,29 @@ def test_usage_is_counted_per_key(session_factory):
 def test_run_names_are_worktree_safe():
     name = run_name("DataService")
     assert name.startswith("data-service-") and len(name) == len("data-service-") + 8
+
+
+async def test_the_datamodel_may_be_requested_like_a_service(repo, tmp_path):
+    """`BindToClose` lives only on the DataModel, and the standards the
+    engineer is given require saving there. The Services module exposes it as a
+    cast of `game`, so asking for it must not be refused.
+
+    This was missed once: the module renderer and the module checker both
+    accepted `DataModel` while this check still rejected it, so the engineer
+    asked for the only thing that makes `BindToClose` reachable and was told
+    four times that it did not exist.
+    """
+    model = ScriptedModel(answer(services=("Players", "DataModel")))
+    result = await make_loop(repo, tmp_path, model).run("data-service-00000006", TASK, DESIGN)
+
+    assert result.status == "complete", result.reason
+    assert result.attempts == 1, "the answer was refused instead of accepted"
+
+
+async def test_an_invented_service_is_still_refused_beside_it(repo, tmp_path):
+    """Exempting DataModel must not exempt anything else."""
+    model = ScriptedModel(answer(services=("DataModel", "MadeUpService")), answer())
+    result = await make_loop(repo, tmp_path, model).run("data-service-00000007", TASK, DESIGN)
+
+    assert "not Roblox services: MadeUpService" in model.prompts[1]
+    assert "DataModel" not in model.prompts[1].split("not Roblox services:")[1].split("\n")[0]

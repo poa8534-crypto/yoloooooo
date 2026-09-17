@@ -35,6 +35,7 @@ _SEGMENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 _WINDOWS_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
                      *(f"lpt{i}" for i in range(1, 10))}
 _SERVICE_NAME = re.compile(r'^\t[A-Za-z_]\w* = game:GetService\("([A-Za-z_]\w*)"\)', re.MULTILINE)
+_DATAMODEL_NAME = re.compile(r'^\tDataModel = game :: DataModel,$', re.MULTILINE)
 # Inputs the checks need that git does not carry. They are generated and
 # gitignored, so `git worktree add` produces a tree without them, and luau-lsp
 # answers a missing definitions file with
@@ -100,7 +101,16 @@ def read_normalized(file: Path) -> str:
 
 
 def services_in(source: str) -> set[str]:
-    return set(_SERVICE_NAME.findall(source))
+    """Names the module exposes, including `DataModel`.
+
+    `DataModel` is a cast of `game` rather than a `GetService` call, so it
+    needs its own pattern. Missing it would tell the model the module lacks
+    something it already has.
+    """
+    names = set(_SERVICE_NAME.findall(source))
+    if _DATAMODEL_NAME.search(source):
+        names.add("DataModel")
+    return names
 
 
 def git(args: list[str], cwd: Path, timeout: float = 120.0) -> str:

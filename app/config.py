@@ -103,6 +103,16 @@ class Settings(BaseSettings):
     # rate-limited model hands the attempt on instead of waiting it out, and is
     # tried again on the next attempt. Pinned names, never a moving alias.
     engineer_gemini_models: str = "gemini-3.1-pro-preview,gemini-3.8-flash"
+    # Which backend writes the code. "ollama" runs the model already on this
+    # machine: no quota, no rate limit, and the five checks judge its output
+    # exactly as they judge Gemini's, so a cheaper model costs attempts rather
+    # than correctness. Gemini's free tier is 20 requests for Flash and zero
+    # for Pro, which blocked two runs before a single file was written.
+    engineer_provider: Literal["gemini", "ollama"] = "gemini"
+    engineer_ollama_base_url: str = "http://127.0.0.1:11434"
+    engineer_ollama_models: str = "venture-coder:14b,qwen2.5-coder:14b,qwen3:14b"
+    engineer_ollama_context: int = Field(default=16_384, ge=2048)
+    engineer_ollama_timeout_seconds: float = Field(default=900.0, gt=0)
     engineer_gemini_timeout_seconds: float = Field(default=900.0, gt=0)
     engineer_gemini_max_output_tokens: int = Field(default=65_536, ge=1024)
     # The game repository the engineer writes into. Unset means the engineer
@@ -112,6 +122,12 @@ class Settings(BaseSettings):
     # Worktrees live outside both repositories: one per run, removed after it.
     engineer_worktree_dir: Path | None = None
     engineer_data_dir: Path = ROOT / "data" / "engineer"
+    # Every attempt kept as training material (app/engineer/capture.py). On by
+    # default: a refused attempt is the only example that is specific to this
+    # model, this toolchain and these rules, and five of every six are otherwise
+    # thrown away when the run ends.
+    engineer_capture_attempts: bool = True
+    engineer_capture_dir: Path = ROOT / "data" / "training" / "attempts"
     # Written by scripts/refresh_roblox_services.py; the gate reads the same file.
     roblox_services_file: Path = ROOT / "data" / "roblox-services.json"
     # "verify-script" runs the game repo's scripts/verify.ps1, the one definition

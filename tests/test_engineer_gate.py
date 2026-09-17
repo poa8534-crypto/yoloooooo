@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.engineer.gate import Gate
@@ -140,3 +142,74 @@ def test_an_unknown_gate_mode_is_refused(project):
     _, definitions = project
     with pytest.raises(ValueError):
         Gate(KNOWN, definitions, mode="trust-me")
+
+
+# ---- the formatter has to actually run ------------------------------------
+
+def test_a_formatter_that_could_not_run_is_reported_not_swallowed(tmp_path):
+    """StyLua missing from PATH looked exactly like StyLua succeeding, so six
+    attempts of a real run were failed by a formatter that never touched the
+    files. The operator would have debugged the model instead."""
+    def missing(args, cwd, timeout):
+        return None, "`stylua` was not found on PATH"
+
+    gate = Gate(frozenset(), tmp_path / "defs.d.luau", runner=missing)
+
+    problem = gate.format(tmp_path, ["src/server/A.luau"])
+
+    assert problem and "stylua" in problem
+
+
+def test_a_formatter_that_ran_reports_nothing():
+    calls: list[list[str]] = []
+
+    def ok(args, cwd, timeout):
+        calls.append(args)
+        return 0, ""
+
+    gate = Gate(frozenset(), Path("defs.d.luau"), runner=ok)
+
+    assert gate.format(Path("."), ["src/server/A.luau"]) is None
+    assert calls == [["stylua", "src/server/A.luau"]]
+
+
+def test_nothing_written_means_nothing_to_format():
+    def refuse(args, cwd, timeout):
+        raise AssertionError("stylua was run with no files")
+
+    gate = Gate(frozenset(), Path("defs.d.luau"), runner=refuse)
+
+    assert gate.format(Path("."), []) is None
+
+
+# ---- the pinned toolchain has to be reachable -----------------------------
+
+def test_rokit_shims_are_put_on_the_path():
+    """Rokit appends its bin directory to the user PATH at install time, so a
+    process started from an older shell does not have it."""
+    from app.engineer.gate import rokit_environment
+
+    shims = Path.home() / ".rokit" / "bin"
+    if not shims.is_dir():
+        pytest.skip("Rokit is not installed on this machine")
+    assert str(shims).lower() in rokit_environment()["PATH"].lower()
+
+
+def test_the_executable_is_resolved_before_the_call():
+    """Passing a wider PATH in `env` is not enough on Windows: CreateProcess
+    resolves the executable against the parent's PATH, so the child's PATH only
+    affects what the child itself launches."""
+    from app.engineer.gate import resolve_tool
+
+    shims = Path.home() / ".rokit" / "bin"
+    if not (shims / "stylua.exe").is_file():
+        pytest.skip("stylua is not installed via Rokit on this machine")
+    resolved = resolve_tool(["stylua", "--version"])
+    assert Path(resolved[0]).is_file(), resolved
+    assert resolved[1:] == ["--version"]
+
+
+def test_an_unknown_tool_is_left_alone_for_the_runner_to_report():
+    from app.engineer.gate import resolve_tool
+
+    assert resolve_tool(["definitely-not-a-real-tool", "-v"]) == ["definitely-not-a-real-tool", "-v"]

@@ -37,10 +37,21 @@ HARD RULES (enforced by the guard):
   table of services already cast to their concrete types, e.g. `Services.Players:GetPlayers()`.
   List every service you use in the `services` field of your answer. Never write that file.
 - Reach instances through typed values, never through `script`.
+- Some things live only on the DataModel, `BindToClose` above all. Ask for
+  `DataModel` in `services` like any other name and call it through the module:
+  `Services.DataModel:BindToClose(save)`. Never write `game:BindToClose(...)`;
+  it is the same forbidden global and the guard refuses it.
 - Only write .luau files under {", ".join(WRITABLE_ROOTS)}. Client code is not enabled yet.
 - Require modules by walking `script.Parent` inside `require(...)`, following the Rojo project
   file you are given: it maps each src folder to its place in the game tree. luau-lsp resolves
   those requires against the real tree, so a wrong path fails the check.
+
+LINT RULES (selene; a warning fails the run exactly like an error):
+- Never leave a parameter or local unused. This refused four of six attempts on the first real
+  run, every time on a parameter the function never read. If a signature must keep an argument
+  it does not use, prefix the name with an underscore: `function DataService:Release(_player: Player)`.
+  If it does not need it at all, remove it.
+- Never shadow a name you still need, and never assign a variable you never read afterwards.
 
 ENGINEERING STANDARDS:
 - Strict types everywhere: annotate function parameters and returns, export types for shared data.
@@ -57,13 +68,20 @@ ENGINEERING STANDARDS:
 - No per-frame allocation in hot paths; no polling loops where an event exists.
 - Small modules with one responsibility; a server entry script wires them together.
 
+WRITING COMMENTS (measured, and it has refused a whole run):
+- Every line of a comment needs its own `--`. A wrapped second line without one is not a comment,
+  it is Luau, and it fails to parse. Prefer `--[[ ]]` for anything longer than one line.
+- A run was refused three attempts running for exactly this: two lines of a copied file lost their
+  `--` and became `treated as dead and taken, or the player could never rejoin.`
+
 ANSWER FORMAT: a single JSON object, nothing else:
 {{"files": [{{"path": "src/server/Example.luau", "content": "--!strict\\n..."}}],
   "services": ["Players", "ReplicatedStorage"],
   "summary": "what you built and how it meets each acceptance criterion"}}
-Return the COMPLETE content of every file you create or change. Each attempt starts from the
-unchanged project: a file you leave out keeps its current content, and nothing from a previous
-refused attempt is kept."""
+Return the COMPLETE content of every file you create or change, and ONLY those files. Each attempt
+starts from the unchanged project: a file you leave out keeps its current content exactly, and
+nothing from a previous refused attempt is kept. Never return a file you are not changing --
+copying it back cannot improve it and can only corrupt it."""
 
 
 def fence(text: object, limit: int = 20_000) -> str:

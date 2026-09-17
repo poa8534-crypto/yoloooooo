@@ -78,6 +78,11 @@ SERVICES_HEADER = (
     "-- Each service leaves here cast to its concrete class, so calls on it are checked.\n"
 )
 _SERVICE_LINE = re.compile(r'^\t([A-Za-z_]\w*) = game:GetService\("([A-Za-z_]\w*)"\) :: ([A-Za-z_]\w*),$')
+# The DataModel is not a service -- `game:GetService("DataModel")` does not
+# exist -- so it is reached by casting `game` itself and has its own line
+# shape. See `render_services_module` for why it is allowed at all.
+DATAMODEL_NAME = "DataModel"
+_DATAMODEL_LINE = re.compile(r'^\t(DataModel) = game :: DataModel,$')
 _MULTI_CHAR_OPERATORS = ("...", "..", "::", "==", "~=", "<=", ">=", "->", "//")
 
 
@@ -288,10 +293,32 @@ def check_source(source: str, path: str) -> list[Violation]:
 
 
 def render_services_module(services: set[str] | list[str]) -> str:
+    """The one file allowed to touch `game`, rendered from a list of names.
+
+    `DataModel` is accepted alongside the services and emitted as a cast of
+    `game` itself. It is not a service, but some of what a server needs lives
+    only on the DataModel, and `BindToClose` is the one the engineer cannot do
+    without: the standards it is given require saving there, and every other
+    route to it is banned. Six attempts of a real run died on that line, which
+    is the model obeying one rule and breaking another it had no way to keep.
+
+    The cast is what makes it safe, measured rather than assumed:
+
+        local dm = game :: DataModel
+        dm:BindToClose(function() end)   -- accepted, a real method
+        dm:MadeUpMethod()                -- rejected, Key not found in DataModel
+
+    Only the bare global is untyped. Named and cast, it is checked like
+    anything else.
+    """
     names = sorted(set(services))
     if not names:
         return SERVICES_HEADER + "return {}\n"
-    body = "".join(f'\t{name} = game:GetService("{name}") :: {name},\n' for name in names)
+    body = "".join(
+        f"\t{DATAMODEL_NAME} = game :: {DATAMODEL_NAME},\n" if name == DATAMODEL_NAME
+        else f'\t{name} = game:GetService("{name}") :: {name},\n'
+        for name in names
+    )
     return SERVICES_HEADER + "return {\n" + body + "}\n"
 
 
@@ -299,12 +326,15 @@ def check_services_module(source: str, path: str, known_services: frozenset[str]
     """The one file allowed to touch `game` must be exactly generator output."""
     names: list[str] = []
     for line in source.splitlines():
-        match = _SERVICE_LINE.match(line)
+        match = _SERVICE_LINE.match(line) or _DATAMODEL_LINE.match(line)
         if match:
             names.append(match.group(1))
     found = [
         Violation(path, 1, 1, "unknown-service", f"`{name}` is not a Roblox service")
-        for name in sorted(set(names)) if name not in known_services
+        for name in sorted(set(names))
+        # DataModel is deliberately not in the service list: it is a class, not
+        # a service, and the API dump does not tag it as one.
+        if name != DATAMODEL_NAME and name not in known_services
     ]
     if source != render_services_module(names):
         found.append(Violation(path, 1, 1, "services-module-edited",

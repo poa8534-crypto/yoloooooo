@@ -22,10 +22,12 @@ from sqlalchemy import text
 from ..config import Settings
 from ..models import AuditRecord, SystemState
 from ..security import redact
+from .capture import AttemptRecorder
 from .catalog import load_services
 from .gate import Gate, run_command
 from .gemini import GeminiClient
 from .loop import EngineerLoop, EngineerResult, gemini_models
+from .ollama import OllamaClient, ollama_models
 from .schemas import EngineeringTask
 from .workspace import Worktree
 
@@ -149,10 +151,26 @@ def engineer_models(settings: Settings) -> list[str]:
     return [name.strip() for name in settings.engineer_gemini_models.split(",") if name.strip()]
 
 
-def build_client(settings: Settings, **kwargs) -> GeminiClient:
+def ollama_model_names(settings: Settings) -> list[str]:
+    return [name.strip() for name in settings.engineer_ollama_models.split(",") if name.strip()]
+
+
+def build_client(settings: Settings, **kwargs):
+    """The backend `engineer_provider` names. Both answer the same `generate`."""
+    if settings.engineer_provider == "ollama":
+        return OllamaClient(base_url=settings.engineer_ollama_base_url,
+                            timeout=settings.engineer_ollama_timeout_seconds,
+                            num_ctx=settings.engineer_ollama_context, **kwargs)
     return GeminiClient(keys=engineer_keys(settings), base_url=settings.engineer_gemini_base_url,
                         timeout=settings.engineer_gemini_timeout_seconds,
                         max_output_tokens=settings.engineer_gemini_max_output_tokens, **kwargs)
+
+
+def build_model_call(settings: Settings, client):
+    """Adapt whichever client was built into the loop's `ModelCall`."""
+    if settings.engineer_provider == "ollama":
+        return ollama_models(client, ollama_model_names(settings))
+    return gemini_models(client, engineer_models(settings))
 
 
 def build_gate(settings: Settings) -> Gate:
@@ -178,13 +196,16 @@ async def run_task(task: EngineeringTask, *, settings: Settings, factory, on_eve
             on_event(entry)
 
     client = build_client(settings, on_usage=usage_recorder(factory))
+    recorder = AttemptRecorder(settings.engineer_capture_dir,
+                               on_error=lambda message: emit("capture_failed", message))
     loop = EngineerLoop(
-        model=gemini_models(client, engineer_models(settings)), gate=gate,
+        model=build_model_call(settings, client), gate=gate,
         known_services=gate.known_services,
         create_worktree=lambda name: Worktree.create(repo, settings.game_base_branch, worktrees, name),
         handoff_dir=settings.engineer_data_dir / "handoffs",
         max_attempts=settings.engineer_max_attempts, run_seconds=settings.engineer_run_seconds,
         on_event=emit,
+        record_attempt=recorder.record if settings.engineer_capture_attempts else None,
     )
     try:
         result = await loop.run(run_id, task, design)

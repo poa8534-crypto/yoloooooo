@@ -33,8 +33,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from .capture import Attempt
 from .gate import Gate, GateReport
 from .gemini import GeminiIncomplete, GeminiRefused, GeminiUnavailable
+from .luau_guard import DATAMODEL_NAME
 from .prompts import SYSTEM, build_prompt
 from .schemas import EngineeringTask, EngineerOutput
 from .workspace import UnsafePath, Worktree, validate_path
@@ -65,7 +67,8 @@ class EngineerLoop:
     def __init__(self, *, model: ModelCall, gate: Gate, known_services: frozenset[str],
                  create_worktree: Callable[[str], Worktree], handoff_dir: Path,
                  max_attempts: int, run_seconds: float, on_event: EventHook | None = None,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic,
+                 record_attempt: Callable[[Attempt], object] | None = None):
         self.model = model
         self.gate = gate
         self.known_services = known_services
@@ -75,6 +78,9 @@ class EngineerLoop:
         self.run_seconds = run_seconds
         self.on_event = on_event or (lambda stage, detail="", **extra: None)
         self.clock = clock
+        # Off unless a recorder is supplied, and never load-bearing: see
+        # app/engineer/capture.py.
+        self.record_attempt = record_attempt or (lambda attempt: None)
 
     def emit(self, stage: str, detail: str = "", **extra) -> None:
         self.on_event(stage, detail, **extra)
@@ -134,10 +140,21 @@ class EngineerLoop:
                 fingerprints.append("incomplete")
                 continue
 
+            def capture(*, passed: bool, files: dict[str, str] | None = None,
+                        services: set[str] | None = None, refusal: str | None = None,
+                        checks: list[dict] | None = None,
+                        attempt: int = attempt, model_name: str = model_name,
+                        prompt: str = prompt, text: str = text) -> None:
+                self.record_attempt(Attempt(
+                    run_id=run_id, attempt=attempt, model=model_name, task=task.model_dump(),
+                    prompt=prompt, answer=text, passed=passed, files=files or {},
+                    services=sorted(services or ()), refusal=refusal, checks=checks or []))
+
             try:
                 output, services = self._accept(text, base_services)
             except Refusal as exc:
                 feedback = str(exc)
+                capture(passed=False, refusal=feedback)
                 self.emit("attempt_refused", feedback[:600], attempt=attempt, model=model_name)
                 fingerprints.append(feedback)
                 if self._repeating(fingerprints):
@@ -150,6 +167,7 @@ class EngineerLoop:
             written = await asyncio.to_thread(self._write, worktree, files, services)
             report: GateReport = await asyncio.to_thread(self.gate.run, worktree.path)
             last_written, last_report, last_checked = written, report, attempt
+            capture(passed=report.passed, files=files, services=services, checks=report.summary())
             self.emit("gate", "All checks passed" if report.passed else
                       f"Failed: {', '.join(check.name for check in report.failed)}",
                       attempt=attempt, model=model_name, checks=report.summary())
@@ -202,7 +220,12 @@ class EngineerLoop:
             if file.path.lower() in seen:
                 problems.append(f"{file.path!r} appears more than once")
             seen.add(file.path.lower())
-        unknown = sorted(set(output.services) - self.known_services)
+        # DataModel is not a service and the API dump will never tag it as one,
+        # but the Services module exposes it as a cast of `game` because
+        # `BindToClose` lives nowhere else. Refusing it here left the engineer
+        # asking for the only thing that makes `BindToClose` reachable and
+        # being told it did not exist, four attempts running.
+        unknown = sorted(set(output.services) - self.known_services - {DATAMODEL_NAME})
         if unknown:
             problems.append(f"not Roblox services: {', '.join(unknown)} -- `services` lists services by exact class name")
         if problems:
@@ -212,7 +235,12 @@ class EngineerLoop:
     def _write(self, worktree: Worktree, files: dict[str, str], services: set[str]) -> list[str]:
         worktree.reset()
         written = worktree.write(files, services)
-        self.gate.format(worktree.path, written)
+        problem = self.gate.format(worktree.path, written)
+        if problem:
+            # Not fatal: the formatting check will fail and say so. Reported
+            # because a formatter that never ran looks exactly like a model
+            # that cannot format, and the operator would debug the wrong one.
+            self.on_event("format_skipped", f"StyLua did not format the files: {problem}")
         return written
 
     @staticmethod
