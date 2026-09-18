@@ -375,3 +375,59 @@ def test_the_build_verifier_reports_what_the_gate_refused(session_factory, tmp_p
     assert landed["committed"] is False
     assert "Key 'Has' not found" in landed["detail"]
     assert "src/server/AService.luau" not in committed_files(root)
+
+
+# ---- the Services module has to grow with the project ----------------------
+
+def test_the_services_module_covers_what_the_incoming_system_uses(tmp_path):
+    """The blocker that held back four of six systems.
+
+    A run regenerates Services in its own worktree for exactly what that run
+    used, so the project's copy is whatever the last landed system happened to
+    require. A system using CollectionService then passed its own gate and
+    failed in the project with "Key 'CollectionService' not found" -- nothing
+    wrong with the system at all.
+    """
+    from app.engineer.workspace import SERVICES_PATH, services_for_project, services_in
+
+    repo = tmp_path / "game"
+    (repo / "src" / "server").mkdir(parents=True)
+    (repo / SERVICES_PATH).parent.mkdir(parents=True, exist_ok=True)
+    (repo / "src" / "server" / "Old.luau").write_text(
+        "--!strict\nlocal p = Services.Players\nreturn {}\n", encoding="utf-8")
+
+    modules = services_for_project(
+        repo, {"src/server/New.luau": "--!strict\nlocal c = Services.CollectionService\n"},
+        {"Players", "CollectionService", "ReplicatedStorage"})
+
+    names = services_in(modules[SERVICES_PATH])
+    assert "CollectionService" in names, "the incoming system's service"
+    assert "Players" in names, "and the one a system already in the project uses"
+
+
+def test_a_name_that_is_not_a_service_is_not_rendered(tmp_path):
+    """The module is generated from source text, so it must not turn a typo or
+    a local table named Services into a GetService call that cannot resolve."""
+    from app.engineer.workspace import SERVICES_PATH, services_for_project, services_in
+
+    repo = tmp_path / "game"
+    (repo / "src" / "server").mkdir(parents=True)
+
+    modules = services_for_project(
+        repo, {"src/server/New.luau": "--!strict\nlocal x = Services.NotAService\n"},
+        {"Players"})
+
+    assert "NotAService" not in services_in(modules[SERVICES_PATH])
+
+
+def test_the_client_gets_its_own_copy(tmp_path):
+    from app.engineer.workspace import CLIENT_SERVICES_PATH, SERVICES_PATH, services_for_project
+
+    repo = tmp_path / "game"
+    (repo / "src" / "client").mkdir(parents=True)
+
+    modules = services_for_project(
+        repo, {"src/client/Hud.luau": "--!strict\nlocal r = Services.ReplicatedStorage\n"},
+        {"ReplicatedStorage"})
+
+    assert modules[CLIENT_SERVICES_PATH] == modules[SERVICES_PATH]

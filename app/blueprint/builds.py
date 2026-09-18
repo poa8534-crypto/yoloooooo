@@ -34,8 +34,10 @@ from pathlib import Path
 
 from ..bridge.from_project import ROOTS, Unmappable, operations_for
 from ..engineer.from_spec import SpecUnusable, tasks_from
+from ..engineer.catalog import load_services
 from ..engineer.land import land
 from ..engineer.runs import build_gate, game_repo, run_task
+from ..engineer.workspace import services_for_project
 from ..models import SystemState
 from .compile import NotReady, compile_spec
 from .schemas import Blueprint, BuildStatus, GameBuildSpecification
@@ -212,6 +214,11 @@ async def run_build(blueprint_id: str, *, settings, factory, token: str,
     generated: dict[str, str] = {}
     systems: dict[str, dict] = {}
 
+    try:
+        known_services = load_services(settings.roblox_services_file)
+    except Exception:  # noqa: BLE001 - no catalog means no regeneration, not a broken one
+        known_services = set()
+
     def project_check(root: Path) -> tuple[bool, str]:
         """Does the WHOLE project still build?
 
@@ -274,7 +281,16 @@ async def run_build(blueprint_id: str, *, settings, factory, token: str,
                 # next build of the same specification sees the system as
                 # missing and writes it again: thirty-three engineer/ branches
                 # had accumulated that way, holding work the project never got.
-                landed = land(repo, mine, verify=project_check, message=(
+                # The system AND the Services module it needs. Each run
+                # regenerates Services in its own worktree for exactly what it
+                # used, so landing the system alone leaves the project with
+                # whatever the last landed system happened to require -- four
+                # of six systems were held back by "Key 'CollectionService'
+                # not found", none of them for anything wrong with the system.
+                landing = dict(mine)
+                if known_services:
+                    landing.update(services_for_project(repo, mine, known_services))
+                landed = land(repo, landing, verify=project_check, message=(
                     f"feat({task.system}): accepted by the gate\n\n"
                     f"Generated for build {record.id} from specification "
                     f"{spec.spec_id} revision {spec.revision}, accepted on "

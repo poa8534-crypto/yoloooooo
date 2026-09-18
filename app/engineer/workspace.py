@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -208,3 +209,58 @@ class Worktree:
             git(["worktree", "prune"], self.repo)
         if delete_branch:
             git(["branch", "-D", self.branch], self.repo)
+
+
+_SERVICES_USE = re.compile(r"\bServices\.([A-Z][A-Za-z0-9]*)")
+
+
+def services_used(sources: Iterable[str]) -> set[str]:
+    """Every `Services.X` a body of Luau reaches for.
+
+    Read from the source rather than taken from what a run reported, because
+    the source is the thing that has to type-check.
+    """
+    names: set[str] = set()
+    for source in sources:
+        names.update(_SERVICES_USE.findall(source))
+    return names
+
+
+def services_for_project(repo: Path, incoming: dict[str, str],
+                         known: set[str]) -> dict[str, str]:
+    """The Services modules the project needs once `incoming` is in it.
+
+    This is what made landing impossible. Each run regenerates Services in its
+    own worktree with exactly the names that run needed, and the project's copy
+    is whatever the last landed system happened to require. So a system that
+    used CollectionService passed its own gate and then failed in the project
+    with "Key 'CollectionService' not found" -- four of six systems were held
+    back by that alone, none of them for anything wrong with the system.
+
+    The module is regenerated from the union of what the project's own sources
+    use and what the incoming ones use, so it grows to fit and never shrinks
+    away from a system already landed.
+    """
+    sources = []
+    for root in WRITABLE_ROOTS:
+        directory = repo / root
+        if not directory.is_dir():
+            continue
+        for file in sorted(directory.rglob("*.luau")):
+            relative = file.relative_to(repo).as_posix()
+            if relative in (SERVICES_PATH, CLIENT_SERVICES_PATH):
+                continue
+            sources.append(incoming.get(relative) or read_normalized(file))
+    sources.extend(incoming.values())
+
+    wanted = (services_used(sources) & known) | {"DataModel"}
+    rendered = render_services_module(wanted)
+
+    modules = {SERVICES_PATH: rendered}
+    # The client gets its own copy whenever there is client code to read it --
+    # byte-identical, one generator, one standard.
+    has_client = (repo / "src" / "client").is_dir() or any(
+        path.startswith("src/client/") for path in incoming)
+    if has_client:
+        modules[CLIENT_SERVICES_PATH] = rendered
+    return modules
