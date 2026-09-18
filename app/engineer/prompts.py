@@ -88,6 +88,27 @@ SCALABLE, NOT RIGID (this applies to every system you build, without exception):
   the answer without telling the caller -- an optional random generator made a "reproducible" roll
   reproducible only when called the right way.
 
+BUILDING THE VISIBLE WORLD (for a system whose job is the place itself):
+- Reach the world through `Services.Workspace`, like any other service. The bare `workspace` and
+  `Workspace` globals are refused by the guard, and `Services.Workspace` is type-checked.
+- Build from primitives: `Instance.new("Part")`, `SpawnLocation`, `Folder`. Do not reach for a mesh,
+  a texture, an animation or an asset id -- none of them exist in this project yet, and an invented
+  `rbxassetid://` is a number you made up that loads nothing.
+- EVERY part you create is `Anchored = true` unless it is meant to fall. An unanchored part is on
+  the floor of the map a second after the server starts.
+- The layout is DATA. One table of part definitions at the top -- name, size, position, colour,
+  material -- and one loop that creates them. Adding a jetty must mean adding a row, never writing
+  another block of `Instance.new`. This is the same rule as every other system: adding behaviour
+  means adding data.
+- Build into ONE named Folder under Workspace, and destroy it before rebuilding. A build that runs
+  twice must leave one world, not two overlapping copies:
+      local existing = Services.Workspace:FindFirstChild("GeneratedWorld")
+      if existing then existing:Destroy() end
+- There must be somewhere to stand and somewhere to spawn. A place whose only floor is the default
+  baseplate, or which has no SpawnLocation, is a place the person opens and sees nothing in.
+- Give a part a name that says what it is (`Dock`, `BayFloor`), because other systems find it by
+  name and a person reads it in the Explorer.
+
 ENGINEERING STANDARDS:
 - Strict types everywhere: annotate function parameters and returns, export types for shared data.
 - Modern APIs only: task.wait / task.spawn / task.delay / task.defer, never wait/spawn/delay.

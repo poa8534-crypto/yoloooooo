@@ -470,3 +470,28 @@ async def test_the_architect_never_imports_a_provider():
     text = open(source, encoding="utf-8").read()
     for vendor in ("anthropic", "openai", "google.generativeai", "httpx"):
         assert vendor not in text, f"the architect reached for {vendor} directly"
+
+
+def test_the_architect_is_told_every_game_needs_a_visible_world():
+    """A build of nine working systems was opened in Studio and showed nothing
+    but a test cube from an unrelated smoke test, because no system had been
+    asked to make anything. The specification is where that gets fixed: the
+    Engineer cannot build a world nobody put in the spec."""
+    from app.blueprint.architect import SYSTEMS_SYSTEM
+
+    assert "BUILDS THE VISIBLE WORLD" in SYSTEMS_SYSTEM
+    # From primitives, not from assets that do not exist in the project.
+    assert "asset_requirements" in SYSTEMS_SYSTEM
+
+
+def test_the_engineer_is_told_how_to_build_one_without_inventing_assets():
+    from app.engineer.prompts import SYSTEM
+
+    assert "BUILDING THE VISIBLE WORLD" in SYSTEM
+    # The three that turn a world into a bug report: the forbidden global, a
+    # made-up asset id, and a part that falls through the floor on start.
+    assert "Services.Workspace" in SYSTEM
+    assert "rbxassetid" in SYSTEM
+    assert "Anchored" in SYSTEM
+    # And it has to be rebuildable, or a second build leaves two worlds.
+    assert "one world, not two" in SYSTEM

@@ -118,6 +118,23 @@ Systems must be SCALABLE, NOT RIGID. Say so in the criteria: configuration is a 
 extend, adding a case means adding a row rather than editing a function, and nothing assumes a fixed
 number of players, items, stages or waves.
 
+THERE MUST BE A SYSTEM THAT BUILDS THE VISIBLE WORLD, and it is always the first in build
+order. Without one the finished build is a folder of modules that run correctly and show nothing:
+a place with no ground, no dock, no spawn, and nothing for a player to stand on or walk up to. A
+real build of nine working systems was opened in Studio and the only thing on screen was a test
+cube from an unrelated smoke test, because no system had been asked to make anything.
+
+Name it for the place rather than the machinery -- WorldService, BayService, LabService -- and give
+it criteria a test could fail, about what EXISTS when it has run:
+  Good: "After Build runs, Workspace contains a dock part a character can stand on."
+  Good: "Building twice leaves one bay, not two."
+  Good: "Every part it creates is Anchored."
+It builds from primitives: parts, spawn locations, simple assemblies. It does not need meshes,
+textures or animations, and must not be specified as though it does -- those go in
+`asset_requirements`, where a person can go and make them.
+
+Other systems may then place and move what it built. They must not each build their own scenery.
+
 THE SELECTED FEATURES ARE THE CONTRACT. Build systems for the features that were chosen. A feature
 listed as rejected must not appear as a system, under any name. Do not add a system nobody asked
 for, however obviously useful it seems.
