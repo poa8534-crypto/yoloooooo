@@ -299,3 +299,54 @@ def test_a_branch_that_does_not_exist_yields_nothing_rather_than_raising(tmp_pat
     subprocess.run(["git", "init", "-b", "main"], cwd=repo, capture_output=True, check=True)
 
     assert files_on_branch(repo, "no-such-branch") == {}
+
+
+def test_a_build_with_nothing_to_generate_can_still_reach_studio(session_factory):
+    """The state machine forbade its own legal path.
+
+    Every system in the specification already being in the project is the
+    ordinary state of a re-sync: planning finds nothing to write and the build
+    goes straight to validating what is there. That move was not in the table,
+    so a finished project could not be pushed into Studio at all -- the build
+    died with "a build cannot go from planning to validating".
+    """
+    from app.blueprint.builds import BuildRecord
+    from app.blueprint.schemas import Blueprint, BlueprintConfig, BuildStatus, GameBuildSpecification
+
+    plan = Blueprint(id="bp", project_id="p", audit_id="a", title="Lab")
+    spec = GameBuildSpecification(spec_id="s", project_id="p", blueprint_id="bp",
+                                  idea_id="a", title="Lab", config=BlueprintConfig())
+    record = BuildRecord(session_factory, "build-resync")
+    record.create(plan, spec)
+
+    record.move(BuildStatus.PLANNING)
+    record.move(BuildStatus.VALIDATING)
+    record.move(BuildStatus.WAITING_FOR_STUDIO)
+
+    assert record.read()["status"] == BuildStatus.WAITING_FOR_STUDIO.value
+
+
+def test_a_sync_without_a_playtest_can_finish(session_factory):
+    """The other half of the same gap.
+
+    A build asked not to start a test session applies its operations and is
+    done, but BUILDING could only go to PLAYTESTING or PARTIAL -- so a sync
+    with play=False did every piece of real work and then died on "a build
+    cannot go from building to succeeded", with the operations already applied
+    in Studio and the record saying the build failed.
+    """
+    from app.blueprint.builds import BuildRecord
+    from app.blueprint.schemas import Blueprint, BlueprintConfig, BuildStatus, GameBuildSpecification
+
+    plan = Blueprint(id="bp", project_id="p", audit_id="a", title="Lab")
+    spec = GameBuildSpecification(spec_id="s", project_id="p", blueprint_id="bp",
+                                  idea_id="a", title="Lab", config=BlueprintConfig())
+    record = BuildRecord(session_factory, "build-noplay")
+    record.create(plan, spec)
+
+    for status in (BuildStatus.PLANNING, BuildStatus.VALIDATING,
+                   BuildStatus.WAITING_FOR_STUDIO, BuildStatus.SYNCING,
+                   BuildStatus.BUILDING, BuildStatus.SUCCEEDED):
+        record.move(status)
+
+    assert record.read()["status"] == BuildStatus.SUCCEEDED.value

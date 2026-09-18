@@ -17,14 +17,24 @@ ALLOWED: dict[S, frozenset[S]] = {
     # which is how a change cannot be built without being assessed again.
     S.READY_TO_BUILD: frozenset({S.QUEUED, S.BLUEPRINTING, S.CANCELLED}),
     S.QUEUED: frozenset({S.PLANNING, S.CANCELLED, S.FAILED}),
-    S.PLANNING: frozenset({S.GENERATING, S.FAILED, S.CANCELLED}),
+    # VALIDATING as well as GENERATING: planning can discover there is nothing
+    # to write, because every system in the specification is already in the
+    # project. That is the ordinary state of a re-sync, and it was unreachable
+    # -- the build refused its own legal path and could not put a finished
+    # project into Studio at all.
+    S.PLANNING: frozenset({S.GENERATING, S.VALIDATING, S.FAILED, S.CANCELLED}),
     S.GENERATING: frozenset({S.VALIDATING, S.FAILED, S.CANCELLED}),
     S.VALIDATING: frozenset({S.WAITING_FOR_STUDIO, S.GENERATING, S.FAILED, S.CANCELLED}),
     # Back to GENERATING: validation failing is the Engineer's own gate telling
     # it to write the code again, which is the loop that already exists.
     S.WAITING_FOR_STUDIO: frozenset({S.SYNCING, S.FAILED, S.CANCELLED}),
     S.SYNCING: frozenset({S.BUILDING, S.FAILED, S.CANCELLED}),
-    S.BUILDING: frozenset({S.PLAYTESTING, S.PARTIAL, S.FAILED, S.CANCELLED}),
+    # SUCCEEDED as well as PLAYTESTING: a build that was not asked to start
+    # a test session is finished when Studio has applied every operation.
+    # Without it a sync with play=False could never reach a terminal
+    # state -- it did all the work and then died on "a build cannot go
+    # from building to succeeded".
+    S.BUILDING: frozenset({S.PLAYTESTING, S.SUCCEEDED, S.PARTIAL, S.FAILED, S.CANCELLED}),
     S.PLAYTESTING: frozenset({S.SUCCEEDED, S.REPAIRING, S.PARTIAL, S.FAILED, S.CANCELLED}),
     S.REPAIRING: frozenset({S.GENERATING, S.PLAYTESTING, S.PARTIAL, S.FAILED, S.CANCELLED}),
     S.SUCCEEDED: frozenset({S.BLUEPRINTING, S.QUEUED}),
