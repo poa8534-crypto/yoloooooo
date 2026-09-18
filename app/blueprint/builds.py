@@ -34,7 +34,8 @@ from pathlib import Path
 
 from ..bridge.from_project import ROOTS, Unmappable, operations_for
 from ..engineer.from_spec import SpecUnusable, tasks_from
-from ..engineer.runs import game_repo, run_task
+from ..engineer.land import land
+from ..engineer.runs import build_gate, game_repo, run_task
 from ..models import SystemState
 from .compile import NotReady, compile_spec
 from .schemas import Blueprint, BuildStatus, GameBuildSpecification
@@ -70,6 +71,20 @@ def files_on_branch(repo: Path, branch: str) -> dict[str, str]:
             text = blob.stdout.decode("utf-8", "replace")
             found[path] = text.removeprefix("﻿").replace("\r\n", "\n")
     return found
+
+
+def _first_problem(output: str) -> str:
+    """The first line of a check's output that names a problem.
+
+    A gate report carries every passing line too, and the build log needs the
+    one sentence a person can act on.
+    """
+    for line in output.splitlines():
+        stripped = line.strip()
+        if any(mark in stripped for mark in
+               ("TypeError", "SyntaxError", "error[", "warning[", "FAIL")):
+            return stripped[:300]
+    return output.strip().splitlines()[0][:300] if output.strip() else "no detail"
 
 
 class BuildRecord:
@@ -197,6 +212,26 @@ async def run_build(blueprint_id: str, *, settings, factory, token: str,
     generated: dict[str, str] = {}
     systems: dict[str, dict] = {}
 
+    def project_check(root: Path) -> tuple[bool, str]:
+        """Does the WHOLE project still build?
+
+        Each system was checked alone, in its own worktree, with its own
+        regenerated Services module and none of its siblings. That check cannot
+        see a system calling a function another does not export, requiring one
+        the gate refused, or using a service the project's Services module does
+        not carry -- and all three happened on one real build. So the question
+        asked before keeping a file is about the project, not the file.
+        """
+        report = build_gate(settings).run(root)
+        if report.passed:
+            return True, ""
+        # `failed` is a property, not a method. Calling it raised inside the
+        # verifier, which `land` reports as "the project check could not run"
+        # -- so every system that genuinely broke the project was skipped for
+        # the wrong reason, and the real one was never printed.
+        return False, "; ".join(
+            f"{check.name}: {_first_problem(check.output)}" for check in report.failed)
+
     if tasks:
         record.move(BuildStatus.GENERATING, f"{len(tasks)} system(s) to write")
         for task in tasks:
@@ -225,13 +260,31 @@ async def run_build(blueprint_id: str, *, settings, factory, token: str,
                 # the generated Services module and whatever was already on the
                 # base branch, and sending those as this system's work would
                 # misreport what was built.
+                mine: dict[str, str] = {}
                 for path, source in files.items():
                     if Path(path).stem == task.system:
-                        generated[path] = source
+                        mine[path] = source
+                generated.update(mine)
                 systems[task.system] = {"status": "built", "branch": result.branch,
                                         "commit": result.commit, "attempts": result.attempts}
                 record.event("system_built", f"{task.system}: accepted on {result.branch}",
                              systems=systems)
+
+                # Into the project, not just onto a branch. Without this the
+                # next build of the same specification sees the system as
+                # missing and writes it again: thirty-three engineer/ branches
+                # had accumulated that way, holding work the project never got.
+                landed = land(repo, mine, verify=project_check, message=(
+                    f"feat({task.system}): accepted by the gate\n\n"
+                    f"Generated for build {record.id} from specification "
+                    f"{spec.spec_id} revision {spec.revision}, accepted on "
+                    f"{result.branch} after {result.attempts} attempt(s)."))
+                systems[task.system]["landed"] = landed.as_dict()
+                record.event(
+                    "landed" if landed.committed else "not_landed",
+                    f"{task.system}: " + (f"committed {landed.commit[:12]} to the project"
+                                          if landed.committed else landed.detail),
+                    systems=systems)
             else:
                 # Recorded, and the build carries on. Four working systems and
                 # one honest refusal beats nothing.
