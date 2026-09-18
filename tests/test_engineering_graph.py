@@ -63,9 +63,32 @@ def test_an_unparseable_timestamp_is_skipped_rather_than_guessed():
 
 
 # ---- what Studio was actually sent -----------------------------------------
+#
+# Written against a real BuildRecord rather than hand-made dictionaries. The
+# first version of these tests built event dicts with a `batch_id` on them and
+# passed, while the code they covered was wrong: `BuildRecord.event` puts its
+# extras on the RECORD, never on the event entry, so the panel reported "not
+# sent yet" about a build that had queued twenty-eight operations. A fixture
+# that agrees with the assumption instead of with the writer proves nothing.
 
-def test_nothing_is_reported_as_synced_before_a_batch_is_sent():
-    state = _sync_state([event("generating", "A: asking the Engineer", "2026-09-17T10:00:00")])
+
+@pytest.fixture
+def record(session_factory):
+    from app.blueprint.builds import BuildRecord
+    from app.blueprint.schemas import Blueprint, BlueprintConfig, GameBuildSpecification
+
+    plan = Blueprint(id="bp", project_id="p", audit_id="a", title="Lab")
+    spec = GameBuildSpecification(spec_id="s", project_id="p", blueprint_id="bp",
+                                  idea_id="a", title="Lab", config=BlueprintConfig())
+    entry = BuildRecord(session_factory, "build-sync")
+    entry.create(plan, spec)
+    return entry
+
+
+def test_nothing_is_reported_as_synced_before_a_batch_is_sent(record):
+    record.event("generating", "A: asking the Engineer")
+
+    state = _sync_state(record.read())
 
     assert state["batch_id"] == ""
     assert state["operations"] == 0
@@ -74,27 +97,49 @@ def test_nothing_is_reported_as_synced_before_a_batch_is_sent():
     assert state["applied"] is None
 
 
-def test_the_sent_batch_and_what_studio_reported_are_both_kept():
-    state = _sync_state([
-        event("syncing", "21 operation(s) queued for Studio", "2026-09-17T10:20:00",
-              batch_id="batch-7", operations=21),
-        event("studio_result", "21 applied, 0 unchanged, 0 failed", "2026-09-17T10:20:30",
-              result={"applied": 21, "skipped": 0, "failed_count": 0}),
-    ])
+def test_the_sent_batch_is_read_from_where_the_build_actually_writes_it(record):
+    record.event("syncing", "21 operation(s) queued for Studio",
+                 batch_id="batch-7", operations=21)
+
+    state = _sync_state(record.read())
 
     assert state["batch_id"] == "batch-7"
     assert state["operations"] == 21
+    assert state["sent_at"]
+    # Still None: queued is not applied, and Studio has not answered.
+    assert state["applied"] is None
+
+
+def test_what_studio_reported_is_kept_once_it_answers(record):
+    record.event("syncing", "21 queued", batch_id="batch-7", operations=21)
+    record.event("studio_result", "21 applied, 0 unchanged, 0 failed",
+                 result={"applied": 21, "skipped": 0, "failed_count": 0})
+
+    state = _sync_state(record.read())
+
     assert (state["applied"], state["skipped"], state["failed"]) == (21, 0, 0)
+    assert state["reported_at"]
 
 
-def test_a_failure_in_studio_is_carried_through_as_a_failure():
-    state = _sync_state([
-        event("syncing", "3 queued", "2026-09-17T10:20:00", batch_id="b", operations=3),
-        event("studio_result", "1 applied, 0 unchanged, 2 failed", "2026-09-17T10:20:30",
-              result={"applied": 1, "skipped": 0, "failed_count": 2}),
-    ])
+def test_a_failure_in_studio_is_carried_through_as_a_failure(record):
+    record.event("syncing", "3 queued", batch_id="b", operations=3)
+    record.event("studio_result", "1 applied, 0 unchanged, 2 failed",
+                 result={"applied": 1, "skipped": 0, "failed_count": 2})
 
-    assert state["failed"] == 2
+    assert _sync_state(record.read())["failed"] == 2
+
+
+def test_a_build_studio_never_answered_is_not_shown_as_applied(record):
+    """What the real run did: twenty-eight operations queued, then the plugin
+    never reported before the timeout. Sent and applied are different facts."""
+    record.event("syncing", "28 operation(s) queued for Studio",
+                 batch_id="build-x-batch", operations=28)
+
+    state = _sync_state(record.read())
+
+    assert (state["batch_id"], state["operations"]) == ("build-x-batch", 28)
+    assert state["applied"] is None
+    assert state["reported_at"] == ""
 
 
 # ---- the DataModel tree ----------------------------------------------------

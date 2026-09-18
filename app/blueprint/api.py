@@ -605,26 +605,40 @@ def _system_durations(events: list[dict]) -> dict[str, float]:
     return spans
 
 
-def _sync_state(events: list[dict]) -> dict:
+def _sync_state(record: dict) -> dict:
     """What Studio was sent and what it reported back.
 
-    Empty until the build actually queues a batch. The UI must be able to say
-    "nothing has been sent" rather than show a tree implying it has.
+    Read from the RECORD, not from the events. `BuildRecord.event` takes its
+    extras as keyword arguments and passes them to `update`, so `batch_id`,
+    `operations` and `result` land as top-level fields of the build -- not on
+    the event entry, which only ever holds `at`, `stage` and `detail`.
+
+    This read them off the events and therefore always found nothing, which
+    made the Studio panel say "not sent yet" about a build that had queued
+    twenty-eight operations. The panel exists to tell those two apart, so it
+    was failing at the one thing it is for. The tests missed it because they
+    were written against the same wrong assumption: hand-made event dicts with
+    a batch_id on them, a shape `event` never produces.
+
+    Empty until a batch is actually queued, and `applied` stays None until
+    Studio reports -- "Studio applied none of them" and "Studio never answered"
+    are different, and zero would read as the first.
     """
-    sent: dict = {"batch_id": "", "operations": 0, "sent_at": "",
-                  "applied": None, "skipped": None, "failed": None, "reported_at": ""}
-    for event in events:
-        if event.get("stage") == "syncing" and event.get("batch_id"):
-            sent["batch_id"] = event["batch_id"]
-            sent["operations"] = event.get("operations") or 0
-            sent["sent_at"] = event.get("at") or ""
-        if event.get("stage") == "studio_result":
-            result = event.get("result") or {}
-            sent["applied"] = result.get("applied")
-            sent["skipped"] = result.get("skipped")
-            sent["failed"] = result.get("failed_count")
-            sent["reported_at"] = event.get("at") or ""
-    return sent
+    events = record.get("events") or []
+    result = record.get("result") or {}
+    sent_at = next((event.get("at", "") for event in reversed(events)
+                    if event.get("stage") == "syncing"), "")
+    reported_at = next((event.get("at", "") for event in reversed(events)
+                        if event.get("stage") == "studio_result"), "")
+    return {
+        "batch_id": record.get("batch_id") or "",
+        "operations": record.get("operations") or 0,
+        "sent_at": sent_at,
+        "applied": result.get("applied"),
+        "skipped": result.get("skipped"),
+        "failed": result.get("failed_count"),
+        "reported_at": reported_at,
+    }
 
 
 def _explorer(nodes: list[dict]) -> list[dict]:
@@ -775,7 +789,7 @@ def build_graph(build_id: str) -> dict:
         "current": current,
         "counts": {**counts, "total": len(nodes)},
         "pace": pace,
-        "sync": _sync_state(record["events"]),
+        "sync": _sync_state(record),
         "steering": _steering_view(record, spec),
         "explorer": _explorer(nodes),
         "events": record["events"][-200:],
