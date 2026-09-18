@@ -194,3 +194,34 @@ def test_client_code_is_writable_now_that_its_require_form_is_pinned_down():
 def test_the_generated_client_services_module_cannot_be_written_by_the_model():
     with pytest.raises(UnsafePath, match="generated"):
         validate_path(CLIENT_SERVICES_PATH)
+
+
+def test_a_new_project_gets_its_source_roots_in_the_worktree(tmp_path):
+    """The first build of any new game used to be impossible.
+
+    Git does not track an empty directory, so a project with no server code
+    yet arrives in the worktree without src/server at all. Rojo then cannot
+    resolve `$path: src/server`, the sourcemap fails, luau-lsp cannot run
+    without one, and every system is refused with "the untouched project
+    already fails its checks" -- true, and silent about the reason.
+    """
+    import subprocess
+
+    from app.engineer.workspace import WRITABLE_ROOTS, Worktree
+
+    repo = tmp_path / "game"
+    repo.mkdir()
+    for args in (["init", "-b", "master"], ["config", "user.email", "t@example.com"],
+                 ["config", "user.name", "T"]):
+        subprocess.run(["git", *args], cwd=repo, capture_output=True, check=True)
+    (repo / "default.project.json").write_text("{}", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "empty project"], cwd=repo,
+                   capture_output=True, check=True)
+
+    worktree = Worktree.create(repo, "master", tmp_path / "trees", "first-build")
+    try:
+        for source_root in WRITABLE_ROOTS:
+            assert (worktree.path / source_root).is_dir(), source_root
+    finally:
+        worktree.remove(delete_branch=True)

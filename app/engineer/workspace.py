@@ -150,6 +150,20 @@ class Worktree:
             source = repo / carried
             if source.is_file():
                 shutil.copy2(source, path / carried)
+        # Git does not track an empty directory, so a project with no server
+        # code yet arrives in the worktree without `src/server` at all -- and
+        # Rojo cannot resolve a `$path` that is not there:
+        #
+        #   Rojo project referred to a file using $path that could not be
+        #   turned into a Roblox Instance by Rojo.  File $path: src/server
+        #
+        # The sourcemap fails, luau-lsp cannot run without one, and every
+        # system of the build is refused with "the untouched project already
+        # fails its checks". Which is true, and says nothing about the reason.
+        # It is exactly the state every NEW game starts in, so the first build
+        # of a project could never succeed.
+        for source_root in WRITABLE_ROOTS:
+            (path / source_root).mkdir(parents=True, exist_ok=True)
         return cls(repo=repo, path=path, branch=branch, base_commit=base_commit)
 
     def reset(self) -> None:
