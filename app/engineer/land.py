@@ -39,6 +39,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .workspace import GIT_IDENTITY
+
 TIMEOUT = 30.0
 
 # Given the repository, answers (does the project still build, what went wrong).
@@ -175,7 +177,17 @@ def land(repo: Path, files: dict[str, str], *, message: str,
         return Landed(False, paths=tuple(paths),
                       detail="already in the project, unchanged")
 
-    code, output = _git(repo, "commit", "-m", message, "--", *paths)
+    # The same identity the Engineer commits its own work under, passed
+    # explicitly rather than inherited. A repository created minutes ago has no
+    # user.name or user.email, so `git commit` answered
+    #
+    #     Author identity unknown *** Please tell me who you are.
+    #
+    # and every system of a fresh project built, passed six checks, and then
+    # failed to reach the project -- for a setting that has nothing to do with
+    # the code. It also makes the authorship true: an agent wrote these, and a
+    # commit attributed to whoever configured the machine says otherwise.
+    code, output = _git(repo, *GIT_IDENTITY, "commit", "-m", message, "--", *paths)
     if code != 0:
         restore()
         return Landed(False, detail=f"git commit failed: {output[:200]}")

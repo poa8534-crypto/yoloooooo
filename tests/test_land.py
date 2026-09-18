@@ -457,3 +457,43 @@ def test_landing_unchanged_content_leaves_nothing_staged(repo):
     staged = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=repo,
                             capture_output=True, check=True).stdout
     assert staged == b""
+
+
+# ---- a repository made minutes ago -----------------------------------------
+
+def test_landing_works_in_a_repository_with_no_identity_configured(tmp_path):
+    """A brand-new project has no user.name or user.email, so `git commit`
+    answers "Author identity unknown" -- and every system of a fresh project
+    built, passed six checks, and then failed to reach the project for a
+    setting that has nothing to do with the code.
+
+    The Engineer's own commits never hit this because workspace.py passes the
+    identity explicitly. Landing now does the same.
+    """
+    root = tmp_path / "fresh"
+    root.mkdir()
+    subprocess.run(["git", "init", "-b", "master"], cwd=root, capture_output=True, check=True)
+    # Deliberately no user.name / user.email, and no inherited global either.
+    (root / "README.md").write_text("new\n", encoding="utf-8")
+    subprocess.run(["git", "-c", "user.name=seed", "-c", "user.email=seed@example.com",
+                    "add", "-A"], cwd=root, capture_output=True, check=True)
+    subprocess.run(["git", "-c", "user.name=seed", "-c", "user.email=seed@example.com",
+                    "commit", "-m", "first"], cwd=root, capture_output=True, check=True)
+    subprocess.run(["git", "config", "--unset-all", "user.name"], cwd=root, capture_output=True)
+    subprocess.run(["git", "config", "--unset-all", "user.email"], cwd=root, capture_output=True)
+
+    result = land(root, {"src/server/A.luau": "--!strict\nreturn {}\n"},
+                  message="feat(A): accepted by the gate")
+
+    assert result.committed is True, result.detail
+    assert "src/server/A.luau" in committed_files(root)
+
+
+def test_the_commit_is_attributed_to_the_agent_that_wrote_it(repo):
+    """An agent wrote this code. A commit carrying whoever configured the
+    machine says otherwise, and the git history is the record of who did."""
+    land(repo, {"src/server/A.luau": "--!strict\n"}, message="feat(A): accepted")
+
+    author = subprocess.run(["git", "log", "-1", "--format=%an"], cwd=repo,
+                            capture_output=True, check=True).stdout.decode().strip()
+    assert author == "Roblox Engineer Agent"
