@@ -29,6 +29,7 @@ from .models import (
     Proposal,
     ResearchReport,
     ResearchRun,
+    RunStatus,
     SourceArtifact,
 )
 from .research_budget import BudgetExceeded, RunBudget, progress
@@ -545,7 +546,21 @@ class DeepResearch:
                 # cap is recorded in `budget_stops` and reported separately.
                 partial = bool(self.b.state["errors"])
         except asyncio.CancelledError:
-            self.b.save(stage="interrupted", stop_reason="service_shutdown")
+            # A shutdown and an operator pressing Stop both arrive here. The
+            # cancel endpoint writes "cancelled" to the row before it cancels
+            # the task, so the row is what tells them apart; filing a decision
+            # as an outage would put a wrong reason in the report and offer a
+            # resume for a run nobody wants resumed.
+            with self.factory() as db:
+                run = db.get(ResearchRun, self.run_id)
+                stopped = run is not None and run.status == RunStatus.CANCELLED.value
+            if stopped:
+                # No `stage`: that would overwrite the run's message, and the
+                # endpoint has already said why it ended. The checkpoint keeps
+                # the stage it reached, which is where it stopped.
+                self.b.save(stop_reason="operator_cancelled")
+            else:
+                self.b.save(stage="interrupted", stop_reason="service_shutdown")
             raise
         except Exception as exc:
             self.b.error("controller", exc)

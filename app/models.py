@@ -34,6 +34,10 @@ class RunStatus(str, enum.Enum):
     RUNNING = "running"
     COMPLETE = "complete"
     FAILED = "failed"
+    # An operator stopped it on purpose. Kept distinct from "interrupted",
+    # which a restart writes for a run the service killed: only the second is
+    # offered a resume, because only the second was going to finish.
+    CANCELLED = "cancelled"
 
 
 class DecisionKind(str, enum.Enum):

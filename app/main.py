@@ -90,6 +90,32 @@ from .security import RedactedResponses, install_log_redaction, sanitize_url
 from .workflows import ResearchOrchestrator
 
 TASKS: set[asyncio.Task] = set()
+# The same tasks, keyed by the run each one is doing. `TASKS` can only be
+# cancelled wholesale, which is what shutdown wants and what an operator
+# stopping one run does not.
+RUN_TASKS: dict[str, asyncio.Task] = {}
+
+
+def start_run(run_id: str) -> None:
+    """Launch a research task, remembering which run it belongs to.
+
+    Three places start these -- startup picking up what a restart interrupted,
+    a new run, and a resume -- and a Stop that knew about only one of them
+    would report success while the run carried on.
+    """
+    task = asyncio.create_task(app.state.orchestrator.research(run_id))
+    TASKS.add(task)
+    RUN_TASKS[run_id] = task
+
+    def forget(finished: asyncio.Task) -> None:
+        TASKS.discard(finished)
+        # Only if it is still this run's task: a resume registers a newer one,
+        # and the old task finishing must not unregister it.
+        if RUN_TASKS.get(run_id) is finished:
+            del RUN_TASKS[run_id]
+
+    task.add_done_callback(forget)
+
 
 LOOPBACK_HOSTS = access.LOOPBACK_HOSTS
 
@@ -169,9 +195,7 @@ async def lifespan(app: FastAPI):
     # Started after the orchestrator exists, and not awaited: a run takes
     # minutes and startup must not block on it.
     for run_id in resumable:
-        task = asyncio.create_task(app.state.orchestrator.research(run_id))
-        TASKS.add(task)
-        task.add_done_callback(TASKS.discard)
+        start_run(run_id)
     yield
     app.state.scheduler.shutdown(wait=False)
     await app.state.audit_jobs.close()
@@ -353,9 +377,7 @@ async def create_research_run(body: ResearchRunCreate, db: Session = Depends(get
     db.flush()
     db.add(ResearchCheckpoint(run_id=run.id, state={"mode": body.mode}))
     db.commit()
-    task = asyncio.create_task(app.state.orchestrator.research(run.id))
-    TASKS.add(task)
-    task.add_done_callback(TASKS.discard)
+    start_run(run.id)
     return _run_view(db, run)
 
 
@@ -391,7 +413,7 @@ async def research_events(run_id: str):
             if encoded != previous:
                 yield f"event: progress\ndata: {encoded}\n\n"
                 previous = encoded
-            if payload["status"] in {"complete", "failed", "partial", "interrupted"}:
+            if payload["status"] in {"complete", "failed", "partial", "interrupted", "cancelled"}:
                 return
             await asyncio.sleep(1)
     return StreamingResponse(stream(), media_type="text/event-stream")
@@ -850,9 +872,40 @@ async def resume_run(run_id: str, db: Session = Depends(get_db)):
     run.status = "queued"
     run.completed_at = None
     db.commit()
-    task = asyncio.create_task(app.state.orchestrator.research(run_id))
-    TASKS.add(task)
-    task.add_done_callback(TASKS.discard)
+    start_run(run_id)
+    return _run_view(db, run)
+
+
+@app.post("/api/research-runs/{run_id}/cancel", response_model=RunView)
+async def cancel_research_run(run_id: str, db: Session = Depends(get_db)):
+    """Stop a run the operator no longer wants, keeping what it already collected.
+
+    The status is written before the task is cancelled, the way
+    `AuditJobs.cancel` does it. `ResearchOrchestrator.research` catches
+    `Exception`, and `CancelledError` is not one, so nothing downstream
+    overwrites the row on the way out. That ordering is also what lets the deep
+    controller tell a decision from a shutdown.
+
+    Stopping is not resuming's opposite number: a cancelled run is finished on
+    purpose and is not offered a resume. Restart is the way back to that niche.
+    """
+    run = db.get(ResearchRun, run_id)
+    if run is None:
+        raise HTTPException(404, "research run not found")
+    if run.status not in (RunStatus.QUEUED.value, RunStatus.RUNNING.value):
+        raise HTTPException(409, f"That run is already {run.status}; only a queued or running one can be stopped")
+    run.status = RunStatus.CANCELLED.value
+    run.message = "Stopped by the operator; everything it had already collected is kept"
+    run.completed_at = datetime.now(UTC)
+    db.commit()
+    task = RUN_TASKS.get(run_id)
+    if task is not None:
+        task.cancel()
+        # Awaited rather than left to unwind on its own: until it does, the run
+        # is still spending the budget and writing to the ledger, and a Stop
+        # that returns while the work continues is the bug this fixes.
+        await asyncio.gather(task, return_exceptions=True)
+    db.refresh(run)
     return _run_view(db, run)
 
 

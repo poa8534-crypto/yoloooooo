@@ -28,7 +28,7 @@ export const RESEARCH_PHASES = [
   { id: 'finished', label: 'Finished', detail: 'Report written to the ledger' },
 ] as const
 
-const FINISHED = new Set(['complete', 'partial', 'interrupted', 'failed'])
+const FINISHED = new Set(['complete', 'partial', 'interrupted', 'failed', 'cancelled'])
 
 export function researchPhase(stage: string, status: string): number {
   if (FINISHED.has(status)) return RESEARCH_PHASES.length - 1

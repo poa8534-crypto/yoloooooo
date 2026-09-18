@@ -46,6 +46,7 @@ const STOP_REASONS: Record<string, string> = {
   round_limit: 'the configured number of rounds ran out with questions still open.',
   finalization_reserve: 'time ran short and the rest of the budget was held back to write this report.',
   service_shutdown: 'the service stopped mid-run. This run was interrupted, not finished.',
+  operator_cancelled: 'you stopped this run. It was not finished, and everything it had already collected is kept.',
 }
 
 function HistoryTable({ data }: { data: History }) {

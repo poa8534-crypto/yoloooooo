@@ -14,7 +14,10 @@ describe('researchPhase', () => {
   })
 
   it('treats every terminal status as finished', () => {
-    for (const status of ['complete', 'partial', 'interrupted', 'failed']) {
+    // `cancelled` is terminal too. A stopped run keeps the stage it had
+    // reached, which is not a finishing stage, so without it here the strip
+    // would call a run the operator stopped on purpose unrecognisable.
+    for (const status of ['complete', 'partial', 'interrupted', 'failed', 'cancelled']) {
       expect(researchPhase('anything', status)).toBe(RESEARCH_PHASES.length - 1)
     }
   })

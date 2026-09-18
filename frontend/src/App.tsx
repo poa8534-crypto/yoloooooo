@@ -810,7 +810,7 @@ function MatchingEnginePage({ status, reviews, selectedId, onSelect, onReload, o
   </section>
 }
 
-function MetaHunterPage({ runs, health, onStart, onResume, busy, onInspectFact }: { onInspectFact: (id: string) => void; runs: Run[]; health: Health | null; onStart: (niche: string) => void; onResume: (id: string) => void; busy: boolean }) {
+function MetaHunterPage({ runs, health, onStart, onResume, onCancel, busy, onInspectFact }: { onInspectFact: (id: string) => void; runs: Run[]; health: Health | null; onStart: (niche: string) => void; onResume: (id: string) => void; onCancel: (id: string) => void; busy: boolean }) {
   const [niche, setNiche] = useState('')
   const active = runs.find(run => ['queued', 'running'].includes(run.status))
   function submit(event: FormEvent) { event.preventDefault(); onStart(niche) }
@@ -838,15 +838,18 @@ function MetaHunterPage({ runs, health, onStart, onResume, busy, onInspectFact }
       { id: 'report', label: 'Report' },
     ]} />
     <TabPanel id="run" active={tab}><div className="agent-columns"><article className="data-panel"><div className="panel-heading"><div><span>Research configuration</span><h2>Meta Hunter parameters</h2></div><Badge tone={active ? 'inference' : 'insufficient'}>{active ? active.status : 'Idle'}</Badge></div><form onSubmit={submit}><label>Research niche or question<input value={niche} minLength={3} required onChange={event => setNiche(event.target.value)} placeholder="e.g. cooperative cozy farming" /></label><div className="form-grid"><label>Region<input value="Global" disabled /></label><label>Corpus language<input value="English" disabled /></label><label>Candidate cap<input value="30 unique games · up to 3 concepts" disabled /></label><label>Search policy<input value="Discovery → primary evidence" disabled /></label></div>{(() => {
-      // Three actions, and the difference between them matters: Start is a new
+      // Four actions, and the difference between them matters: Start is a new
       // niche, Restart re-runs the last one from nothing, Resume continues an
-      // interrupted run from its checkpoint without re-spending what it paid.
+      // interrupted run from its checkpoint without re-spending what it paid,
+      // and Stop ends the one that is going. Stop is the only one enabled
+      // while a run is active, which is exactly when it is the one you want.
       const interrupted = runs.find(run => run.status === 'interrupted')
       const previous = runs[0]
       const why = (blocked: string) => blocked || ''
       const startWhy = why(active ? 'A run is already going.' : !niche.trim() ? 'Type a niche above first.' : '')
       const restartWhy = why(active ? 'A run is already going.' : !previous ? 'No earlier run to repeat.' : '')
       const resumeWhy = why(active ? 'A run is already going.' : !interrupted ? 'No interrupted run to continue.' : '')
+      const stopWhy = why(active ? '' : 'No run is going.')
       return <><div className="agent-actions">
         <button className="primary" type="submit" title={startWhy} disabled={busy || !!startWhy}>
           {busy ? 'Starting…' : 'Start research run'}</button>
@@ -854,9 +857,11 @@ function MetaHunterPage({ runs, health, onStart, onResume, busy, onInspectFact }
           onClick={() => previous && onStart(previous.niche)}>Restart last run</button>
         <button className="secondary" type="button" title={resumeWhy} disabled={busy || !!resumeWhy}
           onClick={() => interrupted && onResume(interrupted.id)}>Resume interrupted</button>
+        <button className="secondary danger" type="button" title={stopWhy} disabled={busy || !!stopWhy}
+          onClick={() => active && onCancel(active.id)}>Stop run</button>
       </div>
       <small className="gate-hint">
-        {active ? 'A run is going; the buttons wake up when it finishes.'
+        {active ? 'A run is going. Stop ends it now and keeps every source it has already captured; the other buttons wake up once it is over.'
           : `Start uses the niche above. Restart repeats “${previous ? previous.niche.slice(0, 40) : '—'}” from nothing. Resume continues an interrupted run from its checkpoint, without paying for the work it already did.`}
       </small></>
     })()}</form></article>
@@ -1746,6 +1751,15 @@ export default function App() {
     } catch (caught) { setError((caught as Error).message) } finally { setBusy(false) }
   }
 
+  async function cancelResearch(runId: string) {
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const run = await api<Run>(`/api/research-runs/${runId}/cancel`, { method: 'POST' })
+      setRuns(current => [run, ...current.filter(item => item.id !== run.id)])
+      setNotice(`Stopped “${run.niche}”. Everything it had already collected is kept.`)
+    } catch (caught) { setError((caught as Error).message) } finally { setBusy(false) }
+  }
+
   async function resumeResearch(runId: string) {
     setBusy(true); setError(''); setNotice('')
     try {
@@ -1807,7 +1821,7 @@ export default function App() {
         {page === 'history' && <AgentHistoryPage onInspectFact={inspectFact} onOpenCandidate={id => setSelectedIdea(id)} />}
         {page === 'matching' && <MatchingEnginePage status={matchingStatus} reviews={matchingReviews} selectedId={selectedMatch} onSelect={setSelectedMatch} onReload={loadMatching} onReview={reviewMatch} busy={busy} />}
         {page === 'market' && <MarketPulsePage />}
-        {page === 'meta' && <MetaHunterPage runs={runs} health={health} onStart={startResearch} onResume={resumeResearch} busy={busy} onInspectFact={inspectFact} />}
+        {page === 'meta' && <MetaHunterPage runs={runs} health={health} onStart={startResearch} onResume={resumeResearch} onCancel={cancelResearch} busy={busy} onInspectFact={inspectFact} />}
         {page === 'scout' && <VentureScoutPage candidates={candidates} />}
         {page === 'calibration' && <CalibrationPage calibration={calibration} summary={summary} />}
         {page === 'health' && <HealthPage health={health} summary={summary} matching={matchingStatus} />}

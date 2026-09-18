@@ -97,6 +97,14 @@ button.secondary {
   color: var(--glass-ink);
 }
 button.secondary:disabled { color: #98a2b3; }
+/* A `secondary danger` button: this skin, in the warning colour. The plain
+   `.danger` class cannot reach it -- `button.secondary` above is an element
+   plus a class, so it outranks a lone class and the red never arrived on the
+   one control whose colour is the whole point. Scoped to the pair so the
+   `danger` buttons that are not `secondary` keep the look they have. */
+button.secondary.danger { border-color: rgba(181, 59, 69, 0.45); color: var(--red); }
+button.secondary.danger:hover { border-color: var(--red); background: rgba(181, 59, 69, 0.08); }
+button.secondary.danger:disabled { border-color: var(--glass-edge); color: #98a2b3; }
 
 /* Tabs -------------------------------------------------------------------
  * Both agent pages were one long scroll. These switch between the panels

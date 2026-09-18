@@ -60,6 +60,16 @@ def test_the_interrupted_run_reason_is_labelled_too():
     assert "service_shutdown" in labelled_reasons()
 
 
+def test_the_operator_cancelled_reason_is_labelled_too():
+    """Also written directly rather than returned, so the check above cannot
+    see it. It is the one a reader is most likely to meet, because it is the
+    only stop reason a person causes on purpose."""
+    source = (ROOT / "app" / "deep_research.py").read_text(encoding="utf-8")
+
+    assert 'stop_reason="operator_cancelled"' in source, "the Stop reason was renamed"
+    assert "operator_cancelled" in labelled_reasons()
+
+
 def test_no_label_describes_a_reason_the_code_cannot_produce():
     """A stale label is a lie waiting to be read. Removing a stop reason
     without removing its sentence leaves the report claiming to explain
