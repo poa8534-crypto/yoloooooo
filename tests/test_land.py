@@ -431,3 +431,29 @@ def test_the_client_gets_its_own_copy(tmp_path):
         {"ReplicatedStorage"})
 
     assert modules[CLIENT_SERVICES_PATH] == modules[SERVICES_PATH]
+
+
+# ---- leaving nothing behind ------------------------------------------------
+
+def test_a_failed_check_leaves_nothing_staged(repo):
+    """A killed build left the project with a staged add of a file that was no
+    longer there -- `AD src/server/BayService.luau` -- and the next build would
+    have refused to land on top of a dirty tree. Putting the file back is only
+    half of putting the tree back."""
+    land(repo, {"src/server/A.luau": "--!strict\n"},
+         message="feat(A): accepted", verify=lambda _root: (False, "broken"))
+
+    staged = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=repo,
+                            capture_output=True, check=True).stdout
+    assert staged == b""
+
+
+def test_landing_unchanged_content_leaves_nothing_staged(repo):
+    source = "--!strict\nreturn {}\n"
+    land(repo, {"src/server/A.luau": source}, message="feat: accepted")
+
+    land(repo, {"src/server/A.luau": source}, message="feat: accepted again")
+
+    staged = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=repo,
+                            capture_output=True, check=True).stdout
+    assert staged == b""

@@ -135,6 +135,11 @@ def land(repo: Path, files: dict[str, str], *, message: str,
                 target.unlink(missing_ok=True)
             else:
                 target.write_bytes(original)
+        # And unstage. Putting the file back while leaving it in the index
+        # leaves the project dirty in a way `git status` reports as a staged
+        # add of a file that is not there -- which is what a killed build left
+        # behind, and what the next build would refuse to land on top of.
+        _git(repo, "reset", "-q", "--", *paths)
 
     for path, source in files.items():
         target = repo / path
@@ -163,6 +168,10 @@ def land(repo: Path, files: dict[str, str], *, message: str,
     # system. An empty commit would add a commit that says nothing happened.
     code, _ = _git(repo, "diff", "--cached", "--quiet", "--", *paths)
     if code == 0:
+        # Unstage before returning: `git add` on identical content stages
+        # nothing to commit but still records the path, and leaving it there
+        # makes the next run see a dirty tree and decline to land.
+        _git(repo, "reset", "-q", "--", *paths)
         return Landed(False, paths=tuple(paths),
                       detail="already in the project, unchanged")
 
