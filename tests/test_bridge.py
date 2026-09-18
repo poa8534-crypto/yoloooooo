@@ -439,3 +439,44 @@ def test_a_remote_class_outside_the_set_is_refused():
         validate_batch(batch(CreateRemote(operation_id="a", sequence=0,
                                           path="ReplicatedStorage/Remotes/Fire",
                                           remoteType="Part")))
+
+
+def test_a_started_playtest_is_reported_as_started_not_applied():
+    """Starting play mode is the one operation whose outcome the plugin cannot
+    report, because performing it is what stops it reporting.
+
+    `ExecutePlayModeAsync` does not return control to a plugin that still has
+    a POST to make, so a batch ending in one was applied in full and never
+    reported: the backend waited sixty seconds and recorded "Studio did not
+    report" about a sync where every operation had worked. The plugin now
+    reports first and starts play mode after.
+
+    "started" rather than "applied" on purpose. Play mode may still refuse,
+    and the plugin will not be there to say so -- claiming success would be
+    the interface asserting something nobody checked.
+    """
+    from app.bridge.protocol import BatchResult, OperationResult
+
+    result = BatchResult(
+        build_id="build-1", batch_id="batch-1",
+        results=[
+            OperationResult(operation_id="op-1", status="applied"),
+            OperationResult(operation_id="op-2", status="started",
+                            detail="play mode is started after this report"),
+        ])
+
+    assert [entry.status for entry in result.results] == ["applied", "started"]
+    # And it is not counted as a failure, because nothing failed.
+    assert result.failed == []
+
+
+def test_a_status_the_protocol_does_not_know_is_still_refused():
+    """The point of the literal: "started" was added deliberately, and adding
+    it must not turn the field into free text."""
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    from app.bridge.protocol import OperationResult
+
+    with _pytest.raises(ValidationError):
+        OperationResult(operation_id="op-1", status="probably-fine")

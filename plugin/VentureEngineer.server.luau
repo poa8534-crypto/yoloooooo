@@ -45,7 +45,7 @@ end
 -- `bridge status` says which code Studio is actually running -- otherwise a
 -- stale plugin and a wrong code path look identical from outside, which cost a
 -- round trip once already.
-local PLUGIN_VERSION = "0.2.0-playmode-ladder"
+local PLUGIN_VERSION = "0.3.0-report-before-play"
 local PROTOCOL_VERSION = 1
 local DEFAULT_BRIDGE = "http://127.0.0.1:34873"
 local HEARTBEAT_SECONDS = 5
@@ -641,9 +641,25 @@ applyOperation = function(operation: any): (string, string, boolean)
 	return statusOrError, detail or "", unchanged or false
 end
 
+--[[
+	Apply a batch and report it.
+
+	Starting play mode is held back until AFTER the results are posted, and it
+	is the only operation treated that way. `ExecutePlayModeAsync` does not
+	return control to a plugin that still has a POST to make, so a batch ending
+	in one was applied in full and never reported: the backend waited its sixty
+	seconds and recorded "Studio did not report before the timeout" about a
+	sync where every single operation had worked.
+
+	It is reported as "started", not "applied". Play mode may still refuse, and
+	the plugin will not be around to say so -- claiming success here would be
+	the interface asserting something nobody checked. A start that fails
+	*immediately* does leave the plugin alive, and that correction is posted.
+]]
 local function applyBatch(batch: any)
 	local results = {}
 	local firstScript: Instance? = nil
+	local deferredPlaytest: any = nil
 
 	-- One ChangeHistoryService waypoint per batch, so a person can undo a build
 	-- in Studio the way they undo anything else.
@@ -654,6 +670,18 @@ local function applyBatch(batch: any)
 	end)
 
 	for _, operation in ipairs(batch.operations) do
+		if operation.operation == "start_playtest" and operation.mode == "play" then
+			-- Held back: see the note above. Run mode is not held back, because
+			-- `RunService:Run()` returns and the plugin keeps talking.
+			deferredPlaytest = operation
+			table.insert(results, {
+				operation_id = operation.operation_id,
+				status = "started",
+				detail = "play mode is started after this report, because starting it stops the plugin reporting",
+				unchanged = false,
+			})
+			continue
+		end
 		local status, detail, unchanged = applyOperation(operation)
 		table.insert(results, {
 			operation_id = operation.operation_id,
@@ -694,6 +722,31 @@ local function applyBatch(batch: any)
 	if not ok then
 		lastError = `could not report results: {tostring(err)}`
 		render()
+	end
+
+	-- Only now, with the batch reported, is it safe to hand Studio over.
+	if deferredPlaytest ~= nil then
+		local status, detail = applyStartPlaytest(deferredPlaytest)
+		if status ~= "applied" then
+			-- It refused before taking the plugin down, so the truth still fits
+			-- through: correct the optimistic "started" with what happened.
+			request("POST", "/bridge/results", {
+				build_id = batch.build_id,
+				batch_id = batch.batch_id,
+				results = {
+					{
+						operation_id = deferredPlaytest.operation_id,
+						status = status,
+						detail = detail,
+						unchanged = false,
+					},
+				},
+				place_name = game.Name,
+				errors = {},
+			})
+			lastError = `play mode did not start: {detail}`
+			render()
+		end
 	end
 end
 

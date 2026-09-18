@@ -209,7 +209,17 @@ class OperationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     operation_id: str = Field(min_length=1, max_length=64)
-    status: Literal["applied", "skipped", "failed"]
+    # "started" is for an operation whose outcome the plugin cannot report,
+    # because performing it is what stops it reporting. Starting play mode is
+    # the only one: `ExecutePlayModeAsync` does not return to a plugin that
+    # then has to POST a result, so the batch used to be applied in full and
+    # never reported at all -- the backend waited sixty seconds and recorded
+    # "Studio did not report", about a sync that had entirely worked.
+    #
+    # It is deliberately not "applied". Play mode may still refuse to start,
+    # and a status that claimed otherwise would be the interface asserting
+    # something nobody checked.
+    status: Literal["applied", "skipped", "failed", "started"]
     detail: str = Field(default="", max_length=4000)
     # Set when the plugin did nothing because the DataModel already matched.
     unchanged: bool = False
