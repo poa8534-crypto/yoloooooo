@@ -13,7 +13,10 @@ will break. Where the specification says NO DATASTORE, every task says so.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..blueprint.schemas import GameBuildSpecification, SpecSystem, SystemLayer
+from .interfaces import interface_note
 from .schemas import EngineeringTask
 
 LAYER_NOTE: dict[SystemLayer, str] = {
@@ -48,8 +51,15 @@ def order_systems(spec: GameBuildSpecification) -> list[SpecSystem]:
     return ordered
 
 
-def task_for(spec: GameBuildSpecification, system: SpecSystem) -> EngineeringTask:
-    """One system, as the Engineer's loop already understands it."""
+def task_for(spec: GameBuildSpecification, system: SpecSystem,
+             repo: Path | None = None) -> EngineeringTask:
+    """One system, as the Engineer's loop already understands it.
+
+    `repo` is the project as it stands. Given it, the task carries the real
+    signatures of the dependencies already in it -- see interfaces.py for the
+    two systems that were accepted by six checks and could not be landed,
+    because each had called a function on a sibling that nobody wrote.
+    """
     notes = [
         LAYER_NOTE[system.layer],
         f"Write it at {system.path}. Return only the files you create; "
@@ -59,6 +69,12 @@ def task_for(spec: GameBuildSpecification, system: SpecSystem) -> EngineeringTas
     if system.depends_on:
         notes.append("These systems are built before this one. Require them rather than "
                      "reimplementing them: " + ", ".join(system.depends_on))
+        if repo is not None:
+            known = interface_note(
+                repo, system.depends_on,
+                {other.name: other.path for other in spec.systems})
+            if known:
+                notes.append(known)
     if spec.excluded_features:
         # The contract, restated per task. The Engineer never sees the blueprint,
         # and a feature it was not told was refused is one it may add helpfully.
@@ -74,7 +90,8 @@ def task_for(spec: GameBuildSpecification, system: SpecSystem) -> EngineeringTas
 
 
 def tasks_from(spec: GameBuildSpecification,
-               already_built: set[str] | None = None) -> list[EngineeringTask]:
+               already_built: set[str] | None = None,
+               repo: Path | None = None) -> list[EngineeringTask]:
     """Every system still to build, dependencies first.
 
     `already_built` is what the project already has. A system that exists is
@@ -82,7 +99,7 @@ def tasks_from(spec: GameBuildSpecification,
     revised specification a patch rather than a regeneration.
     """
     existing = {name.lower() for name in (already_built or set())}
-    tasks = [task_for(spec, system) for system in order_systems(spec)
+    tasks = [task_for(spec, system, repo) for system in order_systems(spec)
              if system.name.lower() not in existing]
     if not tasks:
         raise SpecUnusable("every system in this specification already exists in the project")

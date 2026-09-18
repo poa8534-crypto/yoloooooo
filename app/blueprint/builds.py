@@ -193,7 +193,7 @@ async def run_build(blueprint_id: str, *, settings, factory, token: str,
 
     record.move(BuildStatus.PLANNING, "working out what still has to be built")
     try:
-        tasks = tasks_from(spec, already_built=existing)
+        tasks = tasks_from(spec, already_built=existing, repo=repo)
     except SpecUnusable as exc:
         # Everything already exists: not a failure, there is simply nothing to
         # generate, and the sync below still puts it into Studio.
