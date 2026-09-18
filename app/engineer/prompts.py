@@ -123,6 +123,36 @@ SYNTAX THAT HAS ACTUALLY REFUSED RUNS (measured; each one cost six attempts):
   The same applies to any `Instance?` from FindFirstChild, WaitForChild with a timeout, or
   :FindFirstChildOfClass -- check it once, bind the checked value, use the bound name.
 
+BUILDING UI, AND SERVICES (measured; these refused MutationTerminalController
+six times, three of them on the same lint warning):
+- `UDim2.new` that sets only offset, or only scale, is a selene WARNING, and a
+  warning fails the run exactly like an error:
+      roblox_manual_fromscale_or_fromoffset
+  Write `UDim2.fromOffset(180, 32)` when both scales are 0, and
+  `UDim2.fromScale(0.5, 0.5)` when both offsets are 0. Use `UDim2.new` only when
+  you genuinely need scale AND offset on the same axis. The same rule applies to
+  `UDim.new`.
+- A service from the generated Services module is NEVER nil, so comparing one to
+  nil is a type error, not a safety check:
+      if Services.ReplicatedStorage ~= nil then   -- TypeError: Types
+      -- ReplicatedStorage and nil cannot be compared with ~= because they do
+      -- not have the same metatable
+  The module returns services already cast to their concrete types. If the thing
+  you actually doubt is a CHILD of the service, test the child:
+  `local remotes = Services.ReplicatedStorage:FindFirstChild("Remotes")`.
+- A field you will later set back to nil must be declared optional in the type.
+  Luau takes the field's type from the constructor, so assigning nil later
+  fails even though the field obviously has to be clearable:
+      self.distanceConnection = nil   -- Expected this to be
+      -- 't1 where t1 = {{+ Disconnect: (t1) -> (a...) +}}', but got 'nil'
+  Declare it as optional and start it there:
+      export type Controller = {{
+          distanceConnection: RBXScriptConnection?,
+      }}
+  Then `self.distanceConnection = nil` in the constructor and after
+  `:Disconnect()` both type-check. This matters most for connections, which a
+  cleanup path always clears.
+
 WRITING COMMENTS (measured, and it has refused a whole run):
 - Every line of a comment needs its own `--`. A wrapped second line without one is not a comment,
   it is Luau, and it fails to parse. Prefer `--[[ ]]` for anything longer than one line.
