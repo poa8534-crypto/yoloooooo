@@ -639,6 +639,70 @@ describe('mistakes that only show up at runtime', () => {
     expect(reads.length).toBe(1)
   })
 
+  it('asks for a finished build once, not on every answer', async () => {
+    // The polling effect depended on the graph it fetched. Every answer is a
+    // new object, so every answer re-ran the effect, and the effect's first act
+    // was to ask again. A finished build was measured being requested ten
+    // times a second, for as long as the page stayed open.
+    serve({ graph: graph({ current: null, status: 'succeeded' }) })
+
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+    // Let several render cycles go by; an effect keyed on the answer fires on each.
+    await new Promise(resolve => setTimeout(resolve, 60))
+
+    const reads = fetchMock.mock.calls.filter(call => String(call[0]).includes('/graph'))
+    expect(reads.length).toBe(1)
+  })
+
+  it('asks a live build again on the interval, and only on the interval', async () => {
+    // The other half of the same promise: stopping the loop must not stop the
+    // polling that a build in flight needs.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      serve()
+      const reads = () =>
+        fetchMock.mock.calls.filter(call => String(call[0]).includes('/graph')).length
+
+      render(<EngineeringWorkspace onNavigate={() => {}} />)
+      await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+      expect(reads()).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(reads()).toBe(2)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(reads()).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops asking once the build it is watching finishes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let status = 'generating'
+      serve()
+      const graphReply = fetchMock.getMockImplementation()!
+      fetchMock.mockImplementation((url: string, init?: RequestInit) => url.includes('/graph')
+        ? reply(graph({ status, current: status === 'generating' ? 'WaveService' : null }))
+        : graphReply(url, init))
+      const reads = () =>
+        fetchMock.mock.calls.filter(call => String(call[0]).includes('/graph')).length
+
+      render(<EngineeringWorkspace onNavigate={() => {}} />)
+      await waitFor(() => expect(screen.getByText('Working on WaveService')).toBeTruthy())
+
+      status = 'succeeded'
+      await vi.advanceTimersByTimeAsync(3000)
+      await waitFor(() => expect(screen.getAllByText('Not running').length).toBeGreaterThan(0))
+      const settled = reads()
+      await vi.advanceTimersByTimeAsync(9000)
+      expect(reads()).toBe(settled)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('renders two modules with the same name in different branches', async () => {
     // ReplicatedStorage/Shared and ServerScriptService/Server can each hold a
     // Config. The tree keyed rows by depth and name, so React saw one key twice.

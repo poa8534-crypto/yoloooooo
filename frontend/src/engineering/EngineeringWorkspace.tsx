@@ -91,16 +91,19 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
     }
   }, [active])
 
+  useEffect(() => { void refresh() }, [refresh])
+
+  // Polled only while the build is live. A finished build does not change,
+  // and asking anyway would be work with a known answer. The interval depends
+  // on whether the build is live, never on the graph itself: every answer is a
+  // new object, so depending on it re-ran this effect on every answer, and a
+  // finished build was requested ten times a second while the page was open.
+  const polling = !graph || LIVE.has(graph.status)
   useEffect(() => {
-    void refresh()
-    // Polled only while the build is live. A finished build does not change,
-    // and asking anyway would be work with a known answer.
-    const timer = setInterval(() => {
-      if (graph && !LIVE.has(graph.status)) return
-      void refresh()
-    }, 3000)
+    if (!polling) return
+    const timer = setInterval(() => { void refresh() }, 3000)
     return () => clearInterval(timer)
-  }, [refresh, graph])
+  }, [refresh, polling])
 
   useEffect(() => {
     const ask = () => engineeringApi.studio(token).then(setStudio).catch(() => setStudio(null))
