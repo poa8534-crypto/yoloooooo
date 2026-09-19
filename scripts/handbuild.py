@@ -264,8 +264,14 @@ def command_check(args) -> int:
         target.write_bytes(content.encode("utf-8"))
         print(f"generated {relative}")
 
-    problem = gate.format(worktree, [system.path])
-    print("formatted" if problem is None else f"not formatted: {problem}")
+    # Every file that will land, not only the system's own: `land` takes all
+    # of them, and a data row added to a shared module for this system was
+    # refused by the format check while the system itself was formatted --
+    # which is how this was found, on EvolutionService and ColonyConfig.
+    targets = sorted({system.path, *(path for path in _changed_files(worktree)
+                                     if not path.endswith("Services.luau"))})
+    problem = gate.format(worktree, targets)
+    print(f"formatted {len(targets)} file(s)" if problem is None else f"not formatted: {problem}")
 
     report = gate.run(worktree)
     print()
