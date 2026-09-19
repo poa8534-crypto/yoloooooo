@@ -47,6 +47,9 @@ export interface Pace {
   per_system_seconds: Record<string, number>
   attempts_spent: number
   systems_accepted: number
+  // The measured systems' own time added up. Beside the elapsed time it says
+  // what writing systems at once saved. Absent from builds read before it.
+  system_seconds_total?: number
 }
 
 // null means Studio was never asked, which is not the same as Studio applying
@@ -189,6 +192,9 @@ export interface BuildGraph {
   nodes: GraphNode[]
   edges: Array<{ from: string; to: string }>
   current: string | null
+  // Every system the Engineer has been asked for and not answered, in the
+  // order it was asked. Read it through inFlight().
+  in_flight?: string[]
   counts: Record<string, number>
   pace: Pace
   sync: SyncState
@@ -388,6 +394,15 @@ export const NO_PLAN: Plan = {
 }
 export const NO_STEERING: Steering = {
   directives: [], reachable: [], accepting: false, max_active: 0,
+}
+
+// Every system being written right now -- several when systems that do not
+// depend on each other are written at once. A backend from before the list
+// names at most one, in `current`, and is read the same way rather than as
+// nothing in flight.
+export function inFlight(graph: BuildGraph | null): string[] {
+  if (!graph) return []
+  return graph.in_flight ?? (graph.current ? [graph.current] : [])
 }
 
 export function duration(seconds: number | null | undefined): string {

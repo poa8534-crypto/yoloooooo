@@ -160,7 +160,8 @@ def test_dirty_paths_ignores_files_it_was_not_asked_about(repo):
 
 # ---- through the build loop ------------------------------------------------
 
-def test_a_refused_system_is_never_landed(session_factory, tmp_path, monkeypatch):
+def test_a_refused_system_is_never_landed(session_factory, tmp_path, monkeypatch,
+                                           build_settings):
     """End to end through run_build: the one that would be worst to get wrong."""
     import asyncio
 
@@ -205,7 +206,7 @@ def test_a_refused_system_is_never_landed(session_factory, tmp_path, monkeypatch
 
     async def go():
         try:
-            await run_build(plan.id, settings=object(), factory=session_factory,
+            await run_build(plan.id, settings=build_settings, factory=session_factory,
                             token="t", play=False, build_id="build-refuse")
         except BuildFailed:
             pass
@@ -301,7 +302,7 @@ def test_a_system_that_keeps_the_project_building_is_kept(repo):
 # ---- the verifier the build actually uses ----------------------------------
 
 def test_the_build_verifier_reports_what_the_gate_refused(session_factory, tmp_path,
-                                                        monkeypatch):
+                                                        monkeypatch, build_settings):
     """Written because the first version called `GateReport.failed` as though
     it were a method. It is a property, so the call raised, `land` reported
     "the project check could not run", and every system that genuinely broke
@@ -363,7 +364,7 @@ def test_the_build_verifier_reports_what_the_gate_refused(session_factory, tmp_p
 
     async def go():
         try:
-            await run_build(plan.id, settings=object(), factory=store.factory,
+            await run_build(plan.id, settings=build_settings, factory=store.factory,
                             token="t", play=False, build_id="build-verify")
         except BuildFailed:
             pass

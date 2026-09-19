@@ -169,6 +169,20 @@ class Settings(BaseSettings):
     # command, for machines without that script; it is not the default because
     # two definitions drift.
     engineer_gate: Literal["verify-script", "builtin"] = "verify-script"
+    # How many systems the Engineer writes at once. A system still never starts
+    # before everything it depends on has landed (app/engineer/schedule.py);
+    # this only lets systems that do not depend on each other overlap. Three
+    # because three is what was measured: three `agy` calls at once all
+    # answered, in 34 s of wall time against 17 s for one alone. On ascent's
+    # own timings three would take a build from 82 minutes to about 34.
+    engineer_parallel_systems: int = Field(default=3, ge=1, le=16)
+    # Per provider, how many calls may be in flight at once across the whole
+    # build, as name=count pairs ("ollama=1,gemini=2"). A provider not named is
+    # limited only by engineer_parallel_systems. A call waits for its provider
+    # rather than skipping to the next one: which model writes a system is not
+    # something to change because the first choice was busy. Ollama runs on
+    # this machine's one GPU, where three at once would each go a third as fast.
+    engineer_provider_concurrency: str = "ollama=1"
     engineer_max_attempts: int = Field(default=6, ge=1, le=20)
     engineer_run_seconds: float = Field(default=5400.0, gt=0)
     engineer_tool_timeout_seconds: float = Field(default=300.0, gt=0)

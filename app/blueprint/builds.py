@@ -38,7 +38,8 @@ from ..db import lock_home
 from ..engineer.from_spec import SpecUnusable, tasks_from
 from ..engineer.catalog import load_services
 from ..engineer.land import land
-from ..engineer.runs import build_gate, game_repo, run_task
+from ..engineer.runs import build_gate, game_repo, provider_limits, run_task
+from ..engineer.schedule import in_dependency_order
 from ..engineer.workspace import services_for_project
 from ..models import SystemState
 from ..ownership import Held, is_held, whoami
@@ -297,75 +298,99 @@ async def _build(blueprint_id: str, build_id: str, *, settings, factory, token: 
         return False, "; ".join(
             f"{check.name}: {_first_problem(check.output)}" for check in report.failed)
 
-    if tasks:
-        record.move(BuildStatus.GENERATING, f"{len(tasks)} system(s) to write")
-        for task in tasks:
-            # Read now, not when the plan was made: a directive typed a minute
-            # ago has to reach the system being asked for a minute later, and
-            # the plan was built before it existed.
-            steering = notes_for(record.read(), task.system)
-            if steering:
-                task = task.model_copy(update={"notes": [*task.notes, *steering][:20]})
-                record.mutate(lambda current, name=task.system:
-                              {"directives": carried(current, name)})
-                record.event("steering",
-                             f"{task.system}: {len(steering)} directive(s) carried into the prompt")
-            record.event("generating", f"{task.system}: asking the Engineer")
-            try:
-                result = await run_task(task, settings=settings, factory=factory)
-            except Exception as exc:  # noqa: BLE001 - reported, never swallowed
-                systems[task.system] = {"status": "error", "detail": str(exc)[:500]}
-                record.event("system_failed", f"{task.system}: {str(exc)[:300]}",
-                             systems=systems)
-                continue
+    # One landing at a time. Landing writes the candidate files into the
+    # project's own checkout and checks the WHOLE project there, so two at once
+    # would each be checking the other's half-written files. Measured on ascent
+    # at 2.5-2.9 s a system, so queueing for it costs next to nothing.
+    landing = asyncio.Lock()
+    # Shared by every system in flight, so a provider's limit holds for the
+    # build rather than for each system separately.
+    slots = {name: asyncio.Semaphore(count) for name, count in provider_limits(settings).items()}
+    by_name = {task.system: task for task in tasks}
 
-            if result.status == "complete" and result.branch:
-                files = files_on_branch(repo, result.branch)
-                # Only the file this task was for. A run's branch also carries
-                # the generated Services module and whatever was already on the
-                # base branch, and sending those as this system's work would
-                # misreport what was built.
-                mine: dict[str, str] = {}
-                for path, source in files.items():
-                    if Path(path).stem == task.system:
-                        mine[path] = source
-                generated.update(mine)
-                systems[task.system] = {"status": "built", "branch": result.branch,
-                                        "commit": result.commit, "attempts": result.attempts}
-                record.event("system_built", f"{task.system}: accepted on {result.branch}",
-                             systems=systems)
+    async def write(name: str) -> None:
+        """One system: asked for, checked, and landed or refused."""
+        task = by_name[name]
+        # Read now, not when the plan was made: a directive typed a minute ago
+        # has to reach the system being asked for a minute later, and the plan
+        # was built before it existed.
+        steering = notes_for(record.read(), task.system)
+        if steering:
+            task = task.model_copy(update={"notes": [*task.notes, *steering][:20]})
+            record.mutate(lambda current, name=task.system:
+                          {"directives": carried(current, name)})
+            record.event("steering",
+                         f"{task.system}: {len(steering)} directive(s) carried into the prompt")
+        record.event("generating", f"{task.system}: asking the Engineer")
+        try:
+            result = await run_task(task, settings=settings, factory=factory, slots=slots)
+        except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+            systems[task.system] = {"status": "error", "detail": str(exc)[:500]}
+            record.event("system_failed", f"{task.system}: {str(exc)[:300]}",
+                         systems=systems)
+            return
 
-                # Into the project, not just onto a branch. Without this the
-                # next build of the same specification sees the system as
-                # missing and writes it again: thirty-three engineer/ branches
-                # had accumulated that way, holding work the project never got.
-                # The system AND the Services module it needs. Each run
-                # regenerates Services in its own worktree for exactly what it
-                # used, so landing the system alone leaves the project with
-                # whatever the last landed system happened to require -- four
-                # of six systems were held back by "Key 'CollectionService'
-                # not found", none of them for anything wrong with the system.
-                landing = dict(mine)
+        if result.status == "complete" and result.branch:
+            files = await asyncio.to_thread(files_on_branch, repo, result.branch)
+            # Only the file this task was for. A run's branch also carries the
+            # generated Services module and whatever was already on the base
+            # branch, and sending those as this system's work would misreport
+            # what was built.
+            mine: dict[str, str] = {}
+            for path, source in files.items():
+                if Path(path).stem == task.system:
+                    mine[path] = source
+            generated.update(mine)
+            systems[task.system] = {"status": "built", "branch": result.branch,
+                                    "commit": result.commit, "attempts": result.attempts}
+            record.event("system_built", f"{task.system}: accepted on {result.branch}",
+                         systems=systems)
+
+            # Into the project, not just onto a branch. Without this the next
+            # build of the same specification sees the system as missing and
+            # writes it again: thirty-three engineer/ branches had accumulated
+            # that way, holding work the project never got. The system AND the
+            # Services module it needs. Each run regenerates Services in its own
+            # worktree for exactly what it used, so landing the system alone
+            # leaves the project with whatever the last landed system happened
+            # to require -- four of six systems were held back by "Key
+            # 'CollectionService' not found", none of them for anything wrong
+            # with the system. Worked out inside the lock, because it reads the
+            # project as the landing before this one left it.
+            async with landing:
+                changes = dict(mine)
                 if known_services:
-                    landing.update(services_for_project(repo, mine, known_services))
-                landed = land(repo, landing, verify=project_check, message=(
-                    f"feat({task.system}): accepted by the gate\n\n"
-                    f"Generated for build {record.id} from specification "
-                    f"{spec.spec_id} revision {spec.revision}, accepted on "
-                    f"{result.branch} after {result.attempts} attempt(s)."))
-                systems[task.system]["landed"] = landed.as_dict()
-                record.event(
-                    "landed" if landed.committed else "not_landed",
-                    f"{task.system}: " + (f"committed {landed.commit[:12]} to the project"
-                                          if landed.committed else landed.detail),
-                    systems=systems)
-            else:
-                # Recorded, and the build carries on. Four working systems and
-                # one honest refusal beats nothing.
-                systems[task.system] = {"status": "refused", "reason": result.reason[:500],
-                                        "branch": result.branch, "attempts": result.attempts}
-                record.event("system_refused", f"{task.system}: {result.reason[:300]}",
-                             systems=systems)
+                    changes.update(services_for_project(repo, mine, known_services))
+                landed = await asyncio.to_thread(
+                    land, repo, changes, verify=project_check, message=(
+                        f"feat({task.system}): accepted by the gate\n\n"
+                        f"Generated for build {record.id} from specification "
+                        f"{spec.spec_id} revision {spec.revision}, accepted on "
+                        f"{result.branch} after {result.attempts} attempt(s)."))
+            systems[task.system]["landed"] = landed.as_dict()
+            record.event(
+                "landed" if landed.committed else "not_landed",
+                f"{task.system}: " + (f"committed {landed.commit[:12]} to the project"
+                                      if landed.committed else landed.detail),
+                systems=systems)
+        else:
+            # Recorded, and the build carries on. Four working systems and one
+            # honest refusal beats nothing.
+            systems[task.system] = {"status": "refused", "reason": result.reason[:500],
+                                    "branch": result.branch, "attempts": result.attempts}
+            record.event("system_refused", f"{task.system}: {result.reason[:300]}",
+                         systems=systems)
+
+    if tasks:
+        at_once = settings.engineer_parallel_systems
+        record.move(BuildStatus.GENERATING, f"{len(tasks)} system(s) to write"
+                    + (f", up to {at_once} at a time" if at_once > 1 else ""))
+        # A system starts once everything it depends on has finished -- landed
+        # or refused -- because its worktree is cut from the project as it
+        # stands then, and that is how it sees what its dependencies export.
+        await in_dependency_order(
+            list(by_name), {system.name: system.depends_on for system in spec.systems},
+            at_once, write)
 
     record.move(BuildStatus.VALIDATING, "reading what the gate accepted")
     from ..bridge.from_project import read_project

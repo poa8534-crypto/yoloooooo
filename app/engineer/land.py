@@ -34,12 +34,11 @@ overwrites an edit is a lost afternoon.
 
 from __future__ import annotations
 
-import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .workspace import GIT_IDENTITY
+from .workspace import GIT_IDENTITY, run_git
 
 TIMEOUT = 30.0
 
@@ -62,8 +61,8 @@ class Landed:
 
 
 def _git(repo: Path, *args: str) -> tuple[int, str]:
-    completed = subprocess.run(["git", *args], cwd=repo, capture_output=True,
-                               timeout=TIMEOUT, check=False)
+    # Tried again while another git process holds a lock: see workspace.LOCKED.
+    completed = run_git(list(args), repo, TIMEOUT)
     output = (completed.stdout + b"\n" + completed.stderr).decode("utf-8", "replace").strip()
     return completed.returncode, output
 

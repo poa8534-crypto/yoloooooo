@@ -87,9 +87,9 @@ export function PlayerFlow({ plan, onSelect }: {
 }
 
 
-export function BuildOrderView({ plan, current, onSelect }: {
+export function BuildOrderView({ plan, inFlight, onSelect }: {
   plan: Plan
-  current: string | null
+  inFlight: string[]
   onSelect: (system: string) => void
 }) {
   // The order, and why each thing is where it is. The reason text comes from
@@ -98,7 +98,7 @@ export function BuildOrderView({ plan, current, onSelect }: {
     <ol className="order-list">
       {plan.states.map((state, index) => (
         <li key={state.name} data-state={state.state}
-          data-current={state.name === current}>
+          data-current={inFlight.includes(state.name)}>
           <span className="order-index">{index + 1}</span>
           <button type="button" className="order-name" onClick={() => onSelect(state.name)}>
             {state.name}

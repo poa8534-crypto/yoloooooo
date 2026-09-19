@@ -225,3 +225,60 @@ def test_a_new_project_gets_its_source_roots_in_the_worktree(tmp_path):
             assert (worktree.path / source_root).is_dir(), source_root
     finally:
         worktree.remove(delete_branch=True)
+
+
+# ---- several runs, one .git --------------------------------------------------
+
+class Answers:
+    """`git` as a queue of answers, and how many times it was asked."""
+
+    def __init__(self, *answers: tuple[int, bytes]):
+        self.answers = list(answers)
+        self.calls = 0
+
+    def __call__(self, *_args, **_kwargs):
+        self.calls += 1
+        code, stderr = self.answers.pop(0)
+        return subprocess.CompletedProcess([], code, stdout=b"done", stderr=stderr)
+
+
+LOCKED_INDEX = (b"fatal: Unable to create 'C:/game/.git/index.lock': File exists.\n\n"
+                b"Another git process seems to be running in this repository")
+
+
+def test_a_lock_held_by_another_run_is_waited_out(monkeypatch):
+    # Systems written at once share one .git. A collision on its locks is
+    # another run's business, not a reason to lose an accepted system.
+    from app.engineer import workspace
+
+    answers = Answers((128, LOCKED_INDEX), (128, b"error: cannot lock ref 'refs/heads/x'"),
+                      (0, b""))
+    monkeypatch.setattr(workspace.subprocess, "run", answers)
+    monkeypatch.setattr(workspace.time, "sleep", lambda _seconds: None)
+
+    assert workspace.git(["branch", "-D", "engineer/x"], cwd=".") == "done"
+    assert answers.calls == 3
+
+
+def test_any_other_failure_is_an_answer_and_is_not_asked_again(monkeypatch):
+    from app.engineer import workspace
+
+    answers = Answers((128, b"fatal: invalid reference: engineer/x"))
+    monkeypatch.setattr(workspace.subprocess, "run", answers)
+    monkeypatch.setattr(workspace.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(workspace.GitError, match="invalid reference"):
+        workspace.git(["branch", "-D", "engineer/x"], cwd=".")
+    assert answers.calls == 1
+
+
+def test_a_lock_that_is_never_released_is_given_up_on(monkeypatch):
+    from app.engineer import workspace
+
+    answers = Answers(*[(128, LOCKED_INDEX)] * (len(workspace.LOCK_RETRY_DELAYS) + 1))
+    monkeypatch.setattr(workspace.subprocess, "run", answers)
+    monkeypatch.setattr(workspace.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(workspace.GitError, match="index.lock"):
+        workspace.git(["commit", "-m", "x"], cwd=".")
+    assert answers.calls == len(workspace.LOCK_RETRY_DELAYS) + 1

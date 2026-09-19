@@ -12,9 +12,11 @@ so you can see where the keys went. It does not ration them.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import secrets
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -225,16 +227,61 @@ def build_clients(settings: Settings, **kwargs) -> list[tuple[str, object]]:
     return built
 
 
-def build_model_call(settings: Settings, clients: list[tuple[str, object]]):
-    """One `ModelCall` for the whole chain."""
+def provider_limits(settings: Settings) -> dict[str, int]:
+    """How many calls each named provider may have in flight at once.
+
+    From ENGINEER_PROVIDER_CONCURRENCY, `name=count` pairs. Refused rather than
+    guessed at when it names a provider that does not exist or a count that is
+    not a positive number: a limit that silently did not apply is the one
+    nobody would notice until the GPU fell over.
+    """
+    limits: dict[str, int] = {}
+    for pair in settings.engineer_provider_concurrency.split(","):
+        if not pair.strip():
+            continue
+        name, _, count = pair.partition("=")
+        name = name.strip().lower()
+        if name not in ("antigravity", "gemini", "ollama"):
+            raise NotConfigured(f"ENGINEER_PROVIDER_CONCURRENCY names an unknown provider: {name!r}")
+        try:
+            value = int(count)
+        except ValueError:
+            value = 0
+        if value < 1:
+            raise NotConfigured(
+                f"ENGINEER_PROVIDER_CONCURRENCY gives {name} {count.strip()!r}; it needs a whole "
+                "number of at least 1")
+        limits[name] = value
+    return limits
+
+
+def _held(call, slots: asyncio.Semaphore):
+    """The same call, waiting for one of its provider's slots first."""
+    async def held(system: str, prompt: str, deadline: float) -> tuple[str, str]:
+        async with slots:
+            return await call(system, prompt, deadline)
+    return held
+
+
+def build_model_call(settings: Settings, clients: list[tuple[str, object]],
+                     slots: Mapping[str, asyncio.Semaphore] | None = None):
+    """One `ModelCall` for the whole chain.
+
+    `slots` are shared by every system a build is writing at once, one
+    semaphore per provider with a limit, so the limit holds across the build
+    rather than per system.
+    """
     calls = []
     for name, client in clients:
         if name == "ollama":
-            calls.append(ollama_models(client, ollama_model_names(settings)))
+            call = ollama_models(client, ollama_model_names(settings))
         elif name == "antigravity":
-            calls.append(antigravity_models(client, antigravity_model_names(settings)))
+            call = antigravity_models(client, antigravity_model_names(settings))
         else:
-            calls.append(gemini_models(client, engineer_models(settings)))
+            call = gemini_models(client, engineer_models(settings))
+        if slots and name in slots:
+            call = _held(call, slots[name])
+        calls.append(call)
     return chain(calls)
 
 
@@ -293,8 +340,13 @@ async def plan_from_audit(audit_id: str, *, settings: Settings, factory,
     raise PlanRefused("the planner produced nothing usable")
 
 
-async def run_task(task: EngineeringTask, *, settings: Settings, factory, on_event=None) -> EngineerResult:
-    """One engineer run, end to end, recorded as it goes."""
+async def run_task(task: EngineeringTask, *, settings: Settings, factory, on_event=None,
+                   slots: Mapping[str, asyncio.Semaphore] | None = None) -> EngineerResult:
+    """One engineer run, end to end, recorded as it goes.
+
+    `slots` are the build's per-provider limits, when several systems are
+    being written at once; see build_model_call.
+    """
     design = load_design(factory, task.audit_id)
     repo = game_repo(settings)
     gate = build_gate(settings)
@@ -312,7 +364,7 @@ async def run_task(task: EngineeringTask, *, settings: Settings, factory, on_eve
     recorder = AttemptRecorder(settings.engineer_capture_dir,
                                on_error=lambda message: emit("capture_failed", message))
     loop = EngineerLoop(
-        model=build_model_call(settings, clients), gate=gate,
+        model=build_model_call(settings, clients, slots), gate=gate,
         known_services=gate.known_services,
         create_worktree=lambda name: Worktree.create(repo, settings.game_base_branch, worktrees, name),
         handoff_dir=settings.engineer_data_dir / "handoffs",

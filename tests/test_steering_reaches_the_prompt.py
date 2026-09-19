@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -29,6 +30,9 @@ from app.blueprint.steering import new_directive, with_directive
 from app.blueprint.store import BlueprintStore
 
 CRITERION = "Spending more than the player holds is refused and changes nothing."
+# What run_build reads from settings itself; the rest it reaches through
+# functions these tests replace.
+ONE_AT_A_TIME = SimpleNamespace(engineer_parallel_systems=1, engineer_provider_concurrency="")
 
 
 def system(name: str, depends: list[str] | None = None) -> GameSystem:
@@ -96,7 +100,9 @@ async def _build_and_steer(plan, session_factory, build_id: str, asked: list,
 
     steering = asyncio.create_task(steer_once_running())
     try:
-        await run_build(plan.id, settings=object(), factory=session_factory,
+        # One at a time: these systems depend on each other in a line, and the
+        # test is about what the second one is asked with.
+        await run_build(plan.id, settings=ONE_AT_A_TIME, factory=session_factory,
                         token="t", play=False, build_id=build_id)
     except BuildFailed:
         pass

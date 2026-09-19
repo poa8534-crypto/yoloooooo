@@ -568,9 +568,12 @@ def _subject(event: dict) -> str:
     return str(event.get("detail") or "").split(":", 1)[0].strip()
 
 
-def _progress(record: dict, spec) -> tuple[dict, bool, str | None, set[str]]:
+def _progress(record: dict, spec) -> tuple[dict, bool, list[str], set[str]]:
     """Where the build actually is: outcomes, whether it runs, what is in
     flight, and what it is not going to write at all.
+
+    In flight is a list, in the order the Engineer was asked: when systems
+    that do not depend on each other are written at once, several are.
 
     One function because the graph and the steering panel must never disagree
     about which system is being written -- one of them saying a directive can
@@ -589,8 +592,8 @@ def _progress(record: dict, spec) -> tuple[dict, bool, str | None, set[str]]:
     asked = [_subject(event) for event in record["events"]
              if event.get("stage") == "generating"
              and "asking the Engineer" in str(event.get("detail") or "")]
-    current = (next((name for name in reversed(asked) if name not in outcomes), None)
-               if running else None)
+    in_flight = (list(dict.fromkeys(name for name in asked if name not in outcomes))
+                 if running else [])
 
     # Recorded since this was written; derived for builds made before it, where
     # a system nobody asked for while later ones were asked can only have been
@@ -604,7 +607,7 @@ def _progress(record: dict, spec) -> tuple[dict, bool, str | None, set[str]]:
                    if name not in seen and name not in outcomes and index < last}
     else:
         skipped = set(stored)
-    return outcomes, running, current, skipped
+    return outcomes, running, in_flight, skipped
 
 
 def _build_and_spec(build_id: str):
@@ -622,7 +625,7 @@ def _build_and_spec(build_id: str):
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
 
 
-def _plan_view(spec, outcomes: dict[str, dict], current: str | None) -> dict:
+def _plan_view(spec, outcomes: dict[str, dict], in_flight: list[str]) -> dict:
     """The planning layers, for a UI that wants to show more than files.
 
     Three different questions, kept apart because they have different answers:
@@ -637,7 +640,7 @@ def _plan_view(spec, outcomes: dict[str, dict], current: str | None) -> dict:
     depends = {system.name: list(system.depends_on) for system in spec.systems}
 
     states = gate_states(order=list(spec.build_order), depends=depends,
-                         outcomes=statuses, current=current)
+                         outcomes=statuses, in_flight=in_flight)
     gates = (playability(spec.gameplay_path, statuses)
              if spec.gameplay_path is not None else [])
 
@@ -657,7 +660,7 @@ def _plan_view(spec, outcomes: dict[str, dict], current: str | None) -> dict:
         why[system.name] = "; ".join(reasons).capitalize() + "."
 
     remaining = [name for name in spec.build_order
-                 if name not in outcomes and name != current]
+                 if name not in outcomes and name not in in_flight]
     return {
         "journey": (spec.player_journey.model_dump(mode="json")
                     if spec.player_journey is not None else None),
@@ -800,7 +803,8 @@ def build_graph(build_id: str) -> dict:
         built     the Engineer wrote it and the six-check gate accepted it
         refused   it wrote it and the gate refused it
         error     the run itself failed
-        building  the last system the Engineer was asked for, still unanswered
+        building  a system the Engineer was asked for and has not answered --
+                  several at once when independent systems are written together
         existing  the project already had it, so this build does not rewrite it
         waiting   everything else
 
@@ -826,7 +830,7 @@ def build_graph(build_id: str) -> dict:
     except NotReady as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
 
-    outcomes, running, current, skipped = _progress(record, spec)
+    outcomes, running, in_flight, skipped = _progress(record, spec)
 
     by_name = {system.name: system for system in spec.systems}
     nodes = []
@@ -837,7 +841,7 @@ def build_graph(build_id: str) -> dict:
         outcome = outcomes.get(name)
         location, script_class = _studio_location(system.path)
         if outcome is None:
-            state = ("building" if name == current
+            state = ("building" if name in in_flight
                      else "existing" if name in skipped else "waiting")
         elif outcome["status"] == "built":
             state = "built"
@@ -887,6 +891,10 @@ def build_graph(build_id: str) -> dict:
                                    if durations else None),
         "slowest_system_seconds": round(max(durations.values()), 1) if durations else None,
         "per_system_seconds": {name: round(value, 1) for name, value in durations.items()},
+        # The systems' own time added up. Beside the elapsed time it is the
+        # measured answer to what writing systems at once saved: 4902 s of
+        # system time took 4948 s one at a time on ascent.
+        "system_seconds_total": round(sum(durations.values()), 1),
         "attempts_spent": attempted,
         "systems_accepted": counts.get("built", 0),
     }
@@ -907,9 +915,12 @@ def build_graph(build_id: str) -> dict:
         },
         "nodes": nodes,
         "edges": edges,
-        "current": current,
+        # The most recently asked, for a reader that expects one; `in_flight`
+        # is all of them.
+        "current": in_flight[-1] if in_flight else None,
+        "in_flight": in_flight,
         "counts": {**counts, "total": len(nodes)},
-        "plan": _plan_view(spec, outcomes, current),
+        "plan": _plan_view(spec, outcomes, in_flight),
         "pace": pace,
         "sync": _sync_state(record),
         "steering": _steering_view(record, spec),
@@ -921,21 +932,21 @@ def build_graph(build_id: str) -> dict:
 def _reachable(record: dict, spec) -> list[str]:
     """The systems a directive added right now could still reach.
 
-    Not the one in flight: its prompt was built before the directive existed,
-    so listing it would promise something the build cannot deliver. Not one the
+    Not one in flight: its prompt was built before the directive existed, so
+    listing it would promise something the build cannot deliver. Not one the
     project already has either -- this build is not going to write it.
     """
-    outcomes, running, current, skipped = _progress(record, spec)
+    outcomes, running, in_flight, skipped = _progress(record, spec)
     if not running:
         return []
     return [name for name in spec.build_order
-            if name not in outcomes and name not in skipped and name != current]
+            if name not in outcomes and name not in skipped and name not in in_flight]
 
 
 def _steering_view(record: dict, spec) -> dict:
     from .steering import MAX_ACTIVE, as_shown
 
-    _outcomes, running, _current, _skipped = _progress(record, spec)
+    _outcomes, running, _in_flight, _skipped = _progress(record, spec)
     return {
         "directives": as_shown(record, running=running),
         "reachable": _reachable(record, spec),

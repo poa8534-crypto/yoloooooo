@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -119,9 +120,34 @@ def services_in(source: str) -> set[str]:
     return names
 
 
+# Another git process holding a lock in the shared repository. Several systems
+# are written at once now, and their worktrees share one .git: one run adding a
+# worktree, another deleting its branch, a third committing -- and any commit
+# may start a background `gc --auto` that packs refs. Git's locks make each of
+# those safe, by refusing the second one outright rather than waiting. A refused
+# `worktree remove` after a system was ACCEPTED would lose the system to a
+# collision that had nothing to do with it, so a lock refusal is tried again,
+# briefly. Nothing else is: every other failure is an answer.
+LOCKED = re.compile(r"\.lock'?:? File exists|cannot lock ref|unable to create '[^']*\.lock'"
+                    r"|another git process seems to be running", re.IGNORECASE)
+LOCK_RETRY_DELAYS = (0.25, 0.5, 1.0, 2.0)
+
+
+def run_git(args: list[str], cwd: Path, timeout: float) -> subprocess.CompletedProcess:
+    """`git`, tried again while the only complaint is a lock another holds."""
+    for delay in (*LOCK_RETRY_DELAYS, None):
+        completed = subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+                                   timeout=timeout, check=False)
+        output = (completed.stdout + completed.stderr).decode("utf-8", "replace")
+        if completed.returncode == 0 or delay is None or not LOCKED.search(output):
+            return completed
+        time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
 def git(args: list[str], cwd: Path, timeout: float = 120.0) -> str:
     try:
-        completed = subprocess.run(["git", *args], cwd=cwd, capture_output=True, timeout=timeout, check=False)
+        completed = run_git(args, cwd, timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise GitError(f"git {' '.join(args[:2])}: {exc}") from None
     output = (completed.stdout + completed.stderr).decode("utf-8", "replace").strip()

@@ -58,10 +58,19 @@ def test_a_refusal_blocks_everything_downstream_of_it():
 
 def test_the_system_being_written_is_building_rather_than_ready():
     states = {s.name: s for s in gate_states(
-        order=["A", "B"], depends={}, outcomes={}, current="A")}
+        order=["A", "B"], depends={}, outcomes={}, in_flight=["A"])}
 
     assert states["A"].state is TaskState.BUILDING
     assert states["B"].state is TaskState.READY
+
+
+def test_every_system_being_written_at_once_is_building():
+    states = {s.name: s for s in gate_states(
+        order=["A", "B", "C"], depends={"C": ["A"]}, outcomes={}, in_flight=["A", "B"])}
+
+    assert states["A"].state is TaskState.BUILDING
+    assert states["B"].state is TaskState.BUILDING
+    assert states["C"].state is TaskState.BLOCKED
 
 
 def test_a_dependency_outside_the_build_does_not_block():

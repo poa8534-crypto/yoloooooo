@@ -166,14 +166,15 @@ def plan(session_factory, tmp_path, monkeypatch):
 
 
 async def test_a_crash_inside_the_build_is_recorded_as_a_failure(plan, session_factory,
-                                                                 monkeypatch):
+                                                                 monkeypatch,
+                                                                 build_settings):
     def broken(*_args, **_kwargs):
         raise KeyError("TowerService")
 
     monkeypatch.setattr(module, "tasks_from", broken)
 
     with pytest.raises(KeyError):
-        await run_build(plan.id, settings=object(), factory=session_factory,
+        await run_build(plan.id, settings=build_settings, factory=session_factory,
                         token="t", play=False, build_id="build-crashed")
 
     record = read_build(session_factory, "build-crashed")
@@ -184,14 +185,14 @@ async def test_a_crash_inside_the_build_is_recorded_as_a_failure(plan, session_f
 
 
 async def test_a_run_that_fails_never_rewrites_a_record_it_did_not_create(
-        plan, session_factory, tmp_path):
+        plan, session_factory, tmp_path, build_settings):
     # Same id, record already there: creating it fails, and the stop is this
     # run's to report, not the other record's to suffer.
     theirs = owned_by(tmp_path / "theirs.lock")
     a_build_in_flight(session_factory, "build-taken", theirs)
 
     with pytest.raises(Exception):  # noqa: B017 - the duplicate key, whatever the driver calls it
-        await run_build(plan.id, settings=object(), factory=session_factory,
+        await run_build(plan.id, settings=build_settings, factory=session_factory,
                         token="t", play=False, build_id="build-taken")
 
     untouched = BuildRecord(session_factory, "build-taken").read()
@@ -200,13 +201,13 @@ async def test_a_run_that_fails_never_rewrites_a_record_it_did_not_create(
 
 
 async def test_a_cancelled_build_is_recorded_as_interrupted(plan, session_factory,
-                                                            monkeypatch):
+                                                            monkeypatch, build_settings):
     async def never_answers(_task, **_kwargs):
         await asyncio.Event().wait()
 
     monkeypatch.setattr(module, "run_task", never_answers)
     running = asyncio.create_task(run_build(
-        plan.id, settings=object(), factory=session_factory, token="t", play=False,
+        plan.id, settings=build_settings, factory=session_factory, token="t", play=False,
         build_id="build-cancelled"))
     record = BuildRecord(session_factory, "build-cancelled")
     for _ in range(200):

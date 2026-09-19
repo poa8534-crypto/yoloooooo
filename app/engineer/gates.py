@@ -24,6 +24,7 @@ guessed.
 from __future__ import annotations
 
 import enum
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from .doctrine import GameplayPath, GateName
@@ -52,14 +53,17 @@ class SystemState:
 
 
 def gate_states(*, order: list[str], depends: dict[str, list[str]],
-                outcomes: dict[str, str], current: str | None = None) -> list[SystemState]:
+                outcomes: dict[str, str], in_flight: Collection[str] = ()) -> list[SystemState]:
     """Every system's state, derived from what has actually happened.
 
     `outcomes` is the build record's own view: built, refused, error. Nothing
     here decides an outcome, it only works out what those outcomes imply for
     everything else -- which is why a system can be BLOCKED by a refusal five
-    places earlier without anyone writing that down.
+    places earlier without anyone writing that down. `in_flight` is every
+    system the Engineer has been asked for and not yet answered: several, when
+    systems that do not depend on each other are written at once.
     """
+    in_flight = set(in_flight)
     done = {name for name, status in outcomes.items() if status == "built"}
     broken = {name for name, status in outcomes.items() if status in ("refused", "error")}
 
@@ -72,7 +76,7 @@ def gate_states(*, order: list[str], depends: dict[str, list[str]],
             state = TaskState.FAILED
         elif name in done:
             state = TaskState.DONE
-        elif name == current:
+        elif name in in_flight:
             state = TaskState.BUILDING
         elif unmet:
             state = TaskState.BLOCKED

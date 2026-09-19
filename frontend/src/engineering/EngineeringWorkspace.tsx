@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import './engineering.css'
 import {
-  duration, elapsedSince, engineeringApi, NO_PACE, NO_PLAN, NO_STEERING, NOT_SENT,
+  duration, elapsedSince, engineeringApi, inFlight, NO_PACE, NO_PLAN, NO_STEERING, NOT_SENT,
   type BuildGraph, type BuildSummaryRow, type GraphNode, type StudioStatus,
 } from './api'
 import { ArchitectureMap } from './ArchitectureMap'
@@ -136,7 +136,10 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
   const done = counts.built ?? 0
   const total = counts.total ?? 0
   const live = Boolean(graph && LIVE.has(graph.status))
-  const current = graph?.nodes.find(node => node.id === graph.current) ?? null
+  const flying = inFlight(graph)
+  const writing = flying
+    .map(id => graph?.nodes.find(node => node.id === id))
+    .filter((node): node is GraphNode => Boolean(node))
   const pace = graph?.pace ?? NO_PACE
   const elapsed = pace.completed_at
     ? (Date.parse(pace.completed_at) - Date.parse(pace.started_at)) / 1000
@@ -206,19 +209,26 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
 
       <div className="context-strip">
         <span className="micro-label">Active generation context</span>
-        {current
+        {writing.length
           ? <>
-            <code>{current.studio_path || current.path}</code>
+            {writing.map(node => <code key={node.id}>{node.studio_path || node.path}</code>)}
             <span className="context-note">
-              the Engineer is writing this now{current.attempts
-                ? ` · ${current.attempts} attempts so far` : ''}
+              {writing.length === 1
+                ? `the Engineer is writing this now${writing[0].attempts
+                  ? ` · ${writing[0].attempts} attempts so far` : ''}`
+                : `the Engineer is writing these ${writing.length} at once`}
             </span>
           </>
           : <span className="context-note">
             {live ? 'Between systems' : 'Not running'}
           </span>}
         {graph && <span className="context-right">
-          Elapsed {duration(elapsed)} · {pace.attempts_spent} attempts spent
+          Elapsed {duration(elapsed)}
+          {/* Measured, both of them: the systems' own time beside the time it
+              took, which is what writing systems at once saved. */}
+          {pace.system_seconds_total
+            ? ` · ${duration(pace.system_seconds_total)} of system work` : ''}
+          {' · '}{pace.attempts_spent} attempts spent
         </span>}
       </div>
 
@@ -310,8 +320,8 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
                   onClick={() => setView(id)}>{label}</button>
               ))}
             </nav>
-            {graph?.current
-              ? <span className="panel-current">Working on {graph.current}</span>
+            {flying.length
+              ? <span className="panel-current">Working on {flying.join(', ')}</span>
               : <span className="panel-current quiet">
                 {live ? 'Between systems' : 'Not running'}</span>}
           </header>
@@ -323,7 +333,7 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
                 ? <PlayerFlow plan={graph.plan ?? NO_PLAN}
                   onSelect={name => setSelected(
                     graph.nodes.find(node => node.id === name) ?? null)} />
-                : <BuildOrderView plan={graph.plan ?? NO_PLAN} current={graph.current}
+                : <BuildOrderView plan={graph.plan ?? NO_PLAN} inFlight={flying}
                   onSelect={name => setSelected(
                     graph.nodes.find(node => node.id === name) ?? null)} />}
         </section>

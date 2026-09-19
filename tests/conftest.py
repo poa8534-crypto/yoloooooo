@@ -66,6 +66,20 @@ def _no_dashboard_token(monkeypatch):
 
 
 @pytest.fixture
+def build_settings():
+    """What run_build reads from settings itself.
+
+    Everything else a build needs it reaches through functions a test replaces
+    -- game_repo, build_gate, run_task -- so this carries only how many systems
+    may be written at once, and no provider limits. One at a time, which is the
+    order these tests were written against; a test about overlap says so.
+    """
+    from types import SimpleNamespace
+
+    return SimpleNamespace(engineer_parallel_systems=1, engineer_provider_concurrency="")
+
+
+@pytest.fixture
 def settings(tmp_path, monkeypatch):
     """Isolated settings carrying synthetic credentials.
 

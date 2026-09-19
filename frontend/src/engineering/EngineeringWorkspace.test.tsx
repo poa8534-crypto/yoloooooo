@@ -406,6 +406,53 @@ describe('the workspace', () => {
   })
 })
 
+describe('several systems written at once', () => {
+  const both = () => graph({
+    nodes: [node('ResearchService', 'built', [], 0), node('WaveService', 'building', [], 1),
+      node('InfectedService', 'building', [], 2)],
+    current: 'InfectedService', in_flight: ['WaveService', 'InfectedService'],
+  })
+
+  it('names every system in flight, not just the latest', async () => {
+    serve({ graph: both() })
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    await waitFor(() =>
+      expect(screen.getByText('Working on WaveService, InfectedService')).toBeTruthy())
+    expect(screen.getByText('ServerScriptService/Server/WaveService')).toBeTruthy()
+    expect(screen.getByText('ServerScriptService/Server/InfectedService')).toBeTruthy()
+    expect(screen.getByText('the Engineer is writing these 2 at once')).toBeTruthy()
+    const map = screen.getByTestId('architecture-map')
+    expect(within(map).getByLabelText(/WaveService, Building/)).toBeTruthy()
+    expect(within(map).getByLabelText(/InfectedService, Building/)).toBeTruthy()
+  })
+
+  it('reads a backend that names only one system as one in flight', async () => {
+    // Before the list existed the graph said `current` and nothing else. That
+    // is one system in flight, not none.
+    serve({ graph: graph({ in_flight: undefined }) })
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    await waitFor(() => expect(screen.getByText('Working on WaveService')).toBeTruthy())
+  })
+
+  it('puts the systems\' own time beside the time the build took', async () => {
+    serve({ graph: graph({ pace: { ...graph().pace, system_seconds_total: 4902 } }) })
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    await waitFor(() =>
+      expect(screen.getByText(new RegExp(`${duration(4902)} of system work`))).toBeTruthy())
+  })
+
+  it('says nothing about system work before any system has been measured', async () => {
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    await waitFor(() => expect(screen.getByText(/attempts spent/)).toBeTruthy())
+    expect(screen.queryByText(/of system work/)).toBeNull()
+  })
+})
+
 describe('the Studio explorer', () => {
   it('says nothing has been sent when no batch was queued', async () => {
     serve()
