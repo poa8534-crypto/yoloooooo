@@ -210,13 +210,14 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
         {graph?.status === 'ready_to_build' && (
           <button type="button" className="primary"
             style={{ marginLeft: 'auto', padding: '6px 14px', fontSize: '13px' }}
-            disabled={!studio?.plugin_connected || Boolean(busyBuilding)}
+            disabled={Boolean(busyBuilding)}
             onClick={async () => {
               setBusyBuilding(true)
               setError('')
               try {
                 const targetBpId = graph.blueprint_id || graph.build_id.replace(/^bp-/, '')
-                const started = await engineeringApi.startBuild(targetBpId, token, false)
+                const bridgeToken = token || studio?.token || ''
+                const started = await engineeringApi.startBuild(targetBpId, bridgeToken, false)
                 if (started?.build_id) {
                   setActive(started.build_id)
                   setGraph(null)
@@ -227,7 +228,7 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
                 setBusyBuilding(false)
               }
             }}>
-            {busyBuilding ? 'Starting...' : 'Build in Studio'}
+            {busyBuilding ? 'Starting...' : studio?.plugin_connected ? 'Build in Studio' : 'Start Build'}
           </button>
         )}
       </header>

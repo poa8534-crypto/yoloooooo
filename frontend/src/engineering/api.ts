@@ -227,6 +227,7 @@ export interface BuildSummaryRow {
 export interface StudioStatus {
   bridge: string
   plugin_connected: boolean
+  token?: string
   detail?: string
   latency_ms?: number
   bridge_version?: string
