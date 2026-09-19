@@ -141,9 +141,12 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
     .map(id => graph?.nodes.find(node => node.id === id))
     .filter((node): node is GraphNode => Boolean(node))
   const pace = graph?.pace ?? NO_PACE
+  // A clock only while the build runs. A finished build with no end time
+  // recorded has no measured duration, and a clock still counting beside it
+  // -- as one failed build's did, for hours -- is a number nobody measured.
   const elapsed = pace.completed_at
     ? (Date.parse(pace.completed_at) - Date.parse(pace.started_at)) / 1000
-    : pace.started_at ? elapsedSince(pace.started_at) : null
+    : live && pace.started_at ? elapsedSince(pace.started_at) : null
 
   return (
     <div className="engineering-workspace" data-testid="engineering-workspace">

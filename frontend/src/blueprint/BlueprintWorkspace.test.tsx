@@ -244,6 +244,54 @@ describe('the workspace', () => {
     expect(within(panel).getByText('Number 1')).toBeTruthy()
   })
 
+  it('says beside a disabled Build button what it is waiting for, and goes there', async () => {
+    // It sat disabled with its reasons only in the side panel, and was taken
+    // for broken: three features undecided and no systems worked out yet.
+    const unfinished = view({
+      blueprint: { ...view().blueprint, user_intent: 'a mine', suggestions: [feature('a')] },
+      readiness: {
+        percent: 71, ready: false, satisfied: [], missing: [
+          { key: 'systems', prompt: 'Keep at least one system; there is nothing to build otherwise' },
+          { key: 'features_decided', prompt: 'Decide on every suggested feature: a feature nobody chose is not a plan' },
+        ],
+      },
+      counts: { selected_features: 0, rejected_features: 0, undecided_features: 1, systems: 0 },
+    })
+    fetchMock.mockImplementation((url: string) => url.includes('proceed')
+      ? reply(unfinished)
+      : reply({ bridge: 'online', plugin_connected: true,
+        studio: { plugin_version: '0.4.1', studio_version: '0.739', place_name: 'Place1', mode: 'edit' } }))
+
+    render(<BlueprintWorkspace auditId="audit-1" title="NeuroMine" onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('blueprint-workspace')).toBeTruthy())
+    await userEvent.click(screen.getByRole('button', { name: 'Review' }))
+
+    const blockers = await screen.findByTestId('build-blockers')
+    expect(within(blockers).getByText(/Decide on every suggested feature/)).toBeTruthy()
+    expect(within(blockers).getByText(/Keep at least one system/)).toBeTruthy()
+    const button = screen.getByRole('button', { name: /build in roblox studio/i }) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+
+    await userEvent.click(within(blockers).getAllByRole('button', { name: 'Go to Features' })[0])
+    await waitFor(() => expect(screen.getByText(/still undecided/)).toBeTruthy())
+  })
+
+  it('says nothing is missing once the backend says ready', async () => {
+    const ready = view({
+      blueprint: { ...view().blueprint, user_intent: 'a mine', status: 'ready_to_build' },
+      readiness: { percent: 100, ready: true, missing: [], satisfied: [] },
+    })
+    fetchMock.mockImplementation((url: string) => url.includes('proceed')
+      ? reply(ready) : reply({ bridge: 'offline', plugin_connected: false }))
+
+    render(<BlueprintWorkspace auditId="audit-1" title="NeuroMine" onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('blueprint-workspace')).toBeTruthy())
+    await userEvent.click(screen.getByRole('button', { name: 'Review' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /build in roblox studio/i })).toBeTruthy())
+    expect(screen.queryByTestId('build-blockers')).toBeNull()
+  })
+
   it('blocks working out systems while a suggestion is undecided', async () => {
     const undecided = view({
       blueprint: { ...view().blueprint, suggestions: [feature('a')] },

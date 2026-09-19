@@ -464,6 +464,20 @@ async def start_build(request: BuildRequest) -> dict:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
 
     settings = get_settings()
+    # And for the same reason: a repository that belongs to another game is
+    # refused when the button is pressed, not minutes later in a record.
+    from ..engineer.runs import NotConfigured, game_repo
+    from .builds import another_games_repo, other_games
+
+    try:
+        repo = game_repo(settings)
+    except NotConfigured:
+        repo = None  # the build itself says what is wrong with the setting
+    others = other_games(repo, blueprint.id, SessionLocal) if repo is not None else {}
+    if others:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            another_games_repo(repo, blueprint.title, others))
+
     build_id = new_id()
 
     async def work() -> None:

@@ -444,6 +444,15 @@ describe('several systems written at once', () => {
       expect(screen.getByText(new RegExp(`${duration(4902)} of system work`))).toBeTruthy())
   })
 
+  it('never counts elapsed time for a build that has stopped without an end time', async () => {
+    serve({ graph: graph({ status: 'failed', current: null,
+      pace: { ...graph().pace, started_at: '2026-09-19T05:16:02', completed_at: '' } }) })
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    await waitFor(() => expect(screen.getByText(/attempts spent/)).toBeTruthy())
+    expect(screen.getByText(/attempts spent/).textContent).toMatch(/^Elapsed —/)
+  })
+
   it('says nothing about system work before any system has been measured', async () => {
     serve()
     render(<EngineeringWorkspace onNavigate={() => {}} />)

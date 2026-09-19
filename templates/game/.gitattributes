@@ -1,0 +1,12 @@
+# Luau sources are checked out with LF on every platform.
+#
+# Without this, Git's autocrlf converts them to CRLF on Windows checkout while
+# stylua.toml declares `line_endings = "Unix"`, so `stylua --check src` fails
+# on a fresh clone for a reason that has nothing to do with the code. The
+# agents run that check to decide whether to accept generated files, so it has
+# to mean what it says.
+*.luau text eol=lf
+*.lua  text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.md   text eol=lf

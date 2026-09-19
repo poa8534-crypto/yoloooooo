@@ -27,6 +27,7 @@ of it.
 from __future__ import annotations
 
 import asyncio
+import re
 import secrets
 import socket
 import subprocess
@@ -40,7 +41,7 @@ from ..engineer.catalog import load_services
 from ..engineer.land import land
 from ..engineer.runs import build_gate, game_repo, provider_limits, run_task
 from ..engineer.schedule import in_dependency_order
-from ..engineer.workspace import services_for_project
+from ..engineer.workspace import run_git, services_for_project
 from ..models import SystemState
 from ..ownership import Held, is_held, whoami
 from .compile import NotReady, compile_spec
@@ -215,7 +216,15 @@ def _record_stop(factory, build_id: str, owner: dict, exc: BaseException) -> Non
     try:
         record = BuildRecord(factory, build_id)
         stored = record.read()
-        if stored.get("owner") != owner or not is_running(BuildStatus(stored["status"])):
+        if stored.get("owner") != owner:
+            return
+        if not is_running(BuildStatus(stored["status"])):
+            # Already said why -- BuildFailed moves the build to FAILED with
+            # its reason -- but not when. A failed build with no end time was
+            # drawn with an elapsed time still counting, hours after it
+            # stopped.
+            if not stored.get("completed_at"):
+                record.update(completed_at=datetime.now(UTC).isoformat())
             return
         if isinstance(exc, Exception):
             record.move(BuildStatus.FAILED,
@@ -247,6 +256,11 @@ async def _build(blueprint_id: str, build_id: str, *, settings, factory, token: 
     record.event("queued", f"{len(spec.systems)} system(s) in the specification")
 
     repo = game_repo(settings)
+    others = other_games(repo, blueprint.id, factory)
+    if others:
+        reason = another_games_repo(repo, blueprint.title, others)
+        record.move(BuildStatus.FAILED, reason)
+        raise BuildFailed(reason)
     existing = {path.stem for root in ROOTS
                 for path in (repo / root).glob("*.luau")} if repo.exists() else set()
 
@@ -493,6 +507,44 @@ async def _await_result(record: BuildRecord, batch_id: str, token: str,
                      result=summary)
         return summary
     return None
+
+
+_LANDED_BY = re.compile(r"Generated for build (build-[0-9a-f]+)")
+
+
+def other_games(repo: Path, blueprint_id: str, factory) -> dict[str, str]:
+    """The blueprints other than this one whose systems `repo` already holds.
+
+    One repository is one game. Which repository a build writes into is one
+    line in .env, and left pointing at the last game it sends a new game's
+    systems in among the old one's, lands them on its master and pours the
+    mixture into Studio. Every landed system's commit names the build that
+    made it, and every build names its blueprint, so the repository can say
+    whose it is -- which beats remembering to edit a file.
+
+    A build this ledger has no record of cannot be attributed and is not
+    counted: this refuses only what it can show.
+    """
+    completed = run_git(["log", "--format=%B", "--grep=Generated for build"], repo, 30.0)
+    if completed.returncode != 0:
+        return {}  # no commits yet, so nothing landed yet
+    others: dict[str, str] = {}
+    for build_id in sorted(set(_LANDED_BY.findall(completed.stdout.decode("utf-8", "replace")))):
+        try:
+            record = BuildRecord(factory, build_id).read()
+        except KeyError:
+            continue
+        owner = record.get("blueprint_id")
+        if owner and owner != blueprint_id:
+            others[owner] = record.get("title") or owner
+    return others
+
+
+def another_games_repo(repo: Path, title: str, others: dict[str, str]) -> str:
+    return (f"{repo} already holds the systems of {', '.join(sorted(set(others.values())))}. "
+            f"One repository is one game: building {title} into it would land its systems "
+            "among those and send both to Studio. Make it a repository of its own "
+            "(python scripts/new_game.py <name>) and point GAME_PROJECT_DIR at that.")
 
 
 def settled(factory, record: dict) -> dict:

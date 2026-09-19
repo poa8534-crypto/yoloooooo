@@ -1,0 +1,24 @@
+# Project place file
+/game.rbxlx
+
+# Roblox Studio lock files
+/*.rbxlx.lock
+/*.rbxl.lock
+
+# Generated from default.project.json on demand. Regenerating it is one
+# command, and committing it produces a diff on every file move.
+sourcemap.json
+
+# Credentials. Never committed, never printed.
+.env
+.env.*
+!.env.example
+
+# Roblox API type definitions: ~800 KB of generated upstream output, and the
+# agents re-download them to stay current with the API.
+globalTypes.d.luau
+globalTypes.None.d.luau
+
+# selene's generated Roblox standard library, ~740 KB, from
+# `selene generate-roblox-std`.
+roblox.yml

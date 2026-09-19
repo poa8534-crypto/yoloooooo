@@ -23,6 +23,16 @@ const STEPS: Array<[Step, string]> = [
   ['systems', 'Systems'], ['review', 'Review'],
 ]
 
+// Where each of the backend's readiness requirements is met, by its key. The
+// Build button used to sit disabled with its reasons in a side panel, and was
+// taken for broken. "systems" is met on Features, where "Work out the systems"
+// lives. A requirement not listed here still shows its sentence, just without
+// a way there.
+const FIXED_ON: Record<string, Step> = {
+  intent: 'refine', features_decided: 'features', systems: 'features',
+  player_count: 'setup', platforms: 'setup', persistence: 'setup', acceptance: 'systems',
+}
+
 const SCOPES: Array<[BlueprintConfig['scope'], string]> = [
   ['quick_prototype', 'Quick prototype'],
   ['vertical_slice', 'Playable vertical slice'],
@@ -365,6 +375,21 @@ export function BlueprintWorkspace({ auditId, title, originalIdea, onClose }: {
                 </button>
                 {!connected && <p className="gate-hint">
                   Studio has to be connected before a build can be sent.</p>}
+                {!readiness.ready && <div className="gate-hint build-blockers"
+                  data-testid="build-blockers">
+                  <p>Not ready to build yet. Still to do:</p>
+                  <ul>
+                    {readiness.missing.map(item => {
+                      const where = FIXED_ON[item.key]
+                      const label = STEPS.find(([key]) => key === where)?.[1]
+                      return <li key={item.key}>
+                        {item.prompt}
+                        {where && label && <button type="button" className="link-button"
+                          onClick={() => setStep(where)}>Go to {label}</button>}
+                      </li>
+                    })}
+                  </ul>
+                </div>}
               </div>
 
               {build && (
