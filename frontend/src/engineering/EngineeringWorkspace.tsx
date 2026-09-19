@@ -29,7 +29,8 @@ const STATUS_LABEL: Record<string, string> = {
   validating: 'Validating', waiting_for_studio: 'Waiting for Studio',
   syncing: 'Syncing to Studio', building: 'Studio applying', playtesting: 'Playtesting',
   repairing: 'Repairing', succeeded: 'Complete', partial: 'Complete with refusals',
-  failed: 'Failed', cancelled: 'Cancelled', draft: 'Draft', blueprinting: 'Blueprinting',
+  failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted',
+  draft: 'Draft', blueprinting: 'Blueprinting',
   ready_to_build: 'Ready to build',
 }
 const LIVE = new Set(['queued', 'planning', 'generating', 'validating',

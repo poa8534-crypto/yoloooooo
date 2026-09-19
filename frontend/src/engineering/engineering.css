@@ -146,6 +146,9 @@
 .status-pill[data-status='failed'] {
   background: #fef2f2; color: var(--failed); border-color: rgba(185, 28, 28, 0.2);
 }
+.status-pill[data-status='interrupted'] {
+  background: var(--field); color: var(--ink-soft); border-color: var(--line-strong);
+}
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 @media (prefers-reduced-motion: reduce) {
   .status-pill[data-live='true'] .dot { animation: none; }
@@ -932,6 +935,7 @@
 
 .history-status[data-status='failed'] { background: #fbe4e4; color: #8a2020; }
 .history-status[data-status='succeeded'] { background: #e3f4e6; color: #1f6b33; }
+.history-status[data-status='interrupted'] { background: var(--field); color: var(--ink-soft); }
 
 @media (max-width: 900px) {
   .history-row {

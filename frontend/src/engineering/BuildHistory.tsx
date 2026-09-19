@@ -14,6 +14,7 @@ import { duration } from './api'
 const STATUS_LABEL: Record<string, string> = {
   queued: 'Queued', generating: 'Building', validating: 'Checking',
   applying: 'Syncing', succeeded: 'Done', failed: 'Failed', partial: 'Partial',
+  interrupted: 'Interrupted',
 }
 
 function when(iso: string): string {

@@ -41,7 +41,19 @@ ALLOWED: dict[S, frozenset[S]] = {
     S.PARTIAL: frozenset({S.BLUEPRINTING, S.QUEUED, S.REPAIRING}),
     S.FAILED: frozenset({S.BLUEPRINTING, S.QUEUED}),
     S.CANCELLED: frozenset({S.BLUEPRINTING, S.QUEUED}),
+    S.INTERRUPTED: frozenset({S.BLUEPRINTING, S.QUEUED}),
 }
+
+# The states in which a build is in flight: something is doing work for it.
+RUNNING: frozenset[S] = frozenset({S.QUEUED, S.PLANNING, S.GENERATING, S.VALIDATING,
+                                   S.WAITING_FOR_STUDIO, S.SYNCING, S.BUILDING,
+                                   S.PLAYTESTING, S.REPAIRING})
+
+# Any build in flight can be interrupted, because the process running it can
+# stop between any two steps. Derived rather than written into each row above,
+# so a running state added later cannot forget it.
+for _state in RUNNING:
+    ALLOWED[_state] = ALLOWED[_state] | {S.INTERRUPTED}
 
 # Which controls make sense where. The UI asks rather than deciding for itself,
 # so a control that would do nothing is never drawn (section 30).
@@ -62,6 +74,7 @@ CONTROLS: dict[S, tuple[str, ...]] = {
     S.PARTIAL: ("view_errors", "retry", "rollback", "refine", "open_studio"),
     S.FAILED: ("view_errors", "retry", "rollback", "edit_blueprint"),
     S.CANCELLED: ("retry", "edit_blueprint"),
+    S.INTERRUPTED: ("view_errors", "retry", "edit_blueprint"),
 }
 
 
@@ -97,6 +110,4 @@ def is_running(status: S) -> bool:
     The bridge serves one build at a time; a second build started while one is
     mid-sync would interleave operations in the same DataModel.
     """
-    return status in {S.QUEUED, S.PLANNING, S.GENERATING, S.VALIDATING,
-                      S.WAITING_FOR_STUDIO, S.SYNCING, S.BUILDING,
-                      S.PLAYTESTING, S.REPAIRING}
+    return status in RUNNING

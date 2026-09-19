@@ -51,6 +51,7 @@ const BUILD_STATUS_LABEL: Record<string, string> = {
   partial: 'Built, with refusals',
   failed: 'Build failed',
   cancelled: 'Cancelled',
+  interrupted: 'Stopped before it finished',
 }
 
 export function BlueprintWorkspace({ auditId, title, originalIdea, onClose }: {

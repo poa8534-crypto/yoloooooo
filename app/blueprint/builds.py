@@ -28,22 +28,25 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import socket
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
 from ..bridge.from_project import ROOTS, Unmappable, operations_for
+from ..db import lock_home
 from ..engineer.from_spec import SpecUnusable, tasks_from
 from ..engineer.catalog import load_services
 from ..engineer.land import land
 from ..engineer.runs import build_gate, game_repo, run_task
 from ..engineer.workspace import services_for_project
 from ..models import SystemState
+from ..ownership import Held, is_held, whoami
 from .compile import NotReady, compile_spec
 from .schemas import Blueprint, BuildStatus, GameBuildSpecification
 from .store import BlueprintStore
 from .steering import carried, notes_for
-from .transitions import check
+from .transitions import IllegalTransition, check, is_running
 
 PREFIX = "build:"
 
@@ -101,7 +104,8 @@ class BuildRecord:
     def key(self) -> str:
         return PREFIX + self.id
 
-    def create(self, blueprint: Blueprint, spec: GameBuildSpecification) -> dict:
+    def create(self, blueprint: Blueprint, spec: GameBuildSpecification,
+               owner: dict | None = None) -> dict:
         record = {
             "id": self.id, "blueprint_id": blueprint.id, "project_id": blueprint.project_id,
             "spec_id": spec.spec_id, "spec_revision": spec.revision,
@@ -109,6 +113,8 @@ class BuildRecord:
             "status": BuildStatus.QUEUED.value, "events": [],
             "systems": {}, "batch_id": None, "operations": 0,
             "created_at": datetime.now(UTC).isoformat(), "completed_at": None,
+            # The process running it and the lock it holds while it does.
+            "owner": owner,
         }
         with self.factory() as db:
             db.add(SystemState(key=self.key, value_json=record))
@@ -171,7 +177,59 @@ async def run_build(blueprint_id: str, *, settings, factory, token: str,
 
     Long-running on purpose -- the Engineer takes minutes per system -- so the
     caller starts it in the background and follows the event stream.
+
+    The build's lock is held for exactly as long as this runs, and the record
+    names it, so whoever reads the record can ask whether the build is still
+    running instead of believing what it last said. The lock is taken before
+    the record exists, so there is no moment when the record says the build is
+    running and nothing holds it.
     """
+    build_id = build_id or new_id()
+    lock = Held(lock_home(factory) / f"{build_id}.lock")
+    if not lock.acquire():
+        raise BuildFailed(f"{build_id} is already being run by another process")
+    owner = {**whoami(), "lock": str(lock.path)}
+    try:
+        return await _build(blueprint_id, build_id, settings=settings, factory=factory,
+                            token=token, play=play, owner=owner)
+    except BaseException as exc:
+        _record_stop(factory, build_id, owner, exc)
+        raise
+    finally:
+        lock.release()
+
+
+def _record_stop(factory, build_id: str, owner: dict, exc: BaseException) -> None:
+    """Say why a build stopped early, when the code that stopped it did not.
+
+    BuildFailed has already moved the build to FAILED with its reason, so a
+    build that is no longer running is left alone. Anything else that escaped
+    used to leave the record claiming the build was in progress: two of the
+    five found that way stopped exactly where a transition the state machine
+    then refused would have raised, inside a dashboard that went on serving.
+
+    Only a record this run created is touched. One that already existed under
+    the same id belongs to whoever made it.
+    """
+    try:
+        record = BuildRecord(factory, build_id)
+        stored = record.read()
+        if stored.get("owner") != owner or not is_running(BuildStatus(stored["status"])):
+            return
+        if isinstance(exc, Exception):
+            record.move(BuildStatus.FAILED,
+                        f"stopped by an error: {type(exc).__name__}: {exc}")
+        else:
+            record.move(BuildStatus.INTERRUPTED,
+                        f"stopped before it finished ({type(exc).__name__}): the process "
+                        "running it was shutting down, or its task was cancelled")
+        record.update(completed_at=datetime.now(UTC).isoformat())
+    except Exception:  # noqa: BLE001 - never mask the exception that stopped the build
+        pass
+
+
+async def _build(blueprint_id: str, build_id: str, *, settings, factory, token: str,
+                 play: bool, owner: dict) -> dict:
     import httpx
 
     from .api import BRIDGE_URL
@@ -183,8 +241,8 @@ async def run_build(blueprint_id: str, *, settings, factory, token: str,
     except NotReady as exc:
         raise BuildFailed(str(exc)) from None
 
-    record = BuildRecord(factory, build_id or new_id())
-    record.create(blueprint, spec)
+    record = BuildRecord(factory, build_id)
+    record.create(blueprint, spec, owner=owner)
     record.event("queued", f"{len(spec.systems)} system(s) in the specification")
 
     repo = game_repo(settings)
@@ -412,14 +470,59 @@ async def _await_result(record: BuildRecord, batch_id: str, token: str,
     return None
 
 
+def settled(factory, record: dict) -> dict:
+    """The record -- or, if it says it is running and nothing is running it,
+    the record after it has been made to say so.
+
+    A record holds what its process last wrote, and a killed process writes
+    nothing more. Five builds went on claiming to be generating, planning or
+    building for up to seventeen hours, and the dashboard drew each one as
+    work in progress. Whether anything still runs a build is asked of its lock, which
+    the operating system releases when the holder dies, however it dies.
+
+    Asked only of a lock on this machine, and only for a record that names
+    one. A record written before builds named their lock cannot be asked, and
+    is left saying what it says rather than guessed about.
+    """
+    try:
+        running = is_running(BuildStatus(record.get("status")))
+    except ValueError:
+        return record
+    owner = record.get("owner") or {}
+    if (not running or not owner.get("lock")
+            or owner.get("host") != socket.gethostname() or is_held(owner["lock"])):
+        return record
+
+    # Nothing holds it. The owner writes its last status before it lets go, so
+    # read again: it may have finished between the first read and the question.
+    build = BuildRecord(factory, record["id"])
+    current = build.read()
+    if not is_running(BuildStatus(current["status"])):
+        return current
+    events = current.get("events") or []
+    last = events[-1] if events else {}
+    try:
+        build.move(BuildStatus.INTERRUPTED, (
+            f"nothing is running this build any more: process {owner.get('pid')} stopped "
+            f"without recording why. The last thing it recorded was "
+            f"\"{str(last.get('detail', ''))[:200]}\" at {str(last.get('at', ''))[:19]}"))
+    except IllegalTransition:
+        return build.read()  # another reader settled it first
+    # When it stopped is not known, only that it had stopped by now. The last
+    # thing it recorded is the latest moment it is known to have been working;
+    # now would add every hour it sat unnoticed to how long it took.
+    return build.update(completed_at=last.get("at") or current.get("created_at"))
+
+
 def read_build(factory, build_id: str) -> dict:
-    return BuildRecord(factory, build_id).read()
+    return settled(factory, BuildRecord(factory, build_id).read())
 
 
 def list_builds(factory, blueprint_id: str = "", limit: int = 20) -> list[dict]:
     with factory() as db:
         rows = [row for row in db.query(SystemState).all() if row.key.startswith(PREFIX)]
-    records = [dict(row.value_json) for row in rows]
+        stored = [dict(row.value_json) for row in rows]
+    records = [settled(factory, record) for record in stored]
     if blueprint_id:
         records = [record for record in records if record.get("blueprint_id") == blueprint_id]
     records.sort(key=lambda record: record["created_at"], reverse=True)

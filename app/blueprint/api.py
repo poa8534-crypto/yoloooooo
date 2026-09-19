@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 
 import httpx
@@ -472,14 +473,9 @@ async def start_build(request: BuildRequest) -> dict:
         except BuildFailed:
             pass  # already recorded on the build, with its reason
         except Exception:  # noqa: BLE001
-            from .builds import BuildRecord
-            from .schemas import BuildStatus as S
-
-            record = BuildRecord(SessionLocal, build_id)
-            try:
-                record.event("failed", "the build stopped unexpectedly", status=S.FAILED.value)
-            except KeyError:
-                pass
+            # run_build has recorded the failure on the build itself, through
+            # the state machine. What is left is the traceback, for the log.
+            logging.getLogger("venture-agents").exception("build %s stopped", build_id)
 
     asyncio.create_task(work())
     return {"build_id": build_id, "blueprint_id": request.blueprint_id,

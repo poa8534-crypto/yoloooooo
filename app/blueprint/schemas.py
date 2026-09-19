@@ -112,10 +112,15 @@ class BuildStatus(str, enum.Enum):
     PARTIAL = "partial"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # Stopped without finishing and without failing: the process running it
+    # went away, or its task was cancelled. Distinct from FAILED because
+    # nothing about the build was found wanting -- it was simply not finished.
+    INTERRUPTED = "interrupted"
 
 
 TERMINAL_STATUSES = frozenset({BuildStatus.SUCCEEDED, BuildStatus.PARTIAL,
-                               BuildStatus.FAILED, BuildStatus.CANCELLED})
+                               BuildStatus.FAILED, BuildStatus.CANCELLED,
+                               BuildStatus.INTERRUPTED})
 
 
 # ---- what the architect proposes ------------------------------------------
