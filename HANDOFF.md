@@ -155,6 +155,18 @@ playable before breadth; do not build features nobody asked for.
 - **The watchdog asks the dashboard first.** If anything answers on the
   dashboard's address, whichever launcher started it, the watchdog does
   nothing and logs nothing. Every line in `data/watchdog.log` is an outage.
+- **Systems are written several at once.** `ENGINEER_PARALLEL_SYSTEMS`
+  (default 3) is how many; a system still starts only after every dependency
+  it has in the build has finished AND landed, because its worktree is cut
+  from master when it starts and that is how it sees their real code. Not
+  waves: a system starts the moment its own dependencies are done. Landing
+  stays one at a time (it checks the whole project in the main checkout).
+  `ENGINEER_PROVIDER_CONCURRENCY` (default `ollama=1`) caps a provider across
+  the build; a call waits for its provider rather than falling back to a
+  weaker one because the first was busy. Set 1 to get the old one-at-a-time
+  build exactly.
+- **Every `agy` call costs about 25,000 prompt tokens of its own overhead**,
+  measured on a one-line prompt. Attempts are not free even when tiny.
 - **Records are UTC; logs are local time (UTC+5:30).** Comparing one with the
   other without converting produced a wrong "seven hours" that was 2.2.
 - **The venv's `python.exe` on Windows is a launcher**, not the interpreter:
@@ -186,12 +198,10 @@ playable before breadth; do not build features nobody asked for.
 - The fine-tune needs a merged GGUF; the adapter alone is not loadable.
 - `TaskState.TESTING` exists in the model but nothing sets it: the gate has no
   separate test phase yet.
-- The build runner is **sequential**. The provider chain is a fallback chain,
-  not a pool, so adding more model accounts does not currently make a build
-  faster. Parallel waves over the dependency graph is the change that would.
-  Measured on ascent: 5 waves, widest 6; 4902 s of system time, of which the
-  longest chain through the waves is 1797 s -- about 2.7x at best, before
-  rate limits and landing one system at a time.
+- A pool of model **accounts**. Systems are now written several at once (see
+  section 7), but every `agy` call uses the one account in the keyring, so
+  more accounts would not add capacity without a way to spread calls across
+  them.
 
 ## 10. House rules
 

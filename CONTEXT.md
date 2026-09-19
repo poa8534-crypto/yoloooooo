@@ -163,6 +163,39 @@ not keep a dead build alive.
 
 ---
 
+## Phase 8 — writing systems at once
+
+The runner walked `spec.build_order` one system at a time. Ascent took 4948 s
+from first event to last, of which 4902 s was the systems' own time and 43 s
+was landing -- 2.5 to 2.9 s a system, because the whole-project check is fast.
+
+**Measured before building it.** Three `agy` calls at once all answered, with
+no errors and no 429s: one alone took 17.0 s, three together 33.9 s of wall
+time. Not fully concurrent, not queued. The same probe showed every `agy` call
+spends about 25,000 prompt tokens of its own before it reads a word of ours.
+
+**Not waves.** Ascent's real graph is five layers deep and six wide, but
+waiting for a whole layer holds the next one hostage to its slowest system. A
+system now starts the moment its own dependencies have finished -- landed or
+refused, because a system learns what its dependencies export from the
+project its worktree is cut from. On ascent's graph that makes the longest
+possible build 1669 s, against 1797 s for waves. From the measured per-system
+times (a projection: it assumes a system takes as long alongside others as
+alone), one at a time reproduces the real 82.4 minutes, two at once gives 43,
+three 34, six 28. Three is the default, because three is what was measured.
+
+Landing stays one at a time behind a lock, together with the Services-module
+merge that reads the checkout it writes to. Provider limits are per build and
+a call waits for its own provider: a system is never written by Ollama
+because `agy` happened to be busy. Git lock collisions between runs sharing
+one `.git` are retried briefly; nothing else is.
+
+Proved the scheduler with tests built to deadlock if a claim is false -- two
+systems that each wait for the other to be inside, a system that will not
+finish until a later-layer system has started -- and proved the build loop by
+disabling parallelism (the overlap test times out) and the landing lock (two
+landings overlap).
+
 ## Bugs worth remembering
 
 Ordered by how much time they cost, not by when they happened.
@@ -202,8 +235,9 @@ Ordered by how much time they cost, not by when they happened.
 17. **`UnicodeEncodeError`** from selene's box-drawing characters on Windows.
 18. **f-string `{DOCTRINE}`** evaluated at import; escaped to `{{DOCTRINE}}`.
 19. **Heredocs mangle Windows paths.** `C:\Users` inside a bash heredoc is a
-    unicode escape error. Recurred about eight times. Write patch scripts to a
-    file.
+    unicode escape error. Recurred about eight times, and once more in phase 8
+    as a `\\n` that arrived in the file as a real line break inside an
+    f-string. Write patch scripts to a file.
 20. **`/api/builds` shipped every event of every build to the browser.** Now it
     returns summaries with counts computed backend-side.
 21. **A missing field in a usage response white-screened the workspace.** Found
@@ -250,12 +284,11 @@ The habit that found most of these: **measure, do not assume.**
 
 ## Open threads
 
-- Parallel build waves over the dependency graph. The runner walks
-  `spec.build_order` as one flat list, so extra model capacity currently buys
-  fallback, not speed. Measured on ascent: 5 waves (widest 6) instead of 16
-  steps; 4902 s of system time sequentially, 1797 s along the longest chain
-  through the waves -- a ceiling of about 2.7x before rate limits and landing
-  one system at a time.
+- Parallel builds are built but not yet measured on a real build. The
+  projection says about 34 minutes for ascent at three at once; the first real
+  run will say how much of that survives rate limits and CPU contention. The
+  dashboard shows the systems' own time beside the elapsed time, so the answer
+  is on screen rather than estimated.
 - `engineer-run:` records can still be left saying `running` by a killed
   process. Nothing displays them today; if something ever does, they need the
   same lock the builds have.
