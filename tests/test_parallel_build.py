@@ -67,6 +67,8 @@ class Stage:
         self.release = asyncio.Event()
         self.release.set()
         self.slots_seen: list[object] = []
+        # Which repository each stage was handed.
+        self.repos: list[tuple[str, object]] = []
 
         repo = tmp_path / "game"
         (repo / "src" / "server").mkdir(parents=True)
@@ -84,18 +86,21 @@ class Stage:
 
     async def engineer(self, task, **kwargs):
         self.slots_seen.append(kwargs.get("slots"))
+        self.repos.append(("engineer", kwargs.get("repo")))
         self.note("asked", task.system)
         if task.system in ("AlphaService", "BetaService"):
             await self.together.wait()
             await self.release.wait()
         return Built(task.system)
 
-    def files(self, _repo, branch: str) -> dict[str, str]:
+    def files(self, repo, branch: str) -> dict[str, str]:
+        self.repos.append(("read", repo))
         name = {"engineer/alphaservice": "AlphaService", "engineer/betaservice": "BetaService",
                 "engineer/gammaservice": "GammaService"}[branch]
         return {f"src/server/{name}.luau": "--!strict\nreturn {}\n"}
 
-    def land(self, _repo, files, *, message, verify=None, branch="master"):
+    def land(self, repo, files, *, message, verify=None, branch="master"):
+        self.repos.append(("land", repo))
         with self.guard:
             self.landing += 1
             self.most_landing = max(self.most_landing, self.landing)
@@ -230,3 +235,20 @@ def test_provider_limits_are_read_as_written(text, expected):
 def test_a_provider_limit_that_would_silently_not_apply_is_refused(text):
     with pytest.raises(NotConfigured):
         provider_limits(at_once(3, text))
+
+
+async def test_every_stage_of_a_build_works_in_the_one_repository_it_resolved(
+        plan, session_factory, monkeypatch, tmp_path):
+    """The build found the game's own repository by its title, but the
+    Engineer was never told: it cut every worktree from GAME_PROJECT_DIR,
+    another game's repository, and the landing then read those branches from
+    the right one, found nothing, and landed nothing for eleven accepted
+    systems."""
+    stage = Stage(monkeypatch, tmp_path)
+    own = tmp_path / "parallel-lab"
+    (own / ".git").mkdir(parents=True)
+
+    await build(plan, session_factory, at_once(3), "build-own-repo")
+
+    assert {stage for stage, _repo in stage.repos} == {"engineer", "read", "land"}
+    assert {repo for _stage, repo in stage.repos} == {own}

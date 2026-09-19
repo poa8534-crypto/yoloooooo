@@ -318,8 +318,8 @@ def build_model_call(settings: Settings, clients: list[tuple[str, object]],
     return chain(calls)
 
 
-def build_gate(settings: Settings) -> Gate:
-    repo = game_repo(settings)
+def build_gate(settings: Settings, repo: Path | None = None) -> Gate:
+    repo = repo or game_repo(settings)
     return Gate(load_services(settings.roblox_services_file), repo / settings.luau_definitions_file,
                 runner=run_command, timeout=settings.engineer_tool_timeout_seconds,
                 mode=settings.engineer_gate)
@@ -374,15 +374,20 @@ async def plan_from_audit(audit_id: str, *, settings: Settings, factory,
 
 
 async def run_task(task: EngineeringTask, *, settings: Settings, factory, on_event=None,
-                   slots: Mapping[str, asyncio.Semaphore] | None = None) -> EngineerResult:
+                   slots: Mapping[str, asyncio.Semaphore] | None = None,
+                   repo: Path | None = None) -> EngineerResult:
     """One engineer run, end to end, recorded as it goes.
 
     `slots` are the build's per-provider limits, when several systems are
     being written at once; see build_model_call.
+
+    `repo` is the game the build resolved. Without it the worktree is cut from
+    GAME_PROJECT_DIR, which is how a build for one game wrote every system on
+    branches of another's repository and then landed nothing.
     """
     design = load_design(factory, task.audit_id)
-    repo = game_repo(settings)
-    gate = build_gate(settings)
+    repo = repo or game_repo(settings)
+    gate = build_gate(settings, repo)
     worktrees = settings.engineer_worktree_dir or repo.parent / f"{repo.name}-worktrees"
     run_id = run_name(task.system)
     runs = EngineerRuns(factory)

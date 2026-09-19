@@ -1094,7 +1094,7 @@ def system_source(build_id: str, system: str) -> dict:
     rejected attempt as though it had passed.
     """
     from ..db import SessionLocal
-    from ..engineer.runs import game_repo
+    from ..engineer.runs import resolve_game_repo
     from .builds import files_on_branch, read_build
 
     try:
@@ -1113,7 +1113,8 @@ def system_source(build_id: str, system: str) -> dict:
                 "lines": 0}
 
     reference = outcome.get("commit") or outcome.get("branch") or ""
-    repo = game_repo(get_settings())
+    # The build's own game, resolved the way the build resolved it.
+    repo = resolve_game_repo(get_settings(), _load(record["blueprint_id"]))
     files = files_on_branch(repo, reference) if reference else {}
     for path, source in files.items():
         if path.rsplit("/", 1)[-1].removesuffix(".luau") == system:

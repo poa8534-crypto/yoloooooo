@@ -317,7 +317,7 @@ async def _build(blueprint_id: str, build_id: str, *, settings, factory, token: 
         not carry -- and all three happened on one real build. So the question
         asked before keeping a file is about the project, not the file.
         """
-        report = build_gate(settings).run(root)
+        report = build_gate(settings, repo).run(root)
         if report.passed:
             return True, ""
         # `failed` is a property, not a method. Calling it raised inside the
@@ -352,7 +352,8 @@ async def _build(blueprint_id: str, build_id: str, *, settings, factory, token: 
                          f"{task.system}: {len(steering)} directive(s) carried into the prompt")
         record.event("generating", f"{task.system}: asking the Engineer")
         try:
-            result = await run_task(task, settings=settings, factory=factory, slots=slots)
+            result = await run_task(task, settings=settings, factory=factory, slots=slots,
+                                    repo=repo)
         except Exception as exc:  # noqa: BLE001 - reported, never swallowed
             systems[task.system] = {"status": "error", "detail": str(exc)[:500]}
             record.event("system_failed", f"{task.system}: {str(exc)[:300]}",

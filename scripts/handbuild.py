@@ -23,7 +23,8 @@ and neither can the next build.
     python scripts/handbuild.py sync                    # into Studio, and play it
 
 The game, the specification and the base branch all come from configuration,
-so this works for whichever project GAME_PROJECT_DIR points at.
+so this works for whichever game the newest blueprint is for: its repository is
+found from the blueprint, the same way a build finds it.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ from app.config import get_settings  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.engineer.from_spec import task_for  # noqa: E402
 from app.engineer.land import land  # noqa: E402
-from app.engineer.runs import build_gate, game_repo  # noqa: E402
+from app.engineer.runs import build_gate, resolve_game_repo  # noqa: E402
 from app.engineer.cli import use_utf8  # noqa: E402
 from app.engineer.workspace import Worktree, read_normalized, services_for_project  # noqa: E402
 
@@ -55,7 +56,7 @@ def _settings():
     return get_settings()
 
 
-def _spec() -> GameBuildSpecification:
+def _chosen():
     """The specification for the game this repository is pointed at.
 
     The newest blueprint that compiles and whose systems match the project, so
@@ -67,11 +68,22 @@ def _spec() -> GameBuildSpecification:
         if not blueprint.systems:
             continue
         try:
-            return compile_spec(blueprint)
+            return blueprint, compile_spec(blueprint)
         except Exception as exc:  # noqa: BLE001 - reported, not swallowed
             problems.append(f"{blueprint.title}: {type(exc).__name__}: {str(exc)[:160]}")
     raise SystemExit("no blueprint compiles into a specification:\n  "
                      + "\n  ".join(problems[:5]))
+
+
+def _game() -> tuple[GameBuildSpecification, Path]:
+    """The specification, and the repository that game lives in.
+
+    Resolved from the blueprint the way a build resolves it, not read from
+    GAME_PROJECT_DIR alone: a setting left pointing at the last game would
+    otherwise pair one game's plan with another game's code.
+    """
+    blueprint, spec = _chosen()
+    return spec, resolve_game_repo(_settings(), blueprint)
 
 
 def _built(repo: Path) -> set[str]:
@@ -149,8 +161,7 @@ def _blocked_by(system: SpecSystem, repo: Path) -> list[str]:
 # ---- the commands ----------------------------------------------------------
 
 def command_status(_args) -> int:
-    repo = game_repo(_settings())
-    spec = _spec()
+    spec, repo = _game()
     built = _built(repo)
     remaining = _remaining(spec, repo)
 
@@ -175,8 +186,7 @@ def command_status(_args) -> int:
 
 
 def command_brief(args) -> int:
-    repo = game_repo(_settings())
-    spec = _spec()
+    spec, repo = _game()
 
     if args.system:
         wanted = [_system(spec, args.system)]
@@ -211,8 +221,7 @@ def command_brief(args) -> int:
 
 def command_open(args) -> int:
     settings = _settings()
-    repo = game_repo(settings)
-    spec = _spec()
+    spec, repo = _game()
     system = _system(spec, args.system)
 
     existing = _find_worktree(repo, system)
@@ -241,8 +250,7 @@ def command_open(args) -> int:
 
 def command_check(args) -> int:
     settings = _settings()
-    repo = game_repo(settings)
-    spec = _spec()
+    spec, repo = _game()
     system = _system(spec, args.system)
 
     worktree = _find_worktree(repo, system)
@@ -252,7 +260,7 @@ def command_check(args) -> int:
     if not written.is_file():
         raise SystemExit(f"nothing written yet at {written}")
 
-    gate = build_gate(settings)
+    gate = build_gate(settings, repo)
 
     # The Services module the project would need with this file in it, written
     # into the worktree before the checks run, exactly as the generated path
@@ -298,8 +306,7 @@ def command_check(args) -> int:
 
 def command_land(args) -> int:
     settings = _settings()
-    repo = game_repo(settings)
-    spec = _spec()
+    spec, repo = _game()
     system = _system(spec, args.system)
 
     worktree = _find_worktree(repo, system)
@@ -309,7 +316,7 @@ def command_land(args) -> int:
     if not written.is_file():
         raise SystemExit(f"nothing written yet at {written}")
 
-    gate = build_gate(settings)
+    gate = build_gate(settings, repo)
 
     def project_check(root: Path) -> tuple[bool, str]:
         """Does the WHOLE project still build with this file in it?"""
@@ -375,8 +382,7 @@ def command_sync(args) -> int:
     from app.bridge.from_project import read_project
     from app.bridge.pairing import read_token
 
-    repo = game_repo(_settings())
-    spec = _spec()
+    spec, repo = _game()
     token = read_token(ROOT)
     if not token:
         raise SystemExit("the bridge has no pairing token yet: start it once with "

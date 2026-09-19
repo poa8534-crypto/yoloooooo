@@ -45,7 +45,7 @@ from app.blueprint.store import BlueprintStore  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.engineer.runs import (  # noqa: E402
-    build_clients, build_model_call, load_design, usage_recorder,
+    build_clients, build_model_call, load_design, resolve_game_repo, usage_recorder,
 )
 
 problems: list[str] = []
@@ -66,7 +66,6 @@ class _AlreadyPlanned(Exception):
 
 async def main(audit: str, prompt: str) -> int:
     settings = get_settings()
-    line(f"game repository: {settings.game_project_dir}")
     store = BlueprintStore(SessionLocal)
     design = load_design(SessionLocal, audit)
     title = str((design.get("proposal") or {}).get("concept_title") or "Idea")
@@ -76,6 +75,9 @@ async def main(audit: str, prompt: str) -> int:
     blueprint = store.for_audit(audit) or store.create(audit_id=audit, title=title)
     blueprint = store.save(blueprint.model_copy(update={"user_intent": prompt or blueprint.user_intent}))
     line(f"blueprint {blueprint.id} revision {blueprint.revision}")
+    # The repository the build will resolve, not GAME_PROJECT_DIR as written:
+    # the two differ whenever the setting still names the previous game.
+    line(f"game repository: {resolve_game_repo(settings, blueprint)}")
 
     planned = bool(blueprint.systems and blueprint.player_journey and blueprint.gameplay_path)
     if planned:

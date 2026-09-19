@@ -337,7 +337,7 @@ def test_the_build_verifier_reports_what_the_gate_refused(session_factory, tmp_p
                             "not found in table 'ResearchService'"),
             ))
 
-    monkeypatch.setattr(module, "build_gate", lambda _settings: Gate())
+    monkeypatch.setattr(module, "build_gate", lambda _settings, _repo=None: Gate())
 
     store = BlueprintStore(session_factory)
     plan = store.create(audit_id="audit-1", title="Lab")
