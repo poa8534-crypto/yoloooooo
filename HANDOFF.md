@@ -115,6 +115,38 @@ The same functions run behind the dashboard's build button. The script exists so
 a run can be driven without handing a credential to something that has no
 business holding one.
 
+## 5a. When the provider runs out: building by hand
+
+When Antigravity answers "Individual quota reached", a build does not stop. It
+walks the rest of the plan and refuses each system in about twenty seconds.
+`scripts/handbuild.py` is the way to carry on without it. Use it **only when
+the owner asks**: the rule is still that the agents write the game.
+
+```bash
+python scripts/handbuild.py status                # what is left, and what blocks each
+python scripts/handbuild.py brief <System>        # the Engineer's own task, verbatim
+python scripts/handbuild.py open <System>         # a worktree cut from master
+python scripts/handbuild.py check <System>        # format, then the six checks
+python scripts/handbuild.py land <System>         # onto master, project verified
+```
+
+- `open` makes `<slug>-handbuilt-<hex>` under the game's `-worktrees` folder.
+  Cut it only after everything the system depends on has landed, or it is
+  written against code that is gone.
+- `check` formats every Luau file the worktree changed, not only the system's
+  own. A data row added to `ColonyConfig` for a system is landed with it, so
+  it has to pass the format check too.
+- `land` lands every `.luau` file the worktree gained under `src/` or `tests/`,
+  so the system's behaviour spec lands with it. The Services modules are
+  regenerated for the whole project rather than taken from the worktree.
+- A spec is `tests/<System>.spec.luau`. It runs under Lune through
+  `tests/harness.luau`, where `task.wait` returns at once and `task.spawn` runs
+  synchronously, so a spec must never call a `Start()` that loops. Pass time
+  and randomness in as arguments, and test the methods.
+- Prove each spec by breaking the code it guards and watching it fail with the
+  right message, then restoring. A spec that has never failed has not been
+  shown to check anything.
+
 ## 6. The doctrine
 
 `app/engineer/instruction.md` is the Engineer's permanent instructions, loaded
@@ -189,6 +221,22 @@ playable before breadth; do not build features nobody asked for.
 - **The venv's `python.exe` on Windows is a launcher**, not the interpreter:
   it runs the base Python as a child, inside a job that kills both together.
   The PID that holds a lock or a socket is the child's.
+- **luau-lsp infers a module's `self` from the body of each method**, so a
+  method that calls `self:Other()` can pass type-checking in its own module and
+  fail when a sibling calls it: "Expected this to be exactly 'X', but got
+  'Folder?'". There are two fixes, depending on whose file it is.
+  - In the module that owns the method, annotate the local that holds the
+    result: `local descent: Descent? = self:Active(player)`.
+  - In a caller, go through a cast and check the answer instead of trusting
+    it: `local found = (ColonyWorldService :: any):GetSpawnLocation()`, then
+    `typeof(found) == "Instance" and found:IsA(...)`. SpawnManager, IncubationService and
+    ServerEventService all do this.
+- **A player's state must be written to their profile as it changes.**
+  SaveDataService saves the profile when a player leaves, before any later
+  system's leaving handler runs. So state that is held in memory and written
+  out "on leave" never reaches the save. Keep each system's state under its
+  own profile field and write it through `SaveDataService:SetField` whenever
+  it changes.
 
 ## 8. The current state
 
@@ -202,10 +250,20 @@ playable before breadth; do not build features nobody asked for.
   Nothing reads it. Ignore the whole folder.
 - `C:\RobloxGames\fisherman` is the previous finished project: 11 systems, also
   zero refusals.
-- `C:\RobloxGames\neuromine` is the next game, NeuroMine: Symbiotic
-  Extraction (blueprint `452bb7a75e7ef765`): made by `scripts/new_game.py`,
-  toolchain only, `verify.ps1` passing. Its blueprint still needs three feature
-  decisions and the systems worked out before it can build.
+- `C:\RobloxGames\neuromine` is the current game, NeuroMine: Symbiotic
+  Extraction (blueprint `452bb7a75e7ef765`, specification revision 38). All
+  **51 of 51 systems are on master**.
+  - The Engineer wrote six of them before Antigravity's quota ran out. The
+    other forty-five were written by hand through `scripts/handbuild.py`, at
+    the owner's request, over two sessions ending 2026-09-19.
+  - Measured on master at that date: `verify.ps1` exits 0, with all six checks
+    passing, 0 selene warnings and 442 behaviour checks.
+  - The gate and the Lune specs have checked it. Neither of them plays the
+    game, and `handbuild.py` has no playtest step. Sync it to Studio and play
+    it before trusting it as a game.
+  - The place file `neuromine.rbxl` sits untracked in the repository, because
+    the template's `.gitignore` only ignores `game.rbxlx`. Do not commit it.
+  - Section 9 lists what these systems record that nothing reads yet.
 - The owner drives sessions from a Mac as well as this PC: Claude Code Remote
   Control links the running session to claude.ai, and the dashboard is on the
   tailnet. Both need this PC awake with the Claude app open; Studio itself is
@@ -223,6 +281,33 @@ playable before breadth; do not build features nobody asked for.
   section 7), but every `agy` call uses the one account in the keyring, so
   more accounts would not add capacity without a way to spread calls across
   them.
+- **NeuroMine's loose ends.** These come from the last seven hand-built
+  systems, whose headers say what they record that nothing reads yet. On
+  2026-09-19 master was checked for each one. No module requires
+  EvolutionService, SpecializationService, BrainrotIndexService or
+  ServerEventService, and nothing in `src/client` names any of the remotes
+  below. Each one is a design decision for the owner's team before it is code:
+  - No system reads these yet:
+    - EvolutionService's `modelScale` and `quirkSlots`.
+    - SpecializationService's `Multiplier()`.
+    - BrainrotIndexService's `Bonus()`.
+    - ServerEventService's `Modifier()`. During a golden rush, MiningService
+      pays the same gold as at any other time.
+  - Nothing calls EvolutionService's `AddExperience` or `RecordMeal`, so
+    companions gain no XP from play.
+  - ServerEventService's meteor fragments can be seen but not mined.
+    MiningService has no node kind for them, and no loot table says what a
+    fragment pays.
+  - GenePodService launches a satchel of ore. There are no embryos to rescue,
+    because the satchel holds nothing else.
+  - There is no client UI for the remotes these systems added:
+    - `MetabolismFeed` and `MetabolismClaim`
+    - `EvolveCompanion` and `EvolutionProgress`
+    - `Rebirth` and `AllocateSpecialization`
+    - `LaunchGenePod`
+    - `CraftRecipe`
+    - `BrainrotIndex`
+    - `ServerEventChanged`
 
 ## 10. House rules
 

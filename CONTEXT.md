@@ -223,6 +223,50 @@ hours later: a build that failed through `BuildFailed` never recorded when. It
 records it now, the dashboard counts only while a build runs, and the one
 record was given the time of its last event.
 
+## Phase 10 — the provider ran out, and the rest was built by hand
+
+NeuroMine's build got six systems in before Antigravity answered "Individual
+quota reached". A build does not stop when that happens. It went on refusing
+systems, about twenty seconds each, and landed nothing more. At the owner's
+request, the other forty-five were written by hand over two sessions. They went through
+`scripts/handbuild.py`, which uses the same worktree, the same six checks and
+the same landing as a generated system. By 2026-09-19 all 51 were on master.
+`verify.ps1` passed with 442 behaviour checks.
+
+The route itself is in HANDOFF section 5a. What building on it taught:
+
+- **The inventory refused most of what the game pays out.** Recipes and loot
+  tables named eight items, such as `bio_sludge`, `gene_splicer_pod` and
+  `void_essence`, that nothing defined. The pouch took only ores, so every
+  one of them was dropped without an error. ColonyConfig now has an `Items`
+  catalog and `IsHoldable`. A spec walks every recipe and every loot table.
+  Removing one item from the catalog fails it by name.
+- **State written on leave is never saved.** SaveDataService saves before
+  later leaving handlers run. Each system writes its own profile field as its
+  state changes.
+- **The first draft of the metabolism system lost fuel in four ways.** A claim
+  emptied the hopper whatever the pouch accepted. Nothing ever ticked, so
+  nothing was produced. A second ore replaced the first, and a leftover below
+  one unit vanished. Each is now a spec case. Each case was proved by putting
+  the bug back.
+- **luau-lsp's `self` inference** rejected cross-module calls to methods that
+  type-check alone (HANDOFF section 7). It stopped three systems at the gate
+  once each: GenePodService, BrainrotIndexService and ServerEventService. The
+  project already had the answer, in SpawnManager.
+- **`check` formatted only the system's own file.** So a ColonyConfig row
+  added for EvolutionService failed stylua after the system itself passed. It
+  now formats every file that will land.
+- **Specs were proved by mutation.** The code a spec guards was broken on
+  purpose, the spec failed with the expected message, and the code was
+  restored. For ServerEventService the three breaks were:
+  - Nodes never destroyed. The failure was "3 of the meteor's nodes outlived
+    it".
+  - A boundary roll given to the band below.
+  - The next draw never rescheduled.
+
+What the hand-built systems record but nothing reads yet is listed in HANDOFF
+section 9. Nothing in this phase played the game.
+
 ## Bugs worth remembering
 
 Ordered by how much time they cost, not by when they happened.
@@ -288,6 +332,14 @@ Ordered by how much time they cost, not by when they happened.
     on forever.
 28. **A new repository had no `src/server`** -- git does not carry an empty
     folder -- and Rojo refused the project.
+29. **Loot the pouch could not hold was dropped without an error.** Eight
+    items were named by recipes and loot tables and defined nowhere. Found by
+    a spec that walks every table, not by playing. See phase 10.
+30. **luau-lsp inferred `self` per method**, and rejected a sibling's call to
+    a method that passed in its own module. Annotate the local in the owner,
+    or cast and check in the caller.
+31. **The hand-build check formatted one file of several**, so data added to
+    a shared module failed the gate after the system passed it.
 
 ## Method
 
@@ -318,6 +370,12 @@ The habit that found most of these: **measure, do not assume.**
 
 ## Open threads
 
+- NeuroMine is 51 of 51 on master, and nothing in the hand-build played it.
+  The next honest step is to sync it to Studio and play it. After that, the
+  owner's team decides the loose ends in HANDOFF section 9.
+- `templates/game/.gitignore` ignores only `game.rbxlx`. A place saved under
+  the game's own name, such as `neuromine.rbxl`, shows up as a new file, one
+  `git add .` away from a binary in the history.
 - Parallel builds are built but not yet measured on a real build. The
   projection says about 34 minutes for ascent at three at once; the first real
   run will say how much of that survives rate limits and CPU contention. The
