@@ -45,7 +45,7 @@ end
 -- `bridge status` says which code Studio is actually running -- otherwise a
 -- stale plugin and a wrong code path look identical from outside, which cost a
 -- round trip once already.
-local PLUGIN_VERSION = "0.4.0-world-in-edit-mode"
+local PLUGIN_VERSION = "0.4.1-world-in-edit-mode"
 local PROTOCOL_VERSION = 1
 local DEFAULT_BRIDGE = "http://127.0.0.1:34873"
 local HEARTBEAT_SECONDS = 5
@@ -635,7 +635,16 @@ end
 	world the same way they undo anything else.
 ]]
 local function applyBuildWorld(operation: any): (string, string, boolean)
-	local module = resolve(operation.path, false)
+	-- `resolve` returns the PARENT container, the way applyCreateScript uses
+	-- it, and the leaf is looked up by name. Reading its result as the module
+	-- itself tested the containing folder instead, and reported
+	-- "ServerScriptService/Server/PierService is a Folder" about a path whose
+	-- last segment was a perfectly good ModuleScript.
+	local parent, err = resolve(operation.path, false)
+	if parent == nil then
+		return "failed", err or `{operation.path} is not in this place`, false
+	end
+	local module = parent:FindFirstChild(leafName(operation.path))
 	if module == nil then
 		return "failed", `{operation.path} is not in this place`, false
 	end
