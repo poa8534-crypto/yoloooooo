@@ -65,18 +65,40 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
   // A message and whether it is a failure. They were one string, so the
   // bridge refusing to open a script appeared in the box that means "done".
   const [notice, setNotice] = useState<{ text: string; failed: boolean } | null>(null)
+  const [busyBuilding, setBusyBuilding] = useState(false)
   const token = typeof sessionStorage === 'undefined'
     ? '' : sessionStorage.getItem('venture.bridgeToken') ?? ''
 
   useEffect(() => {
-    engineeringApi.builds()
-      .then(answer => {
-        setBuilds(answer.builds)
-        if (!active && answer.builds.length) setActive(answer.builds[0].id)
-      })
-      .catch(caught => setError((caught as Error).message))
-      .finally(() => setListed(true))
-  }, [active])
+    let stopped = false
+    const pollBuilds = async () => {
+      try {
+        const answer = await engineeringApi.builds()
+        if (!stopped) {
+          setBuilds(answer.builds)
+          setActive(current => {
+            if (!current && answer.builds.length) return answer.builds[0].id
+            // If another build just became live and current is not live, follow the live build
+            const latestLive = answer.builds.find(b => LIVE.has(b.status))
+            if (latestLive && latestLive.id !== current) {
+              const currentBuild = answer.builds.find(b => b.id === current)
+              if (!currentBuild || !LIVE.has(currentBuild.status)) {
+                return latestLive.id
+              }
+            }
+            return current
+          })
+        }
+      } catch (caught) {
+        if (!stopped) setError((caught as Error).message)
+      } finally {
+        if (!stopped) setListed(true)
+      }
+    }
+    void pollBuilds()
+    const timer = setInterval(pollBuilds, 3500)
+    return () => { stopped = true; clearInterval(timer) }
+  }, [])
 
   const refresh = useCallback(async () => {
     if (!active) return
@@ -94,12 +116,8 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
 
   useEffect(() => { void refresh() }, [refresh])
 
-  // Polled only while the build is live. A finished build does not change,
-  // and asking anyway would be work with a known answer. The interval depends
-  // on whether the build is live, never on the graph itself: every answer is a
-  // new object, so depending on it re-ran this effect on every answer, and a
-  // finished build was requested ten times a second while the page was open.
-  const polling = !graph || LIVE.has(graph.status)
+  const live = Boolean(graph && LIVE.has(graph.status))
+  const polling = !graph || live
   useEffect(() => {
     if (!polling) return
     const timer = setInterval(() => { void refresh() }, 3000)
@@ -135,7 +153,6 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
   const counts = graph?.counts ?? {}
   const done = counts.built ?? 0
   const total = counts.total ?? 0
-  const live = Boolean(graph && LIVE.has(graph.status))
   const flying = inFlight(graph)
   const writing = flying
     .map(id => graph?.nodes.find(node => node.id === id))
@@ -160,7 +177,7 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
 
         {builds.length > 1 && (
           <label className="build-selector">
-            <span className="micro-label">Build</span>
+            <span className="micro-label">Project / Build</span>
             <select value={active} onChange={event => {
               // Each build has its own graph and its own event history; they are
               // never merged.
@@ -168,7 +185,7 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
             }}>
               {builds.map(build => (
                 <option key={build.id} value={build.id}>
-                  {build.id.slice(0, 14)} · {STATUS_LABEL[build.status] ?? build.status}
+                  {build.title ? `${build.title} · ` : ''}{STATUS_LABEL[build.status] ?? build.status} ({build.id.slice(0, 14)})
                 </option>
               ))}
             </select>
@@ -188,6 +205,30 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
             {STATUS_LABEL[graph.status] ?? graph.status}
             {live && counts.building ? ` · ${counts.building} in flight` : ''}
           </span>
+        )}
+
+        {graph?.status === 'ready_to_build' && (
+          <button type="button" className="primary"
+            style={{ marginLeft: 'auto', padding: '6px 14px', fontSize: '13px' }}
+            disabled={!studio?.plugin_connected || Boolean(busyBuilding)}
+            onClick={async () => {
+              setBusyBuilding(true)
+              setError('')
+              try {
+                const targetBpId = graph.blueprint_id || graph.build_id.replace(/^bp-/, '')
+                const started = await engineeringApi.startBuild(targetBpId, token, false)
+                if (started?.build_id) {
+                  setActive(started.build_id)
+                  setGraph(null)
+                }
+              } catch (caught) {
+                setError((caught as Error).message)
+              } finally {
+                setBusyBuilding(false)
+              }
+            }}>
+            {busyBuilding ? 'Starting...' : 'Build in Studio'}
+          </button>
         )}
       </header>
 

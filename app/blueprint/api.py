@@ -495,11 +495,11 @@ async def start_build(request: BuildRequest) -> dict:
     settings = get_settings()
     # And for the same reason: a repository that belongs to another game is
     # refused when the button is pressed, not minutes later in a record.
-    from ..engineer.runs import NotConfigured, game_repo
+    from ..engineer.runs import NotConfigured, game_repo, resolve_game_repo
     from .builds import another_games_repo, other_games
 
     try:
-        repo = game_repo(settings)
+        repo = resolve_game_repo(settings, blueprint)
     except NotConfigured:
         repo = None  # the build itself says what is wrong with the setting
     others = other_games(repo, blueprint.id, SessionLocal) if repo is not None else {}
@@ -570,9 +570,39 @@ def builds(blueprint_id: str = "", limit: int = 20) -> dict:
     specification revision and content hash it was made from."""
     from ..db import SessionLocal
     from .builds import list_builds
+    from .store import BlueprintStore
 
     records = list_builds(SessionLocal, blueprint_id, max(1, min(limit, 100)))
-    return {"builds": [_summary(record) for record in records]}
+    summaries = [_summary(record) for record in records]
+
+    try:
+        store = BlueprintStore(SessionLocal)
+        existing_bp_ids = {b["blueprint_id"] for b in summaries if b.get("blueprint_id")}
+        all_bps = [store.get(blueprint_id)] if blueprint_id else store.list()
+        for bp in all_bps:
+            if bp.id not in existing_bp_ids:
+                status_str = bp.status.value if hasattr(bp.status, "value") else str(bp.status)
+                summaries.append({
+                    "id": f"bp-{bp.id}",
+                    "blueprint_id": bp.id,
+                    "title": bp.title,
+                    "status": status_str,
+                    "spec_revision": len(bp.systems or []),
+                    "content_hash": "",
+                    "created_at": bp.created_at,
+                    "updated_at": bp.updated_at,
+                    "completed_at": None,
+                    "systems_attempted": 0,
+                    "systems_built": 0,
+                    "systems_refused": 0,
+                    "attempts_spent": 0,
+                    "duration_seconds": None,
+                })
+    except Exception:
+        pass
+
+    summaries.sort(key=lambda b: b.get("updated_at") or b.get("created_at") or "", reverse=True)
+    return {"builds": summaries[:max(1, min(limit, 100))]}
 
 
 @build_router.get("/usage/models")
@@ -657,6 +687,17 @@ def _build_and_spec(build_id: str):
     """The build record and the specification it was made from, or a 404/409."""
     from ..db import SessionLocal
     from .builds import read_build
+
+    if build_id.startswith("bp-"):
+        bp = _load(build_id.removeprefix("bp-"))
+        record = {
+            "id": build_id, "blueprint_id": bp.id,
+            "status": bp.status.value if hasattr(bp.status, "value") else str(bp.status),
+            "title": bp.title, "spec_revision": len(bp.systems or []),
+            "content_hash": "", "systems": {}, "events": [],
+            "created_at": bp.created_at, "completed_at": None,
+        }
+        return record, compile_spec(bp)
 
     try:
         record = read_build(SessionLocal, build_id)
@@ -859,19 +900,8 @@ def build_graph(build_id: str) -> dict:
     node while nothing is happening is the simulated progress this endpoint
     exists to avoid.
     """
-    from ..db import SessionLocal
-    from .builds import read_build
-
-    try:
-        record = read_build(SessionLocal, build_id)
-    except KeyError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such build") from None
-
+    record, spec = _build_and_spec(build_id)
     blueprint = _load(record["blueprint_id"])
-    try:
-        spec = compile_spec(blueprint)
-    except NotReady as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
 
     outcomes, running, in_flight, skipped = _progress(record, spec)
 

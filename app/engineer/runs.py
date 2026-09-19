@@ -148,12 +148,45 @@ def usage_recorder(factory):
 
 
 def game_repo(settings: Settings) -> Path:
-    if settings.game_project_dir is None:
+    target = getattr(settings, "game_project_dir", None)
+    if target is None:
         raise NotConfigured("GAME_PROJECT_DIR is not set; point it at the game repository (e.g. C:/RobloxGames/ascent)")
-    repo = Path(settings.game_project_dir)
+    repo = Path(target)
     if not (repo / ".git").exists():
         raise NotConfigured(f"GAME_PROJECT_DIR {repo} is not a git repository")
     return repo
+
+
+def resolve_game_repo(settings: Settings, blueprint: object | None = None, repo_fn=None) -> Path:
+    """The git repository for this game.
+
+    If blueprint is given and settings.game_project_dir points to another game's
+    folder, this looks for a repository named after the blueprint in the parent
+    directory (e.g. C:/RobloxGames/island-haven).
+    """
+    fn = repo_fn or game_repo
+    base = fn(settings)
+    if blueprint is None:
+        return base
+
+    title = getattr(blueprint, "title", "")
+    if not title:
+        return base
+
+    clean_first = title.split(":")[0].strip()
+    slugs = [
+        re.sub(r"[\s_]+", "-", clean_first.lower()),
+        re.sub(r"[\s-]+", "_", clean_first.lower()),
+        re.sub(r"[\s_-]+", "", clean_first.lower()),
+        re.sub(r"[^a-zA-Z0-9\s-]", "", clean_first.lower()).replace(" ", "-"),
+    ]
+    parent = base.parent
+    for slug in slugs:
+        if slug:
+            candidate = parent / slug
+            if (candidate / ".git").exists():
+                return candidate
+    return base
 
 
 def engineer_keys(settings: Settings) -> list[str]:

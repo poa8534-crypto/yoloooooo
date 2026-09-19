@@ -39,7 +39,7 @@ from ..db import lock_home
 from ..engineer.from_spec import SpecUnusable, tasks_from
 from ..engineer.catalog import load_services
 from ..engineer.land import land
-from ..engineer.runs import build_gate, game_repo, provider_limits, run_task
+from ..engineer.runs import build_gate, game_repo, provider_limits, resolve_game_repo, run_task
 from ..engineer.schedule import in_dependency_order
 from ..engineer.workspace import run_git, services_for_project
 from ..models import SystemState
@@ -270,7 +270,7 @@ async def _build(blueprint_id: str, build_id: str, *, settings, factory, token: 
     record.create(blueprint, spec, owner=owner)
     record.event("queued", f"{len(spec.systems)} system(s) in the specification")
 
-    repo = game_repo(settings)
+    repo = resolve_game_repo(settings, blueprint, repo_fn=game_repo)
     others = other_games(repo, blueprint.id, factory)
     if others:
         reason = another_games_repo(repo, blueprint.title, others)

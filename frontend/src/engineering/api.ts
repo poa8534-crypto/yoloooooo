@@ -177,6 +177,7 @@ export interface ExplorerRow {
 
 export interface BuildGraph {
   build_id: string
+  blueprint_id?: string
   status: string
   title: string
   spec_revision: number
@@ -304,6 +305,10 @@ export const engineeringApi = {
       { method: 'POST', body: JSON.stringify({ text, system }) }),
   unsteer: (buildId: string, directiveId: string) =>
     call<Steering>(`/api/builds/${buildId}/directives/${directiveId}`, { method: 'DELETE' }),
+  startBuild: (blueprintId: string, token: string, play: boolean = false) =>
+    call<{ build_id: string; blueprint_id: string; follow: string }>(
+      '/api/builds',
+      { method: 'POST', body: JSON.stringify({ blueprint_id: blueprintId, token, play }) }),
 }
 
 // Where each node sits, worked out once from the dependency graph rather than
