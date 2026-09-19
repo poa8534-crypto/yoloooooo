@@ -29,6 +29,8 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..engineer.doctrine import GameplayPath, PlayerJourney
+
 SPEC_VERSION = 1
 
 
@@ -205,6 +207,11 @@ class Blueprint(Strict):
     systems: list[GameSystem] = Field(default_factory=list, max_length=40)
     config: BlueprintConfig = Field(default_factory=BlueprintConfig)
     asset_requirements: list[str] = Field(default_factory=list, max_length=40)
+    # What the player experiences, and the actions they take, decided before
+    # any system is planned. The systems are derived from these rather than the
+    # other way round -- see app/engineer/instruction.md.
+    player_journey: PlayerJourney | None = None
+    gameplay_path: GameplayPath | None = None
     status: BuildStatus = BuildStatus.DRAFT
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -270,6 +277,8 @@ class GameBuildSpecification(Strict):
     config: BlueprintConfig
     systems: list[SpecSystem] = Field(default_factory=list, max_length=40)
     build_order: list[str] = Field(default_factory=list, max_length=40)
+    player_journey: PlayerJourney | None = None
+    gameplay_path: GameplayPath | None = None
 
     # Named so the Engineer cannot mistake them for suggestions. A feature here
     # was considered and refused, and putting it in the build anyway is the

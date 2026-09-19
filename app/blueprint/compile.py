@@ -102,6 +102,40 @@ def _doctrine_order(systems: list[SpecSystem]) -> list[str]:
         raise NotReady(str(exc)) from None
 
 
+def _validate(spec: GameBuildSpecification, blueprint: Blueprint) -> None:
+    """Refuse a plan that could not produce the experience it describes.
+
+    Runs here rather than at build time on purpose: the expensive failure is
+    not a bad plan, it is a bad plan discovered eight systems later. A
+    specification with no journey is not refused -- plenty of existing
+    blueprints predate it -- but one that HAS a journey has to be coherent
+    with it.
+    """
+    from ..engineer.doctrine import PriorityClass
+    from ..engineer.planning import PlannedSystem, validate_plan
+
+    if spec.player_journey is None or spec.gameplay_path is None:
+        return
+
+    planned = [
+        PlannedSystem(
+            name=system.name, depends_on=tuple(system.depends_on),
+            priority=PriorityClass(system.priority_class),
+            core_loop_blocker=system.core_loop_blocker,
+            required_for_vertical_slice=system.required_for_vertical_slice,
+            player_flow_index=system.player_flow_index,
+        )
+        for system in spec.systems
+    ]
+    result = validate_plan(
+        systems=planned, journey=spec.player_journey, path=spec.gameplay_path,
+        excluded_features=list(spec.excluded_features),
+        session_only=blueprint.config.persistence is Persistence.SESSION_ONLY)
+    if not result.ok:
+        raise NotReady("this plan could not produce the game it describes: "
+                       + "; ".join(result.problems))
+
+
 def compile_spec(blueprint: Blueprint, *, spec_id: str | None = None,
                  revision: int | None = None) -> GameBuildSpecification:
     """The specification the Engineer is handed, or a refusal saying why not."""
@@ -152,12 +186,15 @@ def compile_spec(blueprint: Blueprint, *, spec_id: str | None = None,
         config=blueprint.config,
         systems=systems,
         build_order=_doctrine_order(systems),
+        player_journey=blueprint.player_journey,
+        gameplay_path=blueprint.gameplay_path,
         included_features=[feature.title for feature in blueprint.selected_features()],
         excluded_features=[feature.title for feature in blueprint.rejected_features()],
         asset_requirements=list(blueprint.asset_requirements),
         technical_constraints=_constraints(blueprint),
         acceptance_criteria=criteria,
     )
+    _validate(spec, blueprint)
     return spec.model_copy(update={"content_hash": spec.fingerprint()})
 
 

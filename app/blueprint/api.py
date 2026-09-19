@@ -559,6 +559,57 @@ def _build_and_spec(build_id: str):
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
 
 
+def _plan_view(spec, outcomes: dict[str, dict], current: str | None) -> dict:
+    """The planning layers, for a UI that wants to show more than files.
+
+    Three different questions, kept apart because they have different answers:
+    the player journey is what someone experiences, the gameplay path is what
+    they do, and the system states are what the build is doing about it. The
+    "why now" line comes from the plan rather than being composed in the
+    browser -- a reason invented client-side is a reason nobody checked.
+    """
+    from ..engineer.gates import gate_states, invalidated_by, playability
+
+    statuses = {name: entry.get("status", "") for name, entry in outcomes.items()}
+    depends = {system.name: list(system.depends_on) for system in spec.systems}
+
+    states = gate_states(order=list(spec.build_order), depends=depends,
+                         outcomes=statuses, current=current)
+    gates = (playability(spec.gameplay_path, statuses)
+             if spec.gameplay_path is not None else [])
+
+    why: dict[str, str] = {}
+    for system in spec.systems:
+        waiting = sorted(other.name for other in spec.systems
+                         if system.name in other.depends_on)
+        reasons = []
+        if system.required_for_vertical_slice:
+            reasons.append("the smallest playable path needs it")
+        if system.core_loop_blocker:
+            reasons.append("the core loop cannot complete without it")
+        if waiting:
+            reasons.append("it is what " + ", ".join(waiting) + " will call into")
+        if not reasons:
+            reasons.append("nothing depends on it, so it waits for the work that does")
+        why[system.name] = "; ".join(reasons).capitalize() + "."
+
+    remaining = [name for name in spec.build_order
+                 if name not in outcomes and name != current]
+    return {
+        "journey": (spec.player_journey.model_dump(mode="json")
+                    if spec.player_journey is not None else None),
+        "path": (spec.gameplay_path.model_dump(mode="json")
+                 if spec.gameplay_path is not None else None),
+        "states": [state.as_dict() for state in states],
+        "gates": [gate.as_dict() for gate in gates],
+        "why_now": why,
+        "next_up": remaining[:4],
+        "blocked_by_failure": sorted(invalidated_by(
+            {name for name, status in statuses.items() if status in ("refused", "error")},
+            depends) - set(statuses)),
+    }
+
+
 def _studio_location(source_path: str) -> tuple[str, str]:
     """Where a generated file lands in the DataModel, or ("", "") if nowhere.
 
@@ -740,6 +791,13 @@ def build_graph(build_id: str) -> dict:
             "branch": (outcome or {}).get("branch"),
             "commit": (outcome or {}).get("commit") or "",
             "attempts": (outcome or {}).get("attempts") or 0,
+            "priority_class": system.priority_class,
+            "core_loop_blocker": system.core_loop_blocker,
+            "required_for_vertical_slice": system.required_for_vertical_slice,
+            "player_flow_index": system.player_flow_index,
+            "builds_world": system.builds_world,
+            "dependents": sorted(other.name for other in spec.systems
+                                 if system.name in other.depends_on),
             "studio_path": location, "studio_class": script_class,
             "order": spec.build_order.index(name),
         })
@@ -788,6 +846,7 @@ def build_graph(build_id: str) -> dict:
         "edges": edges,
         "current": current,
         "counts": {**counts, "total": len(nodes)},
+        "plan": _plan_view(spec, outcomes, current),
         "pace": pace,
         "sync": _sync_state(record),
         "steering": _steering_view(record, spec),
