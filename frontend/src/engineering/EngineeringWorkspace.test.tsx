@@ -14,7 +14,7 @@ import { EngineeringWorkspace } from './EngineeringWorkspace'
 import {
   clusters, duration, layout,
   type BuildGraph, type Directive, type ExplorerRow, type GraphNode, type NodeState,
-  type Steering, type Toolchain,
+  type Plan, type Steering, type Toolchain,
 } from './api'
 
 function node(id: string, state: NodeState, depends: string[] = [], order = 0,
@@ -54,6 +54,43 @@ function toolchain(overrides: Partial<Toolchain> = {}): Toolchain {
   }
 }
 
+function plan(overrides: Partial<Plan> = {}): Plan {
+  return {
+    journey: {
+      entry_state: 'a wooden pier', spawn_context: 'water on three sides',
+      immediate_visuals: ['the water', 'a bait hut'], first_affordance: 'a rod on the rail',
+      first_action: 'cast a line', first_feedback: 'the bobber dips',
+      first_reward: 'a fish', reward_destination: "the player's creel",
+      next_decision: 'sell it or keep it',
+      core_loop: ['cast', 'catch', 'sell', 'upgrade'], progression_loop: [],
+      failure_state: '', recovery_path: '', session_end: '', return_state: 'nothing is kept',
+    },
+    path: {
+      nodes: [
+        { id: 'spawn', label: 'Arrive on the pier', description: '', systems: ['PierService'],
+          data: [], ui: [], acceptance_criteria: [], gate: 'spawnable' },
+        { id: 'cast', label: 'Cast a line', description: '', systems: ['FishingService'],
+          data: [], ui: [], acceptance_criteria: [], gate: 'core_action' },
+      ],
+    },
+    states: [
+      { name: 'PierService', state: 'done', waiting_for: [] },
+      { name: 'FishingService', state: 'blocked', waiting_for: ['RodService'] },
+    ],
+    gates: [
+      { gate: 'spawnable', passed: true, needs: [], detail: 'reached: Arrive on the pier' },
+      { gate: 'core_action', passed: false, needs: ['FishingService'],
+        detail: 'waiting on FishingService' },
+    ],
+    why_now: {
+      PierService: 'The smallest playable path needs it.',
+      FishingService: 'The core loop cannot complete without it.',
+    },
+    next_up: ['FishingService'], blocked_by_failure: [],
+    ...overrides,
+  }
+}
+
 function explorerRow(name: string, children: ExplorerRow[] = [],
   state: NodeState | '' = '', system = ''): ExplorerRow {
   return { name, children, state, system, class: children.length ? 'Folder' : 'ModuleScript' }
@@ -85,6 +122,7 @@ function graph(overrides: Partial<BuildGraph> = {}): BuildGraph {
     sync: { batch_id: '', operations: 0, sent_at: '',
       applied: null, skipped: null, failed: null, reported_at: '' },
     steering: steering(),
+    plan: plan(),
     explorer: [explorerRow('ServerScriptService', [
       explorerRow('Server', [explorerRow('ResearchService', [], 'built', 'ResearchService')]),
     ])],
@@ -695,5 +733,65 @@ describe('the build machine', () => {
 
     const machine = await screen.findByLabelText('Build machine')
     await waitFor(() => expect(within(machine).getByText('Cannot be read')).toBeTruthy())
+  })
+})
+
+describe('the planning views', () => {
+  it('shows the software by default', async () => {
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+    expect(screen.getByRole('tab', { name: 'Systems' }).getAttribute('aria-selected'))
+      .toBe('true')
+  })
+
+  it('shows what the player does, in order, when asked', async () => {
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Player flow' }))
+
+    expect(screen.getByText('Arrive on the pier')).toBeTruthy()
+    expect(screen.getByText('Cast a line')).toBeTruthy()
+    // The architecture map is a different question, so it is not also on screen.
+    expect(screen.queryByTestId('architecture-map')).toBeNull()
+  })
+
+  it('reports how far a player could actually get', async () => {
+    // Eleven systems built is not a number a player would recognise.
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+    await userEvent.click(screen.getByRole('tab', { name: 'Player flow' }))
+
+    // Twice on purpose: on the step it gates, and in the ladder that summarises
+    // how far a player gets.
+    expect(screen.getAllByText('Can join').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('waiting on FishingService')).toBeTruthy()
+  })
+
+  it('says why each system is where it is, from the plan', async () => {
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Build order' }))
+
+    expect(screen.getByText('Waiting on RodService.')).toBeTruthy()
+    expect(screen.getByText(/smallest playable path needs it/)).toBeTruthy()
+  })
+
+  it('says a build has no player path rather than inventing one', async () => {
+    // Builds planned before the doctrine have no journey, and a flow guessed
+    // from the system names would be a picture nobody checked.
+    serve({ graph: graph({ plan: plan({ path: null, gates: [] }) }) })
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Player flow' }))
+
+    expect(screen.getByText(/no player path/)).toBeTruthy()
   })
 })

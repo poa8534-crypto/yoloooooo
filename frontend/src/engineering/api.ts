@@ -26,6 +26,12 @@ export interface GraphNode {
   studio_path: string
   studio_class: string
   order: number
+  priority_class: string
+  core_loop_blocker: boolean
+  required_for_vertical_slice: boolean
+  player_flow_index: number
+  builds_world: boolean
+  dependents: string[]
 }
 
 // Measurements, not predictions. There is no "time remaining" field because
@@ -77,6 +83,64 @@ export interface Steering {
   max_active: number
 }
 
+// The three planning layers the doctrine keeps apart: what the player
+// experiences, what they do, and what the build is doing about it.
+export interface PlayerJourney {
+  entry_state: string
+  spawn_context: string
+  immediate_visuals: string[]
+  first_affordance: string
+  first_action: string
+  first_feedback: string
+  first_reward: string
+  reward_destination: string
+  next_decision: string
+  core_loop: string[]
+  progression_loop: string[]
+  failure_state: string
+  recovery_path: string
+  session_end: string
+  return_state: string
+}
+
+export interface PathNode {
+  id: string
+  label: string
+  description: string
+  systems: string[]
+  data: string[]
+  ui: string[]
+  acceptance_criteria: string[]
+  gate: string | null
+}
+
+export type TaskState = 'ready' | 'blocked' | 'building' | 'testing' | 'done' | 'failed'
+
+export interface SystemState {
+  name: string
+  state: TaskState
+  waiting_for: string[]
+}
+
+export interface PlayabilityGate {
+  gate: string
+  passed: boolean
+  needs: string[]
+  detail: string
+}
+
+export interface Plan {
+  journey: PlayerJourney | null
+  path: { nodes: PathNode[] } | null
+  states: SystemState[]
+  gates: PlayabilityGate[]
+  // Composed by the backend from the plan. A reason invented in the browser is
+  // a reason nobody checked.
+  why_now: Record<string, string>
+  next_up: string[]
+  blocked_by_failure: string[]
+}
+
 export interface ExplorerRow {
   name: string
   class: string
@@ -105,6 +169,7 @@ export interface BuildGraph {
   counts: Record<string, number>
   pace: Pace
   sync: SyncState
+  plan: Plan
   steering: Steering
   explorer: ExplorerRow[]
   events: Array<{ at: string; stage: string; detail: string }>
@@ -283,6 +348,10 @@ export const NO_PACE: Pace = {
 export const NOT_SENT: SyncState = {
   batch_id: '', operations: 0, sent_at: '',
   applied: null, skipped: null, failed: null, reported_at: '',
+}
+export const NO_PLAN: Plan = {
+  journey: null, path: null, states: [], gates: [], why_now: {},
+  next_up: [], blocked_by_failure: [],
 }
 export const NO_STEERING: Steering = {
   directives: [], reachable: [], accepting: false, max_active: 0,

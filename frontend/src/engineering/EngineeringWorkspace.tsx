@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import './engineering.css'
 import {
-  duration, elapsedSince, engineeringApi, NO_PACE, NO_STEERING, NOT_SENT,
+  duration, elapsedSince, engineeringApi, NO_PACE, NO_PLAN, NO_STEERING, NOT_SENT,
   type BuildGraph, type BuildSummaryRow, type GraphNode, type StudioStatus,
 } from './api'
 import { ArchitectureMap } from './ArchitectureMap'
 import { BuildMachine } from './BuildMachine'
 import { NodeInspector } from './NodeInspector'
+import { BuildOrderView, PlayerFlow } from './PlayerFlow'
 import { SteeringPanel } from './SteeringPanel'
 import { StudioExplorer } from './StudioExplorer'
 
@@ -46,6 +47,10 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
   const [selected, setSelected] = useState<GraphNode | null>(null)
   const [studio, setStudio] = useState<StudioStatus | null>(null)
   const [error, setError] = useState('')
+  // The same build seen four ways: the software, what the player does, the
+  // order the work happens in, and what is waiting on what. They answer
+  // different questions, so they are views rather than one crowded diagram.
+  const [view, setView] = useState<'systems' | 'flow' | 'order'>('systems')
   // Whether the build list has come back yet. Without it, "no build yet" is
   // also what the first paint says, so the empty state flashes on every visit
   // and the panels below it mount twice.
@@ -270,15 +275,30 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
         <section className="architecture panel">
           <header className="panel-head">
             <span className="micro-label">Architecture</span>
+            <nav className="view-tabs" role="tablist" aria-label="Map view">
+              {([['systems', 'Systems'], ['flow', 'Player flow'],
+                ['order', 'Build order']] as const).map(([id, label]) => (
+                <button key={id} type="button" role="tab" aria-selected={view === id}
+                  className={view === id ? 'active' : ''}
+                  onClick={() => setView(id)}>{label}</button>
+              ))}
+            </nav>
             {graph?.current
               ? <span className="panel-current">Working on {graph.current}</span>
               : <span className="panel-current quiet">
                 {live ? 'Between systems' : 'Not running'}</span>}
           </header>
-          {graph
-            ? <ArchitectureMap graph={graph} selected={selected?.id ?? null}
-              onSelect={setSelected} />
-            : <p className="quiet-note">Reading the build…</p>}
+          {!graph ? <p className="quiet-note">Reading the build…</p>
+            : view === 'systems'
+              ? <ArchitectureMap graph={graph} selected={selected?.id ?? null}
+                onSelect={setSelected} />
+              : view === 'flow'
+                ? <PlayerFlow plan={graph.plan ?? NO_PLAN}
+                  onSelect={name => setSelected(
+                    graph.nodes.find(node => node.id === name) ?? null)} />
+                : <BuildOrderView plan={graph.plan ?? NO_PLAN} current={graph.current}
+                  onSelect={name => setSelected(
+                    graph.nodes.find(node => node.id === name) ?? null)} />}
         </section>
 
         <section className="activity panel">

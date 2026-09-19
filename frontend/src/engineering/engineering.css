@@ -710,3 +710,120 @@
 .tool-version { color: var(--ink-soft); font-family: var(--mono); font-size: 0.7rem; }
 .tool-detail { color: var(--ink-faint); overflow-wrap: anywhere; }
 .tool-list li[data-present='false'] .tool-detail { color: var(--refused); }
+
+/* ---- the same build, seen four ways -------------------------------------- */
+
+.view-tabs { display: flex; gap: 0.15rem; margin-left: auto; }
+.view-tabs button {
+  padding: 0.2rem 0.5rem;
+  font: inherit;
+  font-size: 0.7rem;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.view-tabs button:hover { background: var(--field); }
+.view-tabs button.active {
+  color: var(--accent);
+  background: var(--accent-wash);
+  border-color: rgba(37, 99, 235, 0.25);
+  font-weight: 600;
+}
+
+/* ---- what the player does ------------------------------------------------ */
+
+.player-flow { display: flex; gap: 1rem; padding: 0.7rem 0.8rem; overflow: auto; flex: 1; }
+.flow-steps { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; }
+.flow-steps li {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.45rem 0;
+  border-left: 2px solid var(--line);
+  padding-left: 0.7rem;
+  margin-left: 0.6rem;
+}
+.flow-steps li[data-state='reached'] { border-left-color: var(--built); }
+.flow-steps li[data-state='partial'] { border-left-color: var(--refused); }
+.flow-steps li[data-state='unsupported'] { border-left-color: var(--failed); }
+.flow-index {
+  width: 1.3rem; height: 1.3rem;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  font-size: 0.66rem;
+  font-weight: 700;
+  border-radius: 50%;
+  color: var(--ink-soft);
+  background: var(--field);
+}
+.flow-steps li[data-state='reached'] .flow-index { color: #fff; background: var(--built); }
+.flow-body { min-width: 0; }
+.flow-body strong { font-size: 0.82rem; }
+.flow-detail { margin: 0.15rem 0 0.3rem; font-size: 0.72rem; color: var(--ink-faint); line-height: 1.45; }
+.flow-body .chip[data-built='true'] { color: var(--built); background: var(--built-wash); border-color: rgba(15,118,110,0.25); }
+.flow-body button.chip { cursor: pointer; font: inherit; font-size: 0.7rem; }
+.flow-gate {
+  display: inline-block;
+  margin-top: 0.3rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.gate-ladder { width: 230px; flex-shrink: 0; }
+.gate-ladder ul { list-style: none; margin: 0.4rem 0 0; padding: 0; }
+.gate-ladder li {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  gap: 0.35rem;
+  padding: 0.25rem 0;
+  font-size: 0.72rem;
+  border-bottom: 1px solid #f1f4f9;
+}
+.gate-mark { color: var(--ink-faint); }
+.gate-ladder li[data-passed='true'] .gate-mark { color: var(--built); }
+.gate-name { color: var(--ink); }
+.gate-ladder li[data-passed='false'] .gate-name { color: var(--ink-soft); }
+.gate-detail { grid-column: 2; font-size: 0.66rem; color: var(--ink-faint); }
+
+/* ---- the order, and why ---------------------------------------------------*/
+
+.order-list { list-style: none; margin: 0; padding: 0.6rem 0.8rem; overflow: auto; flex: 1; }
+.order-list li {
+  display: grid;
+  grid-template-columns: 1.6rem minmax(0, 1fr) auto;
+  gap: 0.4rem 0.6rem;
+  padding: 0.35rem 0.4rem;
+  border-radius: 7px;
+  border: 1px solid transparent;
+}
+.order-list li[data-current='true'] {
+  background: var(--accent-wash);
+  border-color: rgba(37, 99, 235, 0.25);
+}
+.order-index { font-size: 0.7rem; color: var(--ink-faint); font-family: var(--mono); }
+.order-name {
+  font: inherit; font-size: 0.82rem; font-weight: 600;
+  color: var(--ink); background: none; border: 0; padding: 0;
+  text-align: left; cursor: pointer;
+}
+.order-state {
+  font-size: 0.58rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 0.12rem 0.34rem; border-radius: 4px;
+  color: var(--ink-faint); background: var(--field);
+}
+.order-state[data-state='done'] { color: var(--built); background: var(--built-wash); }
+.order-state[data-state='building'] { color: var(--accent); background: var(--accent-wash); }
+.order-state[data-state='blocked'] { color: var(--refused); background: var(--refused-wash); }
+.order-state[data-state='failed'] { color: var(--failed); background: #fef2f2; }
+.order-why {
+  grid-column: 2 / -1;
+  margin: 0.1rem 0 0;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--ink-faint);
+}
