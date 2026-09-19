@@ -25,7 +25,7 @@ These are checked, not assumed. They shape everything else.
 
 ## 2. One definition of "acceptable"
 
-`C:\RobloxGames\game\scripts\verify.ps1`.
+`C:\RobloxGames\ascent\scripts\verify.ps1`.
 
 ```powershell
 powershell -File scripts\verify.ps1
