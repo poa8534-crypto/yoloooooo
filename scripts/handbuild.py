@@ -1,0 +1,339 @@
+"""Build a system by hand, through the same gate and the same landing.
+
+The Engineer's provider can run out. When Antigravity answers "Individual
+quota reached", every remaining system is refused in about twenty seconds and
+the build walks the rest of the plan producing nothing. This is the way to
+carry on without it: the specification still says what each system is for, the
+six checks still decide what is acceptable, and landing still refuses anything
+that breaks the project.
+
+Nothing here writes Luau. It hands over the task the Engineer would have been
+given, takes back whatever was written, and puts it through the checks every
+other system passed. A system built this way is landed by exactly the code
+that lands a generated one -- same worktree, same gate, same project verify,
+same regenerated Services module -- so the project cannot tell the difference
+and neither can the next build.
+
+    python scripts/handbuild.py status
+    python scripts/handbuild.py brief --next 3
+    python scripts/handbuild.py brief MiningService
+    python scripts/handbuild.py open MiningService      # a worktree to write in
+    python scripts/handbuild.py check MiningService     # format, then the gate
+    python scripts/handbuild.py land MiningService      # onto master, verified
+
+The game, the specification and the base branch all come from configuration,
+so this works for whichever project GAME_PROJECT_DIR points at.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import secrets
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from app.blueprint.compile import compile_spec  # noqa: E402
+from app.blueprint.schemas import GameBuildSpecification, SpecSystem  # noqa: E402
+from app.blueprint.store import BlueprintStore  # noqa: E402
+from app.config import get_settings  # noqa: E402
+from app.db import SessionLocal  # noqa: E402
+from app.engineer.from_spec import task_for  # noqa: E402
+from app.engineer.land import land  # noqa: E402
+from app.engineer.runs import build_gate, game_repo  # noqa: E402
+from app.engineer.workspace import Worktree, read_normalized, services_for_project  # noqa: E402
+
+WORKTREE_MARK = "handbuilt"
+
+
+def _settings():
+    return get_settings()
+
+
+def _spec() -> GameBuildSpecification:
+    """The specification for the game this repository is pointed at.
+
+    The newest blueprint that compiles and whose systems match the project, so
+    this cannot quietly build one game's systems into another's repository.
+    """
+    store = BlueprintStore(SessionLocal)
+    problems: list[str] = []
+    for blueprint in store.list(limit=20):
+        if not blueprint.systems:
+            continue
+        try:
+            return compile_spec(blueprint)
+        except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+            problems.append(f"{blueprint.title}: {type(exc).__name__}: {str(exc)[:160]}")
+    raise SystemExit("no blueprint compiles into a specification:\n  "
+                     + "\n  ".join(problems[:5]))
+
+
+def _built(repo: Path) -> set[str]:
+    """Systems the project already holds, by file name."""
+    found: set[str] = set()
+    for root in ("src/server", "src/client", "src/shared"):
+        directory = repo / root
+        if directory.is_dir():
+            found.update(file.stem for file in directory.glob("*.luau"))
+    return found - {"Services"}
+
+
+def _slug(name: str) -> str:
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", name)
+    return re.sub(r"[^a-z0-9-]+", "-", spaced.lower()).strip("-")
+
+
+def _worktree_root(repo: Path) -> Path:
+    settings = _settings()
+    return settings.engineer_worktree_dir or repo.parent / f"{repo.name}-worktrees"
+
+
+def _find_worktree(repo: Path, system: SpecSystem) -> Path | None:
+    root = _worktree_root(repo)
+    prefix = f"{_slug(system.name)}-{WORKTREE_MARK}-"
+    if not root.is_dir():
+        return None
+    for path in sorted(root.iterdir()):
+        if path.name.startswith(prefix) and path.is_dir():
+            return path
+    return None
+
+
+def _system(spec: GameBuildSpecification, name: str) -> SpecSystem:
+    for system in spec.systems:
+        if system.name.lower() == name.lower():
+            return system
+    raise SystemExit(f"{name} is not in this specification. "
+                     f"Run `status` to see what is.")
+
+
+def _remaining(spec: GameBuildSpecification, repo: Path) -> list[SpecSystem]:
+    """Still to build, in the order the specification computed."""
+    built = {name.lower() for name in _built(repo)}
+    index = {system.name: system for system in spec.systems}
+    return [index[name] for name in spec.build_order
+            if name in index and name.lower() not in built]
+
+
+def _blocked_by(system: SpecSystem, repo: Path) -> list[str]:
+    built = {name.lower() for name in _built(repo)}
+    return [need for need in system.depends_on if need.lower() not in built]
+
+
+# ---- the commands ----------------------------------------------------------
+
+def command_status(_args) -> int:
+    repo = game_repo(_settings())
+    spec = _spec()
+    built = _built(repo)
+    remaining = _remaining(spec, repo)
+
+    print(f"project      {repo}")
+    print(f"specification {spec.spec_id} revision {spec.revision}: {spec.title}")
+    print(f"built        {len(built)} of {len(spec.systems)}")
+    print(f"remaining    {len(remaining)}")
+    print()
+    for system in remaining[:15]:
+        waiting = _blocked_by(system, repo)
+        state = f"blocked on {', '.join(waiting)}" if waiting else "ready"
+        marks = []
+        if system.required_for_vertical_slice:
+            marks.append("slice")
+        if system.core_loop_blocker:
+            marks.append("blocks loop")
+        print(f"  {system.name:32} {system.layer.value:7} {system.priority_class} "
+              f"{'/'.join(marks) or '-':22} {state}")
+    if len(remaining) > 15:
+        print(f"  ... and {len(remaining) - 15} more")
+    return 0
+
+
+def command_brief(args) -> int:
+    repo = game_repo(_settings())
+    spec = _spec()
+
+    if args.system:
+        wanted = [_system(spec, args.system)]
+    else:
+        ready = [s for s in _remaining(spec, repo) if not _blocked_by(s, repo)]
+        wanted = ready[:args.next]
+        if not wanted:
+            print("nothing is ready: every remaining system is waiting on another.")
+            return 1
+
+    for system in wanted:
+        task = task_for(spec, system, repo)
+        print("=" * 78)
+        print(f"SYSTEM   {system.name}   ({system.layer.value})")
+        print(f"FILE     {system.path}")
+        print("=" * 78)
+        print()
+        print("GOAL")
+        for line in task.goal.splitlines():
+            print(f"  {line}")
+        print()
+        print("ACCEPTANCE CRITERIA")
+        for criterion in task.acceptance_criteria:
+            print(f"  - {criterion}")
+        print()
+        print("NOTES")
+        for note in task.notes:
+            print(f"  - {note}")
+        print()
+    return 0
+
+
+def command_open(args) -> int:
+    settings = _settings()
+    repo = game_repo(settings)
+    spec = _spec()
+    system = _system(spec, args.system)
+
+    existing = _find_worktree(repo, system)
+    if existing is not None:
+        print(f"worktree already open: {existing}")
+        print(f"write     {existing / system.path}")
+        return 0
+
+    waiting = _blocked_by(system, repo)
+    if waiting and not args.force:
+        raise SystemExit(
+            f"{system.name} depends on {', '.join(waiting)}, which the project does not have "
+            "yet. Build those first, or pass --force to write against a missing dependency.")
+
+    name = f"{_slug(system.name)}-{WORKTREE_MARK}-{secrets.token_hex(4)}"
+    worktree = Worktree.create(repo, settings.game_base_branch, _worktree_root(repo), name)
+    print(f"worktree  {worktree.path}")
+    print(f"branch    {worktree.branch}")
+    print(f"write     {worktree.path / system.path}")
+    print()
+    print("siblings already in the project, to require rather than reimplement:")
+    for sibling in sorted(_built(repo)):
+        print(f"  {sibling}")
+    return 0
+
+
+def command_check(args) -> int:
+    settings = _settings()
+    repo = game_repo(settings)
+    spec = _spec()
+    system = _system(spec, args.system)
+
+    worktree = _find_worktree(repo, system)
+    if worktree is None:
+        raise SystemExit(f"no worktree for {system.name}: run `open {system.name}` first")
+    written = worktree / system.path
+    if not written.is_file():
+        raise SystemExit(f"nothing written yet at {written}")
+
+    gate = build_gate(settings)
+
+    # The Services module the project would need with this file in it, written
+    # into the worktree before the checks run, exactly as the generated path
+    # does it. Without it a system that uses a service the project's module
+    # does not carry passes here and fails when it lands.
+    mine = {system.path: read_normalized(written)}
+    for relative, content in services_for_project(worktree, mine, gate.known_services).items():
+        target = worktree / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content.encode("utf-8"))
+        print(f"generated {relative}")
+
+    problem = gate.format(worktree, [system.path])
+    print("formatted" if problem is None else f"not formatted: {problem}")
+
+    report = gate.run(worktree)
+    print()
+    for check in report.checks:
+        print(f"  {'PASS' if check.passed else 'FAIL'}  {check.name}")
+        if not check.passed:
+            for line in check.output.strip().splitlines()[:12]:
+                print(f"        {line}")
+    print()
+    print("GATE PASSED" if report.passed else "GATE FAILED")
+    return 0 if report.passed else 1
+
+
+def command_land(args) -> int:
+    settings = _settings()
+    repo = game_repo(settings)
+    spec = _spec()
+    system = _system(spec, args.system)
+
+    worktree = _find_worktree(repo, system)
+    if worktree is None:
+        raise SystemExit(f"no worktree for {system.name}: run `open {system.name}` first")
+    written = worktree / system.path
+    if not written.is_file():
+        raise SystemExit(f"nothing written yet at {written}")
+
+    gate = build_gate(settings)
+
+    def project_check(root: Path) -> tuple[bool, str]:
+        """Does the WHOLE project still build with this file in it?"""
+        report = gate.run(root)
+        if report.passed:
+            return True, ""
+        return False, "; ".join(
+            f"{check.name}: {check.output.strip().splitlines()[0] if check.output.strip() else 'failed'}"
+            for check in report.failed)
+
+    changes = {system.path: read_normalized(written)}
+    changes.update(services_for_project(repo, changes, gate.known_services))
+
+    landed = land(repo, changes, verify=project_check, branch=settings.game_base_branch,
+                  message=(f"feat({system.name}): accepted by the gate\n\n"
+                           f"Written by hand against specification {spec.spec_id} revision "
+                           f"{spec.revision}, after the model provider's quota ran out. "
+                           f"Checked and landed by the same gate as every generated system."))
+
+    if not landed.committed:
+        print(f"NOT LANDED: {landed.detail}")
+        return 1
+    print(f"landed {landed.commit[:12]}: {system.name}")
+    for path in sorted(changes):
+        print(f"  {path}")
+
+    if not args.keep:
+        tree = Worktree(repo=repo, path=worktree, branch=f"engineer/{worktree.name}",
+                        base_commit="")
+        tree.remove(delete_branch=True)
+        print(f"removed worktree {worktree.name}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    commands.add_parser("status", help="what is built and what is left")
+
+    brief = commands.add_parser("brief", help="the task the Engineer would have been given")
+    brief.add_argument("system", nargs="?", help="a system name; omit for the next ready ones")
+    brief.add_argument("--next", type=int, default=1, help="how many ready systems to show")
+
+    opened = commands.add_parser("open", help="create a worktree to write the system in")
+    opened.add_argument("system")
+    opened.add_argument("--force", action="store_true",
+                        help="open even though a dependency is missing")
+
+    check = commands.add_parser("check", help="format the file, then run the six checks")
+    check.add_argument("system")
+
+    landing = commands.add_parser("land", help="put it into the project, if the project still builds")
+    landing.add_argument("system")
+    landing.add_argument("--keep", action="store_true", help="leave the worktree in place")
+
+    args = parser.parse_args(argv)
+    return {
+        "status": command_status, "brief": command_brief, "open": command_open,
+        "check": command_check, "land": command_land,
+    }[args.command](args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
