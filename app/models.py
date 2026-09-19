@@ -46,7 +46,7 @@ class DecisionKind(str, enum.Enum):
 class ResearchRun(Base):
     __tablename__ = "research_runs"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
-    niche: Mapped[str] = mapped_column(String(240), index=True)
+    niche: Mapped[str] = mapped_column(String(12000), index=True)
     status: Mapped[str] = mapped_column(String(32), default=RunStatus.QUEUED.value)
     message: Mapped[str] = mapped_column(Text, default="Queued")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -310,7 +310,7 @@ class MatchSubject(Base):
     raw_url: Mapped[str] = mapped_column(Text, default="")
     creator_name: Mapped[str] = mapped_column(String(255), default="")
     creator_external_id: Mapped[str] = mapped_column(String(120), default="")
-    niche: Mapped[str] = mapped_column(String(240), default="")
+    niche: Mapped[str] = mapped_column(String(12000), default="")
     source_artifact_id: Mapped[str | None] = mapped_column(
         ForeignKey("source_artifacts.id"), index=True
     )

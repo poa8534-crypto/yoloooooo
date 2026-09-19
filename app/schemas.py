@@ -57,7 +57,12 @@ class StrictModel(BaseModel):
 
 
 class ResearchRunCreate(StrictModel):
-    niche: str = Field(min_length=3, max_length=240)
+    # Characters, not words, which is the whole reason the old limit bit: 240
+    # characters is about forty words, and a brief describing a game runs to
+    # hundreds. Twelve thousand holds a thousand words of any prose -- measured
+    # rather than assumed, because a thousand words of ordinary English is
+    # nearer 6,000 characters and a thousand of longer ones is nearer 8,000.
+    niche: str = Field(min_length=3, max_length=12000)
     mode: Literal["quick", "deep"] = "quick"
 
 
