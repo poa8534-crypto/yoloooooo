@@ -237,6 +237,19 @@ playable before breadth; do not build features nobody asked for.
   out "on leave" never reaches the save. Keep each system's state under its
   own profile field and write it through `SaveDataService:SetField` whenever
   it changes.
+- **Iterating `x or {}` fails luau-lsp** ("Cannot call a value of type
+  {T} in union"). Check for nil first, or annotate the local (`local here:
+  { Player } = players or Services.Players:GetPlayers()`). This stopped four
+  Island Haven systems at the gate once each.
+- **A build works in one repository, resolved once.** `resolve_game_repo`
+  finds a game's repository from its blueprint title
+  (`C:\RobloxGames\<title-slug>`), falling back to `GAME_PROJECT_DIR`. The
+  build passes that repository to every stage: the Engineer's worktrees, the
+  gate, landing and the Studio sync. On 2026-09-19 only landing used it, so
+  the Engineer wrote 11 Island Haven systems on branches of neuromine, and
+  landing found nothing on those branches in island-haven.
+  `tests/test_parallel_build.py` now fails if any stage is handed a different
+  repository.
 
 ## 8. The current state
 
@@ -268,6 +281,22 @@ playable before breadth; do not build features nobody asked for.
   - Place files `.gitignore`: `templates/game/.gitignore` and neuromine now
     ignore `*.rbxl` and `*.rbxlx`.
   - Section 9 lists what these systems record that nothing reads yet.
+- `C:\RobloxGames\island-haven` is the newest game, Island Haven: Life
+  Unlocked (blueprint `a839363103c9bb92`). All **33 of 33 systems are on
+  master**.
+  - Antigravity wrote 11 of them on 2026-09-19. The build then cut its
+    worktrees from the wrong repository (section 7), so none of them landed.
+    They were landed afterwards from their branches, which still sit in the
+    neuromine repository. Each went through the same `land()` and whole-project
+    verify, and all 11 passed.
+  - The other 22 were written by hand through `scripts/handbuild.py`, at the
+    owner's request, on 2026-09-20, after Antigravity's quota ran out again.
+  - Measured on master at that date: `verify.ps1` exits 0, with all six checks
+    passing, 0 selene warnings and 159 behaviour checks.
+  - Not yet synced to Studio or played. `GAME_PROJECT_DIR` in `.env` still
+    names neuromine; builds and `handbuild.py` find island-haven from the
+    blueprint, but anything that reads the setting directly does not.
+  - Section 9 lists what does not fit together yet.
 - The owner drives sessions from a Mac as well as this PC: Claude Code Remote
   Control links the running session to claude.ai, and the dashboard is on the
   tailnet. Both need this PC awake with the Claude app open; Studio itself is
@@ -312,6 +341,36 @@ playable before breadth; do not build features nobody asked for.
     - `CraftRecipe`
     - `BrainrotIndex`
     - `ServerEventChanged`
+- **Island Haven's loose ends.** Checked against master on 2026-09-20:
+  - **The 11 systems Antigravity wrote are separate silos.** None of them
+    requires another system, and each saves to its own DataStore, 9 stores in
+    all. They were written without seeing each other. The 22 later ones are
+    built around InventoryService (pockets kept in PlayerDataService's
+    profile) and use IslandService, PlayerDataService and ItemCatalog. Nothing
+    requires the other 8 Antigravity systems, so several things exist twice:
+    - ItemRewardDispatcher keeps its own set of pockets.
+    - WorldPropManager, ProximityInteractionService and
+      CharacterAnimationService all run flotsam or driftwood gathering of their
+      own, beside ForagingService.
+    - NPCDialogueService and SanctuaryExhibitionService take donations, beside
+      DialogueService and SanctuaryService.
+    - SpawnService and PlayerLifecycleManager each build an arrival pier.
+
+    Deciding which of each pair stays is a design call for the owner's team,
+    and it should be made before the place is played.
+  - Client UI exists only for the pocket bar, prompts, toasts and fishing
+    (PlayerHUDView, ToolEquipManager). No client screen uses the remotes for:
+    - dialogue
+    - the stall
+    - crates
+    - crafting
+    - the merchant
+    - the garden
+    - the sanctuary
+    - the guestbook
+  - The totem guestbook lives only as long as the server does.
+  - Everything in the world is drawn with plain parts: crates, boats, fish
+    shadows, flowers, fireflies.
 
 ## 10. House rules
 

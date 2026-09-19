@@ -287,6 +287,52 @@ Two discoveries:
    all `*.rbxl` and `*.rbxlx` files, preventing saved binary place files from being
    unintentionally tracked.
 
+## Phase 12 — Island Haven, and two repositories in one build
+
+Island Haven: Life Unlocked has 33 systems. Its first build, on 2026-09-19,
+recorded 11 systems accepted by the gate and landed none of them.
+Antigravity's new `resolve_game_repo` had found `C:\RobloxGames\island-haven`
+from the blueprint's title, but only landing used it. `run_task` and
+`build_gate` still read `GAME_PROJECT_DIR`, which named neuromine. So:
+
+- Every Engineer worktree was cut from neuromine. The 11 accepted systems sit
+  on `engineer/*` branches in the neuromine repository.
+- Landing then read those branches in island-haven, found nothing, and
+  recorded "already in the project, unchanged" eleven times.
+
+The build now resolves the repository once and passes it to every stage. A
+test hands the stages a resolved repository different from
+`GAME_PROJECT_DIR` and fails if any stage sees another. Removing the
+pass-through makes it fail.
+
+The owner asked for Antigravity's work to be used rather than paid for twice.
+Each of the 11 files was read from its neuromine branch and put through
+`land()` with the whole-project verify, in build order. All 11 passed. The
+other 22 systems were refused because Antigravity's quota had run out ("Resets
+in 1h21m"), and at the owner's request they were written by hand through
+`handbuild.py`, with a behaviour spec each. The owner asked twice. Specs were
+proved by breaking the code they guard; three breaks that survived are
+recorded honestly:
+
+- One gap in coverage: PlotCustomizationService's full-pockets pickup. A test
+  for it was added and proved.
+- Two equivalent mutants in DocksideBarterService. The refund path and
+  PlayerDataService's refusal of negative coins already block what each break
+  removes.
+
+On 2026-09-20 the result is 33 of 33 on master. `verify.ps1` exits 0 with 159
+behaviour checks.
+
+What reusing Antigravity's work cost: its 11 systems never saw each other, so
+each saves to a DataStore of its own and none calls another. Several features
+exist twice. HANDOFF section 9 lists them. It is a design decision, made before
+the place is played, which of each pair stays.
+
+The test harness grew with the work: instances that can be unparented, and
+attributes. It gained stand-ins for CollectionService, TextService and
+`Players:GetPlayerByUserId`, and Vector3 arithmetic. It is now the template's,
+so every new game starts with it.
+
 ## Bugs worth remembering
 
 Ordered by how much time they cost, not by when they happened.
@@ -365,6 +411,16 @@ Ordered by how much time they cost, not by when they happened.
     generated as a `LocalScript` in `StarterPlayer/StarterPlayerScripts`.
 33. **Place files `.gitignore` missed `<game>.rbxl`.** Only `/game.rbxlx` was
     ignored. Now `*.rbxl` and `*.rbxlx` are both ignored across all game projects.
+34. **One build, two repositories.** A repository resolved from the blueprint
+    was used by landing but not by the Engineer or the gate, so 11 accepted
+    systems were written into another game's repository and landed nowhere.
+    Resolve once, pass everywhere; a test holds it.
+35. **`for x in list or {}` fails luau-lsp's strict check.** Check for nil, or
+    annotate the local.
+36. **A test's arithmetic can be the bug.** Two hand-written cases, a table
+    placed 2.5 studs off and a craft that frees its own slot, failed on correct
+    code. Reading the failure before touching the module saved two wrong
+    fixes.
 
 ## Method
 
