@@ -153,6 +153,9 @@ class Settings(BaseSettings):
     # Worktrees live outside both repositories: one per run, removed after it.
     engineer_worktree_dir: Path | None = None
     engineer_data_dir: Path = ROOT / "data" / "engineer"
+    # Locks for a ledger that is not a SQLite file (app/db.py lock_home). A
+    # SQLite ledger keeps its locks beside the database instead.
+    lock_dir: Path = ROOT / "data" / "locks"
     # Every attempt kept as training material (app/engineer/capture.py). On by
     # default: a refused attempt is the only example that is specific to this
     # model, this toolchain and these rules, and five of every six are otherwise

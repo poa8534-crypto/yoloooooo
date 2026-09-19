@@ -12,10 +12,16 @@
 # failure, but Windows applies that when a task fails to *launch*; a process
 # that launches and then exits non-zero is left dead, which is what happened.
 #
-# So this checks two things, because "the process exists" and "the service is
+# So this checks, in order, because "the process exists" and "the service is
 # serving" are different claims:
-#   1. the scheduled task is running at all;
-#   2. the process it started is listening on a socket.
+#   1. the dashboard answers on its address, whichever launcher started it --
+#      if so, nothing else matters and nothing is logged;
+#   2. the scheduled task is running at all;
+#   3. the process it started is listening on a socket.
+#
+# A copy launched while another is serving is harmless now -- it finds the
+# ledger held and exits before reading anything (app/main.py lifespan) -- but
+# it is still not an outage, and it is not written down as one.
 #
 # Nothing is logged on the happy path. Every line in the log is an outage.
 
@@ -31,6 +37,32 @@ function Write-Outage([string]$Message) {
         Move-Item -LiteralPath $LogPath -Destination "$LogPath.1" -Force
     }
     Add-Content -LiteralPath $LogPath -Value "$stamp  $Message" -Encoding utf8
+}
+
+# First: is the dashboard answering, whoever started it? start-agents.bat runs
+# the same app in a window of its own, and while that copy held the port this
+# script saw only an idle task and launched a second copy every five minutes --
+# 21 in one afternoon, each logged here as an outage that was not one. Any HTTP
+# answer counts, 401 included, exactly as in start-agents.bat, and the address
+# comes from the app's own settings the same way. If the address cannot be
+# read, the checks below still run: they are what this script did before.
+$python = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
+$preflight = Join-Path $ProjectRoot 'scripts\agents_preflight.py'
+# Continue, not Stop, around native commands: Windows PowerShell turns any line
+# a native program writes to stderr into an error, and under Stop a harmless
+# warning from Python would abandon the probe.
+$ErrorActionPreference = 'Continue'
+try {
+    $config = & $python $preflight config 2>$null
+    $url = (@($config) -match '^DASH_URL=' | Select-Object -First 1) -replace '^DASH_URL=', ''
+    if ($url) {
+        & curl.exe -s -m 5 -o NUL $url 2>$null
+        if ($LASTEXITCODE -eq 0) { exit 0 }
+    }
+} catch {
+    # Fall through to the task checks.
+} finally {
+    $ErrorActionPreference = 'Stop'
 }
 
 try {

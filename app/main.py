@@ -27,7 +27,7 @@ from .build_identity import build_identity
 from .audit_jobs import AuditJobs, JobConflict, ACTIVE as ACTIVE_AUDIT_STATES
 from .calibration import calibration_status, load_artifact
 from .config import ROOT, get_settings
-from .db import SessionLocal, get_db, init_db
+from .db import SessionLocal, get_db, init_db, ledger_lock
 from .evidence import fact_freshness, render_fact
 from .matching import DEFAULT_EMBEDDING_MODEL
 from . import pillars as pillars_module
@@ -107,9 +107,42 @@ def assert_local_only(host: str) -> None:
 SERVICE_STARTED_AT = datetime.now(UTC)
 
 
+class AnotherService(RuntimeError):
+    """Another process is already serving this ledger."""
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     assert_local_only(get_settings().host)
+    # One service per ledger, settled before anything below reads or writes it.
+    # Startup marks every run in flight as interrupted by a previous shutdown,
+    # which is true only if no other service is still running them. A second
+    # copy launched while the first was serving used to run all of that and
+    # only then fail to bind its port -- the watchdog did it 21 times in one
+    # afternoon. Uvicorn binds after startup, so the port cannot be the guard.
+    ledger = ledger_lock(SessionLocal)
+    if ledger is not None and not ledger.acquire(describe=True):
+        raise AnotherService(_already_serving(ledger))
+    try:
+        async with _serving(app):
+            yield
+    finally:
+        if ledger is not None:
+            ledger.release()
+
+
+def _already_serving(ledger) -> str:
+    holder = ledger.holder()
+    who = (f"pid {holder.get('pid')}, running since {str(holder.get('since', '?'))[:19]}: "
+           f"{holder.get('command', '?')}" if holder
+           else "a process that did not describe itself")
+    return (f"Another service is already using this ledger ({who}). This one is "
+            f"stopping before it reads or writes anything, so nothing that service "
+            f"is running gets marked interrupted. Lock: {ledger.path}")
+
+
+@asynccontextmanager
+async def _serving(app: FastAPI):
     init_db()
     with SessionLocal() as db:
         orphaned = list(db.scalars(select(ResearchRun).where(
