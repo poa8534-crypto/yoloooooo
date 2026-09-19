@@ -103,6 +103,26 @@ def _find_worktree(repo: Path, system: SpecSystem) -> Path | None:
     return None
 
 
+def _changed_files(worktree: Path) -> list[str]:
+    """Paths the worktree has that its base commit did not, or changed.
+
+    Read from git rather than by walking the tree, so a file that was already
+    in the project and left alone is not landed again as though it were part
+    of this system.
+    """
+    from app.engineer.workspace import git
+
+    changed: list[str] = []
+    for line in git(["status", "--porcelain"], worktree).splitlines():
+        entry = line.strip()
+        if not entry:
+            continue
+        path = entry.split(maxsplit=1)[-1].strip().strip('"')
+        if path.startswith(("src/", "tests/")) and path.endswith(".luau"):
+            changed.append(path)
+    return sorted(set(changed))
+
+
 def _system(spec: GameBuildSpecification, name: str) -> SpecSystem:
     for system in spec.systems:
         if system.name.lower() == name.lower():
@@ -292,7 +312,19 @@ def command_land(args) -> int:
             f"{check.name}: {check.output.strip().splitlines()[0] if check.output.strip() else 'failed'}"
             for check in report.failed)
 
-    changes = {system.path: read_normalized(written)}
+    # Everything the worktree gained, not only the system's own file. A system
+    # can arrive with a behaviour spec beside it, and landing the module alone
+    # would leave the check that proves it behind in a branch nobody reads.
+    # The generated Services modules are excluded because they are regenerated
+    # for the project below, from what the project needs rather than what this
+    # worktree happened to use.
+    changes = {}
+    for relative in _changed_files(worktree):
+        if relative.endswith("Services.luau"):
+            continue
+        changes[relative] = read_normalized(worktree / relative)
+    if system.path not in changes:
+        changes[system.path] = read_normalized(written)
     changes.update(services_for_project(repo, changes, gate.known_services))
 
     landed = land(repo, changes, verify=project_check, branch=settings.game_base_branch,
