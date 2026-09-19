@@ -109,6 +109,58 @@ passes.
 **Result: 16 systems, zero refusals, 32 attempts (average 2.0), 21 operations
 applied in Studio, 0 failed.** Hardest system: `CheckpointService`, 4 attempts.
 
+## Phase 7 — checking that what is running is what the records say
+
+The next session began by verifying the handoff instead of trusting it, and
+the service log disagreed with it three ways.
+
+**The Engineering page was asking for a finished build ten times a second.**
+1871 requests in 176 seconds from the Mac, for the ascent build, which had
+finished hours before and should have been fetched once. The polling effect
+depended on the graph it fetched; every answer was a new object, so every
+answer re-ran the effect, whose first act was to ask again. It had been there
+since the page was first written, and it filled three 5 MB log rotations in
+about ten minutes.
+
+**A second copy of the service could rewrite the first one's ledger.** The
+watchdog judged the service by the scheduled task's state. While the dashboard
+was running from `start-agents.bat` instead, the task sat idle, so the watchdog
+launched a copy every five minutes -- 21 that afternoon, each logged as an
+outage. Each copy ran startup in full and only then failed to bind the port,
+because uvicorn binds after startup, and startup marks every research run,
+audit and audit job in flight as interrupted by a previous shutdown. Nothing was
+in flight that day (checked in the database); anything that had been would
+have been recorded as interrupted while it was still running. Fixed at the
+ledger, not the port: the service takes an OS lock before startup reads
+anything, and a second copy exits naming the holder. Proved live by starting a
+duplicate against the running service -- exit 3, port never bound.
+
+**Nine records said work was in flight when nothing was doing it.** Five build
+records sat in `generating`, `planning` and `building` for 2 to 17 hours, and
+the dashboard drew them as running -- "Working on PlayerSpawnService" two hours
+after that process had gone. Three stopped mid-system with the next build
+starting minutes later: killed, which writes nothing. Two stopped exactly
+where bug 11's missing transitions would have raised, so an exception escaped
+`run_build` inside a dashboard that kept serving. The other four were
+`engineer-run` records, stale for up to 42 hours. A startup sweep would have
+been wrong, because `autobuild.py` runs builds in a process of its own. So a
+build now holds a lock for as long as it runs and names it on the record, and a
+reader asks the lock. The five old records named no lock, so they were settled
+once by hand after checking that no build process existed and that the service
+had been restarted since each last wrote. Nothing displays the `engineer-run`
+records, so they were left.
+
+One number in this session was wrong when first reported: "seven hours" for
+that PlayerSpawnService build, from comparing a UTC timestamp with local time
+(UTC+5:30). It was 2.2 hours. Timestamps in the records are UTC; the logs are
+local.
+
+The lock (`app/ownership.py`) was tested against real processes: one killed
+outright, and one whose child outlives it, as `agy` can outlive a build. On
+Windows a byte-range lock belongs to the process that took it -- measured by
+making the handle inheritable on purpose -- so even an inherited handle does
+not keep a dead build alive.
+
 ---
 
 ## Bugs worth remembering
@@ -159,6 +211,15 @@ Ordered by how much time they cost, not by when they happened.
 22. **Two type errors were failing `tsc -b` while `tsc --noEmit` passed**,
     because the latter skips the test project. The report that said "build
     clean" was wrong, and was corrected.
+23. **A React effect keyed on the object it fetched** re-fetched on every
+    answer: 10.6 requests a second for a finished build. Key polling on a
+    boolean, never on the answer.
+24. **Startup ran before the port was bound**, so a duplicate service did all
+    its reconciling -- marking the other service's runs interrupted -- and only
+    then failed. The guard has to come before the first read, not at the bind.
+25. **Records that say "running" were believed.** A killed process writes
+    nothing, so a record's last word is not evidence that anything is still
+    working. Ask something the operating system maintains: a held lock.
 
 ## Method
 
@@ -191,7 +252,19 @@ The habit that found most of these: **measure, do not assume.**
 
 - Parallel build waves over the dependency graph. The runner walks
   `spec.build_order` as one flat list, so extra model capacity currently buys
-  fallback, not speed. Roughly six waves instead of sixteen steps for ascent.
+  fallback, not speed. Measured on ascent: 5 waves (widest 6) instead of 16
+  steps; 4902 s of system time sequentially, 1797 s along the longest chain
+  through the waves -- a ceiling of about 2.7x before rate limits and landing
+  one system at a time.
+- `engineer-run:` records can still be left saying `running` by a killed
+  process. Nothing displays them today; if something ever does, they need the
+  same lock the builds have.
+- Build status labels live in three frontend maps (the workspace, the history
+  list, the blueprint page), and the history one names a status, `applying`,
+  that does not exist. One map would be one place to add a status.
+- `app/service.py` logs everything uvicorn writes to stderr at ERROR, so
+  "Started server process" is an ERROR line and searching the log for ERROR
+  finds mostly noise.
 - Cross-provider retry: a refusal loop is one model failing the same way three
   times. `InfectedService` went 6/6 refused before prompt rules were added.
 - A reviewer pass before the gate, to catch cross-system type errors earlier.

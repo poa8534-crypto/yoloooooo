@@ -139,6 +139,27 @@ playable before breadth; do not build features nobody asked for.
   system needs building, `Start` must do it.
 - **Heredocs mangle Windows paths.** `C:\Users` inside a bash heredoc is a
   unicode escape error. Write patch scripts to a file instead.
+- **One service per ledger.** The service takes an operating-system lock on
+  `data/venture_agents.db.locks/service.lock` before startup reads anything,
+  and a second copy -- whichever launcher started it -- exits with
+  `AnotherService`, naming the holder, before it can mark the first one's runs
+  interrupted. `service.lock.holder` says which process holds it. The lock is
+  released by the OS when the holder dies, so it never goes stale.
+- **A build is running only while its lock is held.** `run_build` holds
+  `data/venture_agents.db.locks/<build-id>.lock` for exactly as long as it
+  runs and records it under `owner`. Reading a build asks that lock; a build
+  that says it is running but whose lock is free is moved to `interrupted`,
+  with the last thing it recorded as its end time. An exception escaping a
+  build is recorded (`failed`, or `interrupted` if it was cancelled) instead
+  of leaving the record claiming to be in progress.
+- **The watchdog asks the dashboard first.** If anything answers on the
+  dashboard's address, whichever launcher started it, the watchdog does
+  nothing and logs nothing. Every line in `data/watchdog.log` is an outage.
+- **Records are UTC; logs are local time (UTC+5:30).** Comparing one with the
+  other without converting produced a wrong "seven hours" that was 2.2.
+- **The venv's `python.exe` on Windows is a launcher**, not the interpreter:
+  it runs the base Python as a child, inside a job that kills both together.
+  The PID that holds a lock or a socket is the child's.
 
 ## 8. The current state
 
@@ -152,6 +173,10 @@ playable before breadth; do not build features nobody asked for.
   Nothing reads it. Ignore the whole folder.
 - `C:\RobloxGames\fisherman` is the previous finished project: 11 systems, also
   zero refusals.
+- The owner drives sessions from a Mac as well as this PC: Claude Code Remote
+  Control links the running session to claude.ai, and the dashboard is on the
+  tailnet. Both need this PC awake with the Claude app open; Studio itself is
+  only visible here.
 
 ## 9. What is not built
 
@@ -164,6 +189,9 @@ playable before breadth; do not build features nobody asked for.
 - The build runner is **sequential**. The provider chain is a fallback chain,
   not a pool, so adding more model accounts does not currently make a build
   faster. Parallel waves over the dependency graph is the change that would.
+  Measured on ascent: 5 waves, widest 6; 4902 s of system time, of which the
+  longest chain through the waves is 1797 s -- about 2.7x at best, before
+  rate limits and landing one system at a time.
 
 ## 10. House rules
 
