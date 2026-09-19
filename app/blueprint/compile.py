@@ -119,7 +119,7 @@ def compile_spec(blueprint: Blueprint, *, spec_id: str | None = None,
         systems.append(SpecSystem(
             name=system.name, layer=system.layer, path=f"{root}/{system.name}.luau",
             purpose=system.purpose, acceptance_criteria=list(system.acceptance_criteria),
-            depends_on=list(system.depends_on)))
+            depends_on=list(system.depends_on), builds_world=system.builds_world))
 
     index = {system.name: system for system in systems}
     unknown = sorted({dependency for system in systems for dependency in system.depends_on

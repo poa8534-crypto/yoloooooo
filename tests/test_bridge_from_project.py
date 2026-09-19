@@ -182,3 +182,62 @@ def test_a_bom_or_crlf_never_reaches_a_studio_script(tmp_path):
 
     assert source.startswith("--!strict")
     assert "\r" not in source
+
+
+# ---- the world, in edit mode ------------------------------------------------
+
+def test_the_world_builder_is_run_after_the_files_are_written():
+    """A finished build opened in Studio as an empty baseplate: the pier and
+    the hut existed as code nobody had called, because everything a generated
+    system does happens at run time. The build now runs the one system the
+    specification marked as building the place."""
+    from app.bridge.from_project import operations_for
+
+    batch = operations_for({"src/server/PierService.luau": "--!strict\nreturn {}\n"},
+                           build_id="b1", play=False,
+                           world_builder="src/server/PierService.luau")
+
+    kinds = [operation.operation.value for operation in batch.operations]
+    assert "build_world" in kinds
+    # After the scripts: running a builder before it has been written would
+    # call whatever the place held before this build.
+    assert kinds.index("build_world") > kinds.index("create_script")
+    world = next(o for o in batch.operations if o.operation.value == "build_world")
+    assert world.path == "ServerScriptService/Server/PierService"
+    assert world.method == "Start"
+
+
+def test_a_build_with_no_world_builder_does_not_run_anything():
+    """Not every specification marks one, and guessing which module to run in
+    the person's open place is not a guess worth making."""
+    from app.bridge.from_project import operations_for
+
+    batch = operations_for({"src/server/A.luau": "--!strict\nreturn {}\n"},
+                           build_id="b1", play=False)
+
+    assert "build_world" not in [o.operation.value for o in batch.operations]
+
+
+def test_the_world_is_built_before_a_playtest_starts():
+    """So the place is worth looking at in edit mode, and the playtest starts
+    from the world rather than racing it."""
+    from app.bridge.from_project import operations_for
+
+    batch = operations_for({"src/server/PierService.luau": "--!strict\nreturn {}\n"},
+                           build_id="b1", play=True,
+                           world_builder="src/server/PierService.luau")
+
+    kinds = [operation.operation.value for operation in batch.operations]
+    assert kinds.index("build_world") < kinds.index("start_playtest")
+
+
+def test_the_method_name_cannot_be_arbitrary_text():
+    """It is used to index a table in Studio, so it is a name or it is refused."""
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    from app.bridge.protocol import BuildWorld
+
+    with _pytest.raises(ValidationError):
+        BuildWorld(operation_id="o1", sequence=0, path="ServerScriptService/Server/A",
+                   method="Start(); os.exit()")

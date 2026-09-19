@@ -157,6 +157,10 @@ class GameSystem(Strict):
     depends_on: list[str] = Field(default_factory=list, max_length=12)
     complexity: Complexity = Complexity.MEDIUM
     essential: bool = True
+    # The one system that makes the place appear. The build runs it in Studio
+    # after syncing, so the world is there in edit mode rather than only once
+    # somebody presses Play.
+    builds_world: bool = False
     from_feature: str | None = Field(default=None, max_length=64)
 
 
@@ -229,6 +233,7 @@ class SpecSystem(Strict):
     purpose: str = Field(min_length=1, max_length=2000)
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=20)
     depends_on: list[str] = Field(default_factory=list, max_length=12)
+    builds_world: bool = False
 
 
 class GameBuildSpecification(Strict):

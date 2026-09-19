@@ -111,6 +111,7 @@ class OperationKind(str, enum.Enum):
     OPEN_SCRIPT = "open_script"
     START_PLAYTEST = "start_playtest"
     STOP_PLAYTEST = "stop_playtest"
+    BUILD_WORLD = "build_world"
 
 
 class _Base(BaseModel):
@@ -180,13 +181,33 @@ class StartPlaytest(_Base):
     mode: Literal["run", "play"] = "run"
 
 
+class BuildWorld(_Base):
+    """Run the module that makes the place appear, in EDIT mode.
+
+    Everything a generated system does happens at run time, which meant a
+    finished build opened in Studio as an empty baseplate: the pier and the hut
+    existed as code nobody had called yet. This calls the one system the
+    specification marked `builds_world`, so the place is there to look at and
+    to edit without pressing Play.
+
+    Narrow on purpose. It names ONE module, which has to be one this build just
+    wrote under ServerScriptService, and calls one function on it. It is not a
+    way to run arbitrary Luau in Studio: the module came through the six-check
+    gate, and the plugin refuses a path outside the roots a build may write to.
+    """
+
+    operation: Literal[OperationKind.BUILD_WORLD] = OperationKind.BUILD_WORLD
+    path: str
+    method: str = Field(default="Start", pattern=r"^[A-Za-z][A-Za-z0-9_]{0,48}$")
+
+
 class StopPlaytest(_Base):
     operation: Literal[OperationKind.STOP_PLAYTEST] = OperationKind.STOP_PLAYTEST
 
 
 Operation = Annotated[
     Union[CreateInstance, CreateScript, UpdateScript, CreateRemote, SetProperty,
-          DeleteInstance, OpenScript, StartPlaytest, StopPlaytest],
+          DeleteInstance, OpenScript, StartPlaytest, StopPlaytest, BuildWorld],
     Field(discriminator="operation"),
 ]
 

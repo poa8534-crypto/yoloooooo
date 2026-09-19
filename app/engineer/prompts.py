@@ -88,6 +88,16 @@ SCALABLE, NOT RIGID (this applies to every system you build, without exception):
   the answer without telling the caller -- an optional random generator made a "reproducible" roll
   reproducible only when called the right way.
 
+THE ENTRY POINT IS `Start`. A server system that needs to do something when the game
+begins exposes exactly one function for it, named `Start`, taking no arguments:
+      function MyService:Start()
+The generated bootstrap requires every server module in build order and calls `Start` on the
+ones that have it. It calls NOTHING ELSE. A system whose entry point is named `Build`, `Init`,
+`Setup` or `Run` is required successfully, reports no error, and never runs -- which is exactly
+what happened to a world-building system called `PierService.Build`: the pier, the hut and the
+pilings were all written, all accepted, and the place was empty. Put the work in `Start`, or
+call your own function from `Start`.
+
 BUILDING THE VISIBLE WORLD (for a system whose job is the place itself):
 - Reach the world through `Services.Workspace`, like any other service. The bare `workspace` and
   `Workspace` globals are refused by the guard, and `Services.Workspace` is type-checked.

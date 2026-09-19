@@ -45,7 +45,7 @@ end
 -- `bridge status` says which code Studio is actually running -- otherwise a
 -- stale plugin and a wrong code path look identical from outside, which cost a
 -- round trip once already.
-local PLUGIN_VERSION = "0.3.0-report-before-play"
+local PLUGIN_VERSION = "0.4.0-world-in-edit-mode"
 local PROTOCOL_VERSION = 1
 local DEFAULT_BRIDGE = "http://127.0.0.1:34873"
 local HEARTBEAT_SECONDS = 5
@@ -616,6 +616,63 @@ local function applyOpenScript(operation: any): (string, string, boolean)
 	return "applied", "opened in the editor", false
 end
 
+--[[
+	Run the module that makes the place appear, in EDIT mode.
+
+	Everything a generated system does happens at run time, so a finished build
+	opened in Studio as an empty baseplate: the pier, the hut and the pilings
+	were all written and accepted, and nothing had called them. This calls the
+	one system the specification marked `builds_world`, so the place is there to
+	look at and to edit without pressing Play.
+
+	Narrow on purpose. It requires ONE module, under ServerScriptService, that
+	this build just wrote, and calls one named function on it. It is not a way
+	to run arbitrary Luau in Studio.
+
+	The require is wrapped, and so is the call: a world builder that throws must
+	report why rather than taking the plugin down with it. The whole thing sits
+	inside the batch's ChangeHistoryService recording, so a person can undo the
+	world the same way they undo anything else.
+]]
+local function applyBuildWorld(operation: any): (string, string, boolean)
+	local module = resolve(operation.path, false)
+	if module == nil then
+		return "failed", `{operation.path} is not in this place`, false
+	end
+	if not module:IsA("ModuleScript") then
+		return "failed", `{operation.path} is a {module.ClassName}, not a ModuleScript`, false
+	end
+
+	local ok, loaded = pcall(require, module :: any)
+	if not ok then
+		return "failed", `could not require {operation.path}: {tostring(loaded)}`, false
+	end
+	if type(loaded) ~= "table" then
+		return "failed", `{operation.path} returned a {type(loaded)}, not a table`, false
+	end
+
+	local method = operation.method or "Start"
+	local entry = (loaded :: any)[method]
+	if type(entry) ~= "function" then
+		-- The failure that cost a whole build: the module loads, reports no
+		-- error, and never runs, because its entry point is called something
+		-- else. Say so plainly instead of returning "applied".
+		return "failed",
+			`{operation.path} has no {method}() to call -- the bootstrap and this both `
+				.. `call {method}, so a world builder that names its entry point anything `
+				.. `else is loaded and never runs`,
+			false
+	end
+
+	local ran, err = pcall(function()
+		entry(loaded)
+	end)
+	if not ran then
+		return "failed", `{operation.path}:{method}() errored: {tostring(err)}`, false
+	end
+	return "applied", `ran {operation.path}:{method}() in edit mode`, false
+end
+
 local HANDLERS: { [string]: (any) -> (string, string, boolean) } = {
 	create_instance = applyCreateInstance,
 	create_script = applyCreateScript,
@@ -626,6 +683,7 @@ local HANDLERS: { [string]: (any) -> (string, string, boolean) } = {
 	open_script = applyOpenScript,
 	start_playtest = applyStartPlaytest,
 	stop_playtest = applyStopPlaytest,
+	build_world = applyBuildWorld,
 }
 
 applyOperation = function(operation: any): (string, string, boolean)

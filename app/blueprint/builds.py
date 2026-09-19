@@ -336,7 +336,10 @@ async def run_build(blueprint_id: str, *, settings, factory, token: str,
 
     record.move(BuildStatus.SYNCING, f"{len(project)} file(s) to send")
     try:
-        batch = operations_for(project, build_id=record.id, play=play)
+        # The one system the specification marked as building the place, so
+        # Studio shows it in edit mode rather than only under Play.
+        world = next((system.path for system in spec.systems if system.builds_world), None)
+        batch = operations_for(project, build_id=record.id, play=play, world_builder=world)
     except Unmappable as exc:
         record.move(BuildStatus.FAILED, str(exc))
         raise BuildFailed(str(exc)) from None

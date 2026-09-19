@@ -25,6 +25,7 @@ import secrets
 
 from .protocol import (
     CreateInstance,
+    BuildWorld,
     CreateScript,
     OpenScript,
     OperationBatch,
@@ -134,7 +135,8 @@ def bootstrap_source(modules: list[str]) -> str:
 
 
 def operations_for(files: dict[str, str], *, build_id: str | None = None,
-                   play: bool = True, bootstrap: bool = True) -> OperationBatch:
+                   play: bool = True, bootstrap: bool = True,
+                   world_builder: str | None = None) -> OperationBatch:
     """One batch that puts a generated project into Studio and runs it.
 
     Folders are not emitted: the plugin creates missing folders on the way to a
@@ -164,6 +166,12 @@ def operations_for(files: dict[str, str], *, build_id: str | None = None,
 
     if not operations:
         raise Unmappable("there are no .luau files to build")
+
+    # Before any playtest: the place should be worth looking at in edit mode,
+    # not only once somebody presses Play.
+    if world_builder:
+        location, _class = studio_path(world_builder)
+        operations.append(op(BuildWorld, path=location))
 
     if play:
         operations.append(op(StartPlaytest, mode="play"))

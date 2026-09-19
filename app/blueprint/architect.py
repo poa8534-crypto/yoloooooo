@@ -124,6 +124,14 @@ a place with no ground, no dock, no spawn, and nothing for a player to stand on 
 real build of nine working systems was opened in Studio and the only thing on screen was a test
 cube from an unrelated smoke test, because no system had been asked to make anything.
 
+Mark it `builds_world: true`. Exactly one system may carry that flag, and it is how the build
+knows which module to run to make the place appear. Every other system leaves it false.
+
+Its entry point, like every server system, is `Start` -- the generated bootstrap calls that and
+nothing else. Write criteria about `Start`, not about `Build`: a system whose entry point is
+named otherwise loads without error and never runs, and that is how a finished build came out as
+an empty baseplate.
+
 Name it for the place rather than the machinery -- WorldService, BayService, LabService -- and give
 it criteria a test could fail, about what EXISTS when it has run:
   Good: "After Build runs, Workspace contains a dock part a character can stand on."
@@ -148,7 +156,7 @@ ANSWER FORMAT: a single JSON object, nothing else.
               "acceptance_criteria": ["a sentence a test could fail"],
               "depends_on": ["ResourceService"],
               "complexity": "low|medium|high", "essential": true,
-              "from_feature": null}],
+              "builds_world": false, "from_feature": null}],
  "asset_requirements": ["Zombie model", "Night ambience audio"]}"""
 
 
