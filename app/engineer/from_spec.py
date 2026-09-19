@@ -51,6 +51,34 @@ def order_systems(spec: GameBuildSpecification) -> list[SpecSystem]:
     return ordered
 
 
+def _place_in_the_plan(spec: GameBuildSpecification, system: SpecSystem) -> str:
+    """Where this system sits in the build, and what is waiting on it.
+
+    The Engineer is given one system at a time, which is what makes a build
+    coherent -- and also what makes it easy to write a system as though nothing
+    else existed. This is the context it would otherwise lack: the class of
+    work, whether the loop is blocked on it, what the player has already done
+    by the time they meet it, and which systems cannot be finished until it is.
+    """
+    position = spec.build_order.index(system.name) + 1 if system.name in spec.build_order else 0
+    dependents = sorted(other.name for other in spec.systems
+                        if system.name in other.depends_on)
+
+    parts = [f"This is system {position} of {len(spec.build_order)} in the build order."]
+    if system.required_for_vertical_slice:
+        parts.append("It is part of the VERTICAL SLICE: the smallest playable path needs it, "
+                     "so build it completely rather than leaving it half-wired.")
+    if system.core_loop_blocker:
+        parts.append("The core loop CANNOT complete without it.")
+    parts.append(f"Priority class {system.priority_class}.")
+    if dependents:
+        parts.append("These systems are waiting on it and will call into it: "
+                     + ", ".join(dependents) + ". Export what they need.")
+    else:
+        parts.append("Nothing else depends on it, so keep its surface small.")
+    return " ".join(parts)
+
+
 def task_for(spec: GameBuildSpecification, system: SpecSystem,
              repo: Path | None = None) -> EngineeringTask:
     """One system, as the Engineer's loop already understands it.
@@ -75,6 +103,13 @@ def task_for(spec: GameBuildSpecification, system: SpecSystem,
                 {other.name: other.path for other in spec.systems})
             if known:
                 notes.append(known)
+    # Why this system, why now. The doctrine asks the Engineer to build for a
+    # player experience rather than a file list, and a task that arrives with
+    # no place in that experience gets built as a file list.
+    place = _place_in_the_plan(spec, system)
+    if place:
+        notes.append(place)
+
     if spec.excluded_features:
         # The contract, restated per task. The Engineer never sees the blueprint,
         # and a feature it was not told was refused is one it may add helpfully.

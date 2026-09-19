@@ -11,6 +11,7 @@ import json
 import re
 import unicodedata
 
+from .doctrine import doctrine_summary
 from .schemas import EngineeringTask
 from .workspace import SERVICES_PATH, WRITABLE_ROOTS
 
@@ -190,6 +191,12 @@ WRITING COMMENTS (measured, and it has refused a whole run):
 - A run was refused three attempts running for exactly this: two lines of a copied file lost their
   `--` and became `treated as dead and taken, or the player could never rejoin.`
 
+HOW TO APPROACH THE SYSTEM YOU ARE GIVEN (the Engineer's doctrine, in full below).
+Read it before writing anything. It decides how you think about the work; the specification
+decides what the work is, and it always wins over anything here.
+
+{{DOCTRINE}}
+
 ANSWER FORMAT: a single JSON object, nothing else:
 {{"files": [{{"path": "src/server/Example.luau", "content": "--!strict\\n..."}}],
   "services": ["Players", "ReplicatedStorage"],
@@ -198,6 +205,12 @@ Return the COMPLETE content of every file you create or change, and ONLY those f
 starts from the unchanged project: a file you leave out keeps its current content exactly, and
 nothing from a previous refused attempt is kept. Never return a file you are not changing --
 copying it back cannot improve it and can only corrupt it."""
+
+# Substituted rather than interpolated in the f-string above: the doctrine is
+# markdown full of braces, and an f-string would try to evaluate them.
+SYSTEM = SYSTEM.replace("{DOCTRINE}", doctrine_summary(6000) or
+                        "(the doctrine file could not be read; build conservatively "
+                        "and follow the specification exactly)")
 
 
 def fence(text: object, limit: int = 20_000) -> str:

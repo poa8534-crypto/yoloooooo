@@ -74,34 +74,32 @@ def _constraints(blueprint: Blueprint) -> list[str]:
     return constraints
 
 
-def _ordered(systems: list, index: dict[str, SpecSystem]) -> list[str]:
-    """Build order: dependencies before dependents, stable otherwise.
+def _doctrine_order(systems: list[SpecSystem]) -> list[str]:
+    """Build order, from the dependency graph and the doctrine's priorities.
 
-    A cycle cannot be ordered, so it is reported rather than broken arbitrarily
-    -- picking a side silently would produce a build that fails for a reason
-    nobody could trace back to here.
+    See app/engineer/instruction.md and app/engineer/planning.py. Dependencies
+    are absolute; priority class, core-loop blocking and vertical-slice
+    membership only choose between systems that are equally ready.
     """
-    order: list[str] = []
-    placed: set[str] = set()
-    visiting: set[str] = set()
+    from ..engineer.doctrine import PriorityClass
+    from ..engineer.planning import PlanInvalid, PlannedSystem
+    from ..engineer.planning import build_order as compute
 
-    def place(name: str, trail: tuple[str, ...]) -> None:
-        if name in placed:
-            return
-        if name in visiting:
-            raise NotReady("these systems depend on each other in a circle, so there is no "
-                           f"order to build them in: {' -> '.join([*trail, name])}")
-        visiting.add(name)
-        for dependency in index[name].depends_on:
-            if dependency in index:
-                place(dependency, (*trail, name))
-        visiting.discard(name)
-        placed.add(name)
-        order.append(name)
-
-    for system in systems:
-        place(system.name, ())
-    return order
+    planned = [
+        PlannedSystem(
+            name=system.name,
+            depends_on=tuple(system.depends_on),
+            priority=PriorityClass(system.priority_class),
+            core_loop_blocker=system.core_loop_blocker,
+            required_for_vertical_slice=system.required_for_vertical_slice,
+            player_flow_index=system.player_flow_index,
+        )
+        for system in systems
+    ]
+    try:
+        return compute(planned)
+    except PlanInvalid as exc:
+        raise NotReady(str(exc)) from None
 
 
 def compile_spec(blueprint: Blueprint, *, spec_id: str | None = None,
@@ -119,7 +117,11 @@ def compile_spec(blueprint: Blueprint, *, spec_id: str | None = None,
         systems.append(SpecSystem(
             name=system.name, layer=system.layer, path=f"{root}/{system.name}.luau",
             purpose=system.purpose, acceptance_criteria=list(system.acceptance_criteria),
-            depends_on=list(system.depends_on), builds_world=system.builds_world))
+            depends_on=list(system.depends_on), builds_world=system.builds_world,
+            priority_class=system.priority_class,
+            core_loop_blocker=system.core_loop_blocker,
+            required_for_vertical_slice=system.required_for_vertical_slice,
+            player_flow_index=system.player_flow_index))
 
     index = {system.name: system for system in systems}
     unknown = sorted({dependency for system in systems for dependency in system.depends_on
@@ -149,7 +151,7 @@ def compile_spec(blueprint: Blueprint, *, spec_id: str | None = None,
         core_loop=blueprint.user_intent[:2000],
         config=blueprint.config,
         systems=systems,
-        build_order=_ordered(systems, index),
+        build_order=_doctrine_order(systems),
         included_features=[feature.title for feature in blueprint.selected_features()],
         excluded_features=[feature.title for feature in blueprint.rejected_features()],
         asset_requirements=list(blueprint.asset_requirements),

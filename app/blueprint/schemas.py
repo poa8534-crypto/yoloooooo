@@ -157,6 +157,13 @@ class GameSystem(Strict):
     depends_on: list[str] = Field(default_factory=list, max_length=12)
     complexity: Complexity = Complexity.MEDIUM
     essential: bool = True
+    # What the planner orders by. The architect declares these; the ORDER is
+    # computed from them rather than asked for, because a model asked for an
+    # order gives a plausible one. See app/engineer/instruction.md.
+    priority_class: str = Field(default="P5", pattern=r"^P[0-7]$")
+    core_loop_blocker: bool = False
+    required_for_vertical_slice: bool = False
+    player_flow_index: int = Field(default=999, ge=0, le=999)
     # The one system that makes the place appear. The build runs it in Studio
     # after syncing, so the world is there in edit mode rather than only once
     # somebody presses Play.
@@ -233,6 +240,10 @@ class SpecSystem(Strict):
     purpose: str = Field(min_length=1, max_length=2000)
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=20)
     depends_on: list[str] = Field(default_factory=list, max_length=12)
+    priority_class: str = Field(default="P5", pattern=r"^P[0-7]$")
+    core_loop_blocker: bool = False
+    required_for_vertical_slice: bool = False
+    player_flow_index: int = Field(default=999, ge=0, le=999)
     builds_world: bool = False
 
 

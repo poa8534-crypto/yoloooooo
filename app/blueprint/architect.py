@@ -114,6 +114,27 @@ Choose its layer:
 The client is never authoritative. If a system decides damage, currency, cooldowns or ownership, it
 is a server system, and the client asks it.
 
+CLASSIFY EVERY SYSTEM. These decide the order it is built in, and the order is COMPUTED
+from them -- you are not asked for a build order, because a plausible one is not a correct one.
+
+  priority_class:
+    P0 foundation        configuration, shared types, item and rarity definitions, data models
+    P1 core infrastructure   inventory, wallet, health, interaction, round state
+    P2 primary gameplay  the mechanic the player came for
+    P3 progression       selling, XP, upgrades, unlocks
+    P4 communication     HUD and the UI the loop needs
+    P5 secondary         quests, collections, crafting
+    P6 polish            VFX, SFX, camera, decoration
+    P7 meta              passes, daily rewards -- only if explicitly in scope
+
+  core_loop_blocker            true when the main loop cannot complete without it
+  required_for_vertical_slice  true when the smallest playable path needs it
+  player_flow_index            0, 1, 2... in the order the PLAYER meets it, not build order
+
+Think about where the first reward GOES. If the player is given something, the system that
+holds it must be in the specification and must come earlier in the player's flow. A reward
+with nowhere to go disappears, and the player learns the game is broken.
+
 Systems must be SCALABLE, NOT RIGID. Say so in the criteria: configuration is a table the caller can
 extend, adding a case means adding a row rather than editing a function, and nothing assumes a fixed
 number of players, items, stages or waves.
@@ -156,7 +177,10 @@ ANSWER FORMAT: a single JSON object, nothing else.
               "acceptance_criteria": ["a sentence a test could fail"],
               "depends_on": ["ResourceService"],
               "complexity": "low|medium|high", "essential": true,
-              "builds_world": false, "from_feature": null}],
+              "builds_world": false, "from_feature": null,
+              "priority_class": "P0|P1|P2|P3|P4|P5|P6|P7",
+              "core_loop_blocker": true, "required_for_vertical_slice": true,
+              "player_flow_index": 0}],
  "asset_requirements": ["Zombie model", "Night ambience audio"]}"""
 
 
