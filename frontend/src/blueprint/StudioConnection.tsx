@@ -20,7 +20,12 @@ export function useStudio(pollMs = 5000) {
 
   const refresh = useCallback(async () => {
     try {
-      setState(await blueprintApi.studio(token))
+      const answer = await blueprintApi.studio(token)
+      setState(answer)
+      if (answer.token && !token) {
+        sessionStorage.setItem(TOKEN_KEY, answer.token)
+        setToken(answer.token)
+      }
       setError('')
     } catch (caught) {
       setError((caught as Error).message)

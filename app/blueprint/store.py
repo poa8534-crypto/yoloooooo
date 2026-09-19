@@ -13,8 +13,12 @@ approve?" has to stay answerable after the blueprint has moved on.
 
 from __future__ import annotations
 
+import json
+import logging
 import secrets
 from datetime import UTC, datetime
+
+logger = logging.getLogger(__name__)
 
 from ..models import SystemState
 from .schemas import Blueprint, BuildStatus
@@ -101,8 +105,14 @@ class BlueprintStore:
         """
         with self.factory() as db:
             rows = [row for row in db.query(SystemState).all() if row.key.startswith(PREFIX)]
-        found = [Blueprint.model_validate(row.value_json) for row in rows]
-        matching = [blueprint for blueprint in found if blueprint.audit_id == audit_id]
+        matching: list[Blueprint] = []
+        for row in rows:
+            data = row.value_json if isinstance(row.value_json, dict) else json.loads(row.value_json)
+            if data.get("audit_id") == audit_id:
+                try:
+                    matching.append(Blueprint.model_validate(data))
+                except Exception as exc:
+                    logger.warning("Skipping unparseable blueprint row %s: %s", row.key, exc)
         if not matching:
             return None
         return max(matching, key=lambda blueprint: blueprint.updated_at)
@@ -110,6 +120,11 @@ class BlueprintStore:
     def list(self, limit: int = 50) -> list[Blueprint]:
         with self.factory() as db:
             rows = [row for row in db.query(SystemState).all() if row.key.startswith(PREFIX)]
-        blueprints = [Blueprint.model_validate(row.value_json) for row in rows]
+        blueprints: list[Blueprint] = []
+        for row in rows:
+            try:
+                blueprints.append(Blueprint.model_validate(row.value_json))
+            except Exception as exc:
+                logger.warning("Skipping unparseable blueprint row %s: %s", row.key, exc)
         blueprints.sort(key=lambda blueprint: blueprint.updated_at, reverse=True)
         return blueprints[:limit]

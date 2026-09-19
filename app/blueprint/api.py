@@ -32,6 +32,7 @@ from ..engineer.runs import NoDesign, build_clients, build_model_call, load_desi
 from .architect import ArchitectRefused, BlueprintArchitect, user_feature
 from .compile import NotReady, compile_spec, human_preview
 from .readiness import assess, scope_of
+from .reconcile import find_missing_systems, reconcile_missing_systems
 from .schemas import Blueprint, BlueprintConfig, BuildStatus, FeatureSuggestion, GameSystem
 from .store import BlueprintNotFound, BlueprintStore
 from .transitions import IllegalTransition, controls_for
@@ -64,6 +65,7 @@ def _view(blueprint: Blueprint) -> dict:
     disagreement is invisible.
     """
     readiness = assess(blueprint)
+    missing = find_missing_systems(blueprint)
     return {
         "blueprint": blueprint.model_dump(mode="json"),
         "readiness": readiness.as_dict(),
@@ -75,6 +77,7 @@ def _view(blueprint: Blueprint) -> dict:
             "undecided_features": len(blueprint.undecided_features()),
             "systems": len(blueprint.active_systems()),
         },
+        "missing_systems": [{"name": m.name, "needed_for": m.needed_for} for m in missing],
     }
 
 
@@ -280,9 +283,10 @@ async def systems(blueprint_id: str) -> dict:
             await client.close()
 
     updated = blueprint.model_copy(update={
-        "systems": planned[:40],
-        "asset_requirements": assets[:40],
+        "systems": planned[:100],
+        "asset_requirements": assets[:100],
     })
+    updated, _added = reconcile_missing_systems(updated)
     saved = store.save(updated, status=BuildStatus.BLUEPRINTING)
     ready = assess(saved).ready
     if ready:
@@ -328,6 +332,26 @@ def toggle_systems(blueprint_id: str, request: SystemToggleRequest) -> dict:
                                  if request.enabled.get(system.name, True)]
     return _view(store.save(blueprint.model_copy(update={"systems": systems}),
                             status=BuildStatus.BLUEPRINTING))
+
+
+@router.post("/{blueprint_id}/systems/reconcile")
+def reconcile_blueprint_systems(blueprint_id: str) -> dict:
+    """Reconcile missing systems needed by gameplay path or dependencies.
+
+    When an architect-generated plan contains gameplay path steps or dependencies
+    referencing systems that were not in the systems pass, this synthesizes
+    valid GameSystem specifications for them and adds them to the build.
+    """
+    store, _factory = _store()
+    blueprint = _load(blueprint_id)
+    updated, added = reconcile_missing_systems(blueprint)
+    if added:
+        saved = store.save(updated, status=BuildStatus.BLUEPRINTING)
+        ready = assess(saved).ready
+        if ready:
+            saved = store.save(saved, status=BuildStatus.READY_TO_BUILD)
+        return _view(saved)
+    return _view(blueprint)
 
 
 @router.get("/{blueprint_id}/specification")
@@ -402,6 +426,11 @@ def studio(token: str = "") -> dict:
         return {"bridge": "unknown", "plugin_connected": False,
                 "detail": f"something is answering on {BRIDGE_URL} but it is not the bridge"}
     if not token:
+        from ..bridge.pairing import read_token
+        from ..config import ROOT
+
+        token = read_token(ROOT)
+    if not token:
         return {"bridge": "online", "plugin_connected": False,
                 "detail": "The bridge is running. Paste its pairing token to see Studio's state.",
                 "needs_token": True}
@@ -418,7 +447,7 @@ def studio(token: str = "") -> dict:
                 "detail": "The bridge refused that token. It prints the right one when it starts.",
                 "needs_token": True}
     state = answer.json()
-    return {"bridge": "online", "latency_ms": latency_ms, **state}
+    return {"bridge": "online", "latency_ms": latency_ms, "token": token, **state}
 
 
 build_router = APIRouter(prefix="/api/builds", tags=["build"])

@@ -306,4 +306,71 @@ describe('the workspace', () => {
     const button = screen.getByRole('button', { name: /work out the systems/i }) as HTMLButtonElement
     expect(button.disabled).toBe(true)
   })
+
+  it('shows button to add missing systems when review fails with missing systems', async () => {
+    const ready = view({
+      blueprint: { ...view().blueprint, user_intent: 'a mine', status: 'ready_to_build' },
+      readiness: { percent: 100, ready: true, missing: [], satisfied: [] },
+    })
+    const reconciled = view({
+      blueprint: {
+        ...view().blueprint,
+        user_intent: 'a mine',
+        status: 'ready_to_build',
+        systems: [
+          {
+            id: 'sys_plot', name: 'PlotManagementService', layer: 'server',
+            purpose: 'Manage starter plots', acceptance_criteria: ['Allocates plots without collisions.'],
+            depends_on: [], complexity: 'medium', essential: true, from_feature: null,
+          },
+        ],
+      },
+      readiness: { percent: 100, ready: true, missing: [], satisfied: [] },
+      missing_systems: [],
+    })
+
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('proceed')) return reply(ready)
+      if (url.includes('/api/studio')) return reply({ bridge: 'offline', plugin_connected: false })
+      if (url.includes('specification')) return reply({
+        detail: "this plan could not produce the game it describes: 'Spawn' needs PlotManagementService, which is not in the plan",
+      }, 409)
+      if (url.includes('systems/reconcile')) return reply(reconciled)
+      return reply({ detail: 'unexpected' }, 404)
+    })
+
+    render(<BlueprintWorkspace auditId="audit-1" title="NeuroMine" onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('blueprint-workspace')).toBeTruthy())
+    await userEvent.click(screen.getByRole('button', { name: 'Systems' }))
+
+    // Click Review the build which will fail with missing systems error
+    await userEvent.click(screen.getByRole('button', { name: /review the build/i }))
+
+    await waitFor(() => expect(screen.getByText(/which is not in the plan/)).toBeTruthy())
+    const addBtn = screen.getByRole('button', { name: /add missing systems to plan/i })
+    expect(addBtn).toBeTruthy()
+
+    // Click to reconcile
+    await userEvent.click(addBtn)
+    const reconcileCall = fetchMock.mock.calls.find(call => String(call[0]).includes('systems/reconcile'))
+    expect(reconcileCall).toBeTruthy()
+  })
+
+  it('shows missing systems banner in the systems step when missing systems exist', async () => {
+    const withMissing = view({
+      blueprint: { ...view().blueprint, user_intent: 'a mine', status: 'ready_to_build' },
+      readiness: { percent: 100, ready: true, missing: [], satisfied: [] },
+      missing_systems: [{ name: 'PlotManagementService', needed_for: 'Spawn into starter claim' }],
+    })
+    fetchMock.mockImplementation((url: string) => url.includes('proceed')
+      ? reply(withMissing) : reply({ bridge: 'offline', plugin_connected: false }))
+
+    render(<BlueprintWorkspace auditId="audit-1" title="NeuroMine" onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('blueprint-workspace')).toBeTruthy())
+    await userEvent.click(screen.getByRole('button', { name: 'Systems' }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/1 required system is missing from the plan/)).toBeTruthy())
+    expect(screen.getByRole('button', { name: /add missing systems to plan/i })).toBeTruthy()
+  })
 })

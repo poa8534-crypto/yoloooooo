@@ -102,6 +102,20 @@ def _doctrine_order(systems: list[SpecSystem]) -> list[str]:
         raise NotReady(str(exc)) from None
 
 
+def _field_limit(model: type, field: str) -> int:
+    """The max_length a model declares for a list field.
+
+    Read from the model rather than repeated here, so raising the cap in one
+    place cannot leave a truncation behind that still uses the old number.
+    """
+    from annotated_types import MaxLen
+
+    for entry in model.model_fields[field].metadata:
+        if isinstance(entry, MaxLen):
+            return entry.max_length
+    raise ValueError(f"{model.__name__}.{field} declares no maximum length")
+
+
 def _validate(spec: GameBuildSpecification, blueprint: Blueprint) -> None:
     """Refuse a plan that could not produce the experience it describes.
 
@@ -172,8 +186,14 @@ def compile_spec(blueprint: Blueprint, *, spec_id: str | None = None,
         raise NotReady("two systems share a name, so one would overwrite the other: "
                        + ", ".join(duplicates))
 
+    # Flattened across every system, so the total grows with the plan: 100
+    # systems carrying 20 criteria each would be 2000, and the field holds
+    # 1000. Trimmed rather than left to fail validation, because this list is
+    # a summary -- each system keeps its own criteria, which is what the
+    # Engineer is actually given and what the gate checks against.
     criteria = [f"{system.name}: {criterion}"
                 for system in systems for criterion in system.acceptance_criteria]
+    criteria = criteria[:_field_limit(GameBuildSpecification, "acceptance_criteria")]
 
     spec = GameBuildSpecification(
         spec_id=spec_id or secrets.token_hex(8),

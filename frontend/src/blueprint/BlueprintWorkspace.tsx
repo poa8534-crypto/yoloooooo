@@ -147,6 +147,25 @@ export function BlueprintWorkspace({ auditId, title, originalIdea, onClose }: {
     if (updated) { setView(updated); setStep('systems') }
   }
 
+  async function reconcileMissing() {
+    if (!id) return
+    const updated = await run('Adding missing systems to plan', async () => {
+      const res = await blueprintApi.reconcileSystems(id)
+      setError('')
+      return res
+    })
+    if (updated) {
+      setView(updated)
+      try {
+        const compiled = await blueprintApi.specification(id)
+        setSpec(compiled)
+        setStep('review')
+      } catch {
+        // If other readiness requirements remain, stay on systems
+      }
+    }
+  }
+
   async function review() {
     if (!id) return
     const compiled = await run('Compiling the specification', () => blueprintApi.specification(id))
@@ -184,6 +203,11 @@ export function BlueprintWorkspace({ auditId, title, originalIdea, onClose }: {
   const readiness = view.readiness
   const undecided = view.counts.undecided_features
   const connected = Boolean(studio.state?.plugin_connected)
+  const hasMissingSystems = Boolean(
+    (view.missing_systems && view.missing_systems.length > 0) ||
+    error.includes('which is not in the plan') ||
+    error.includes('are not in the build')
+  )
 
   return (
     <div className="blueprint-workspace" data-testid="blueprint-workspace">
@@ -201,7 +225,23 @@ export function BlueprintWorkspace({ auditId, title, originalIdea, onClose }: {
         <button type="button" className="text-button" onClick={onClose}>Close</button>
       </header>
 
-      {error && <div className="warning-box" role="alert"><p>{error}</p></div>}
+      {error && (
+        <div className="warning-box" role="alert">
+          <p>{error}</p>
+          {hasMissingSystems && (
+            <div style={{ marginTop: '0.75rem' }}>
+              <button
+                type="button"
+                className="primary"
+                disabled={Boolean(busy)}
+                onClick={reconcileMissing}
+              >
+                Add missing systems to plan
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       {busy && <p className="blueprint-busy" role="status">{busy}</p>}
 
       <div className="blueprint-columns">
@@ -307,6 +347,24 @@ export function BlueprintWorkspace({ auditId, title, originalIdea, onClose }: {
           {step === 'systems' && (
             <section className="data-panel">
               <h2>Systems to build</h2>
+              {view.missing_systems && view.missing_systems.length > 0 && (
+                <div className="warning-box" style={{ marginBottom: '1.5rem' }}>
+                  <p>
+                    {view.missing_systems.length} required system{view.missing_systems.length === 1 ? ' is' : 's are'} missing from the plan:{' '}
+                    <strong>{view.missing_systems.map(m => m.name).join(', ')}</strong>.
+                  </p>
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={Boolean(busy)}
+                      onClick={reconcileMissing}
+                    >
+                      Add missing systems to plan
+                    </button>
+                  </div>
+                </div>
+              )}
               {blueprint.systems.length === 0
                 ? <p className="body-copy">No systems yet. Decide on the features first.</p>
                 : <ul className="system-list">

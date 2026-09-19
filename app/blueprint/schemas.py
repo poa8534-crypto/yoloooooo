@@ -209,9 +209,9 @@ class Blueprint(Strict):
     user_intent: str = Field(default="", max_length=8000)
     summary: str = Field(default="", max_length=4000)
     suggestions: list[FeatureSuggestion] = Field(default_factory=list, max_length=24)
-    systems: list[GameSystem] = Field(default_factory=list, max_length=40)
+    systems: list[GameSystem] = Field(default_factory=list, max_length=100)
     config: BlueprintConfig = Field(default_factory=BlueprintConfig)
-    asset_requirements: list[str] = Field(default_factory=list, max_length=40)
+    asset_requirements: list[str] = Field(default_factory=list, max_length=100)
     # What the player experiences, and the actions they take, decided before
     # any system is planned. The systems are derived from these rather than the
     # other way round -- see app/engineer/instruction.md.
@@ -280,8 +280,8 @@ class GameBuildSpecification(Strict):
     core_loop: str = Field(default="", max_length=2000)
 
     config: BlueprintConfig
-    systems: list[SpecSystem] = Field(default_factory=list, max_length=40)
-    build_order: list[str] = Field(default_factory=list, max_length=40)
+    systems: list[SpecSystem] = Field(default_factory=list, max_length=100)
+    build_order: list[str] = Field(default_factory=list, max_length=100)
     player_journey: PlayerJourney | None = None
     gameplay_path: GameplayPath | None = None
 
@@ -291,9 +291,9 @@ class GameBuildSpecification(Strict):
     excluded_features: list[str] = Field(default_factory=list, max_length=40)
     included_features: list[str] = Field(default_factory=list, max_length=40)
 
-    asset_requirements: list[str] = Field(default_factory=list, max_length=40)
-    technical_constraints: list[str] = Field(default_factory=list, max_length=40)
-    acceptance_criteria: list[str] = Field(default_factory=list, max_length=200)
+    asset_requirements: list[str] = Field(default_factory=list, max_length=100)
+    technical_constraints: list[str] = Field(default_factory=list, max_length=60)
+    acceptance_criteria: list[str] = Field(default_factory=list, max_length=1000)
 
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     content_hash: str = Field(default="", max_length=64)

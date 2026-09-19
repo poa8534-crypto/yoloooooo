@@ -495,3 +495,31 @@ def test_the_engineer_is_told_how_to_build_one_without_inventing_assets():
     assert "Anchored" in SYSTEM
     # And it has to be rebuildable, or a second build leaves two worlds.
     assert "one world, not two" in SYSTEM
+
+
+def test_the_criteria_summary_is_trimmed_rather_than_failing_to_compile():
+    """The summary is flattened across every system, so it grows with the plan.
+
+    A hundred systems carrying twenty criteria each is two thousand lines for a
+    field that holds a thousand, and the specification would fail to build at
+    all. Each system keeps its own criteria either way -- that is what the
+    Engineer is handed and what the gate checks -- so the summary is trimmed.
+    """
+    from app.blueprint.compile import _field_limit
+    from app.blueprint.schemas import GameBuildSpecification
+
+    limit = _field_limit(GameBuildSpecification, "acceptance_criteria")
+    many = [
+        system(f"Service{index:03}", acceptance_criteria=[
+            f"Refusing bad input number {n} for service {index} changes nothing."
+            for n in range(20)
+        ])
+        for index in range(60)
+    ]
+
+    spec = compile_spec(blueprint(systems=many))
+
+    assert len(many) * 20 > limit, "the fixture has to exceed the cap to prove anything"
+    assert len(spec.acceptance_criteria) == limit
+    assert len(spec.systems) == len(many), "no system was dropped to make it fit"
+    assert all(entry.acceptance_criteria for entry in spec.systems)

@@ -13,6 +13,7 @@ because it converts a clear "install this" into a mysterious mid-build failure.
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -113,6 +114,9 @@ class FakeClient:
 
     def resolve(self) -> str | None:
         return self._found
+
+    def install_candidates(self) -> list[Path]:
+        return [] if self._found else [Path("C:/Users/someone/AppData/Local/agy/bin/agy.exe")]
 
 
 def test_agy_is_resolved_the_way_the_client_resolves_it(monkeypatch):

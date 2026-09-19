@@ -337,6 +337,44 @@ def test_resolution_gives_up_when_it_is_really_not_there(tmp_path, monkeypatch):
     assert AntigravityClient().resolve() is None
 
 
+def test_it_is_found_even_by_a_process_without_localappdata(tmp_path, monkeypatch):
+    # The dashboard runs as a scheduled task, and that process had no
+    # %LOCALAPPDATA%: agy was installed and reported missing, and the architect
+    # fell back to other models. The folder is asked of Windows instead.
+    binary = tmp_path / "agy" / "bin" / "agy.exe"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("", encoding="utf-8")
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr("app.engineer.antigravity.shutil.which", lambda _name: None)
+    monkeypatch.setattr("app.engineer.antigravity._known_folder", lambda _folder: tmp_path)
+
+    assert AntigravityClient().resolve() == str(binary)
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="a Windows known folder")
+def test_windows_names_the_same_folder_the_variable_does(monkeypatch):
+    import os
+
+    from app.engineer.antigravity import FOLDERID_LOCAL_APP_DATA, _known_folder
+
+    expected = os.environ.get("LOCALAPPDATA")
+    if not expected:
+        pytest.skip("this shell has no LOCALAPPDATA to compare with")
+    assert _known_folder(FOLDERID_LOCAL_APP_DATA) == Path(expected)
+
+
+def test_a_missing_agy_is_reported_with_where_it_was_looked_for(tmp_path, monkeypatch):
+    from app.engineer.toolchain import check_agy
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr("app.engineer.antigravity.shutil.which", lambda _name: None)
+
+    report = check_agy()
+
+    assert report.present is False
+    assert str(tmp_path / "agy" / "bin" / "agy.exe") in report.detail
+
+
 # ---- the chain ------------------------------------------------------------
 
 async def answers(_system, _prompt, _deadline):
@@ -382,3 +420,35 @@ def test_an_empty_chain_is_refused_when_it_is_built():
 def test_an_empty_model_list_is_refused_when_it_is_built():
     with pytest.raises(ValueError, match="at least one"):
         antigravity_models(AntigravityClient(), [])
+
+
+def test_agy_installed_inside_another_apps_private_storage_is_named_as_such(tmp_path, monkeypatch):
+    # Measured on the owner's machine: installed from a terminal inside the
+    # Claude desktop app, an MSIX package, agy landed in that app's private
+    # AppData. Programs run from inside the app saw it; the dashboard, started
+    # by Task Scheduler, got "the system cannot find the path specified".
+    from app.engineer.toolchain import check_agy, inside_packaged_apps
+
+    local = tmp_path / "AppData" / "Local"
+    private = local / "Packages" / "Claude_pzs8sxrjxfjjc" / "LocalCache" / "Local" / "agy" / "bin"
+    private.mkdir(parents=True)
+    (private / "agy.exe").write_text("", encoding="utf-8")
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.setattr("app.engineer.antigravity.shutil.which", lambda _name: None)
+
+    assert inside_packaged_apps(local / "agy" / "bin" / "agy.exe") == [
+        ("Claude", private / "agy.exe")]
+    report = check_agy()
+    assert report.present is False
+    assert "Claude app" in report.detail and "ordinary terminal" in report.detail
+
+
+def test_an_ordinary_absence_is_not_blamed_on_a_packaged_app(tmp_path, monkeypatch):
+    from app.engineer.toolchain import check_agy
+
+    local = tmp_path / "AppData" / "Local"
+    (local / "Packages" / "Some.App_123" / "LocalCache" / "Local").mkdir(parents=True)
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.setattr("app.engineer.antigravity.shutil.which", lambda _name: None)
+
+    assert "private storage" not in check_agy().detail

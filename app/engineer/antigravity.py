@@ -64,6 +64,58 @@ NO_TOOLS = (
 )
 
 
+FOLDERID_LOCAL_APP_DATA = "F1B32785-6FBA-4FCF-9D55-7B8E7F157091"
+
+
+def _known_folder(folder_id: str) -> Path | None:
+    """A Windows known folder, asked of the shell rather than the environment."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    import uuid
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                    ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+    value = uuid.UUID(folder_id)
+    guid = GUID(value.time_low, value.time_mid, value.time_hi_version,
+                (ctypes.c_ubyte * 8)(*value.bytes[8:]))
+    found = ctypes.c_wchar_p()
+    try:
+        failed = ctypes.windll.shell32.SHGetKnownFolderPath(
+            ctypes.byref(guid), 0, None, ctypes.byref(found))
+        return None if failed or not found.value else Path(found.value)
+    except OSError:
+        return None
+    finally:
+        if found:
+            ctypes.windll.ole32.CoTaskMemFree(found)
+
+
+def local_app_data() -> Path | None:
+    """This user's local application data folder, where `agy` installs itself.
+
+    Not only %LOCALAPPDATA%. The dashboard runs as a scheduled task, and a
+    process Task Scheduler starts can lack it -- measured: that dashboard found
+    no `agy` while every terminal did, the architect fell back to Gemini and a
+    local 14B model without anyone seeing, and the Build button answered that
+    the build machine had no `agy`. The user PATH names the folder as
+    `%LOCALAPPDATA%\\agy\\bin` too, so without the variable that entry expands
+    to nothing. Windows' own answer comes from the user's profile, whatever
+    the environment holds.
+    """
+    configured = os.environ.get("LOCALAPPDATA")
+    if configured:
+        return Path(configured)
+    known = _known_folder(FOLDERID_LOCAL_APP_DATA)
+    if known is not None:
+        return known
+    fallback = Path.home() / "AppData" / "Local"
+    return fallback if fallback.is_dir() else None
+
+
 def stream_message(prompt: str) -> bytes:
     """One NDJSON line for `--input-format stream-json`.
 
@@ -134,13 +186,17 @@ class AntigravityClient:
         found = shutil.which(self.executable)
         if found:
             return found
-        local = os.environ.get("LOCALAPPDATA")
-        if local:
-            for name in (f"{self.executable}.exe", self.executable):
-                candidate = Path(local) / "agy" / "bin" / name
-                if candidate.is_file():
-                    return str(candidate)
+        for candidate in self.install_candidates():
+            if candidate.is_file():
+                return str(candidate)
         return None
+
+    def install_candidates(self) -> list[Path]:
+        """Where the installer puts it, for a report that says where it looked."""
+        local = local_app_data()
+        if local is None:
+            return []
+        return [local / "agy" / "bin" / name for name in (f"{self.executable}.exe", self.executable)]
 
     def workspace(self) -> Path:
         if self._scratch is None:

@@ -25,6 +25,7 @@ import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .antigravity import AntigravityClient, local_app_data
 from .gate import resolve_tool, rokit_environment
 
 # Every tool the six-check gate shells out to, with the flag that makes it
@@ -131,6 +132,51 @@ def check_gate_tool(name: str, purpose: str, repo: Path) -> ToolReport:
                       detail="" if answered else f"{why}. {ROKIT_HINT}")
 
 
+def inside_packaged_apps(
+    local_or_target: Path,
+    relative: Path | None = None,
+) -> list[tuple[str, Path]]:
+    """Copies of `relative` (or `local_or_target`) that exist only inside a packaged app's storage.
+
+    A Windows app installed as an MSIX package gets its AppData writes
+    redirected to %LOCALAPPDATA%\\Packages\\<package>\\LocalCache, and anything
+    installed from a terminal inside it lands there -- visible to programs run
+    from that app at the ordinary path, invisible to everything else.
+    """
+    if relative is None:
+        local = local_app_data()
+        if local is None:
+            return []
+        try:
+            relative = local_or_target.relative_to(local)
+        except ValueError:
+            return []
+    else:
+        local = local_or_target
+
+    packages = local / "Packages"
+    found = []
+    try:
+        for package in sorted(packages.iterdir()):
+            copy = package / "LocalCache" / "Local" / relative
+            if copy.is_file():
+                found.append((package.name.split("_")[0], copy))
+    except OSError:
+        return []
+    return found
+
+
+def _why_not(path: Path) -> str:
+    """What the operating system says about a path that did not resolve."""
+    import os
+
+    try:
+        found = os.stat(path)
+    except OSError as exc:
+        return f"{type(exc).__name__}: {exc.strerror or exc}"
+    return f"it exists, {found.st_size} bytes, but is not a file"
+
+
 def check_agy(client=None) -> ToolReport:
     """The Antigravity CLI, resolved the way the client resolves it.
 
@@ -139,15 +185,40 @@ def check_agy(client=None) -> ToolReport:
     Asking `shutil.which` here would report it missing on exactly the machine
     where it works.
     """
-    from .antigravity import AntigravityClient
-
     client = client or AntigravityClient()
     found = client.resolve()
     if not found:
+        # Where it looked, so a miss can be told apart from an absence: the
+        # scheduled-task dashboard once reported this while agy was installed,
+        # because the process could not see %LOCALAPPDATA%.
+        candidates = client.install_candidates()[:1]
+        places = ", ".join(f"{path} ({_why_not(path)})" for path in candidates)
+        packaged = []
+        local = local_app_data()
+        if local is not None and candidates:
+            try:
+                packaged = inside_packaged_apps(local, candidates[0].relative_to(local))
+            except ValueError:
+                packaged = []
+        if packaged:
+            # Measured on this machine: installed from a terminal inside the
+            # Claude desktop app, which is an MSIX package, agy was written to
+            # that app's private AppData. Everything run from inside the app
+            # found it; the dashboard, started by Task Scheduler, could not.
+            return ToolReport(
+                name="agy", present=False, purpose="the primary model provider",
+                detail=(f"installed only inside the private storage of the "
+                        f"{', '.join(name for name, _path in packaged)} app, at "
+                        f"{packaged[0][1]}. It was installed from a terminal inside that app, "
+                        "so only programs run from inside it can see it, and this service "
+                        "cannot. Install the Antigravity CLI again from an ordinary terminal "
+                        "(Windows PowerShell from the Start menu), then restart the service."))
         return ToolReport(
             name="agy", present=False, purpose="the primary model provider",
-            detail="not found. Install the Antigravity CLI and restart whatever runs "
-                   "the service, so it inherits the new PATH.")
+            detail="not found on this process's PATH"
+                   + (f" or at {places}" if places else "")
+                   + ". Install the Antigravity CLI and restart whatever runs the service, "
+                     "so it inherits the new PATH.")
     answered, version, why = _version([found, "--version"])
     return ToolReport(name="agy", present=True, path=found, version=version,
                       purpose="the primary model provider",

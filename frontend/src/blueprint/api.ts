@@ -90,6 +90,7 @@ export interface BlueprintView {
     undecided_features: number
     systems: number
   }
+  missing_systems?: Array<{ name: string; needed_for: string }>
   resumed?: boolean
 }
 
@@ -98,6 +99,7 @@ export interface StudioState {
   plugin_connected: boolean
   detail?: string
   needs_token?: boolean
+  token?: string
   studio?: { plugin_version: string; studio_version: string; place_name: string; mode: string } | null
   runtime_errors?: number
 }
@@ -220,6 +222,9 @@ export const blueprintApi = {
 
   systems: (id: string) =>
     call<BlueprintView>(`/api/blueprints/${id}/systems`, { method: 'POST' }),
+
+  reconcileSystems: (id: string) =>
+    call<BlueprintView>(`/api/blueprints/${id}/systems/reconcile`, { method: 'POST' }),
 
   toggleSystems: (id: string, enabled: Record<string, boolean>) =>
     call<BlueprintView>(`/api/blueprints/${id}/systems/toggle`, {
