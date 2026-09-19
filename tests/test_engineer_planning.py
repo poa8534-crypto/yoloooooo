@@ -23,10 +23,11 @@ from app.engineer.planning import PlanInvalid, PlannedSystem, build_order, valid
 
 
 def system(name: str, *depends: str, priority=PriorityClass.SECONDARY,
-           blocker: bool = False, slice_: bool = False, flow: int = 999) -> PlannedSystem:
+           blocker: bool = False, slice_: bool = False, flow: int = 999,
+           purpose: str = "") -> PlannedSystem:
     return PlannedSystem(name=name, depends_on=depends, priority=priority,
                          core_loop_blocker=blocker, required_for_vertical_slice=slice_,
-                         player_flow_index=flow)
+                         player_flow_index=flow, purpose=purpose)
 
 
 # ---- the doctrine exists and says what it must -----------------------------
@@ -201,6 +202,35 @@ def test_a_reward_whose_destination_no_system_provides_fails():
 
     assert not result.ok
     assert any("no system in the plan holds anything" in p for p in result.problems)
+
+
+def test_a_reward_kept_somewhere_the_genre_has_no_noun_for_passes():
+    """The storage nouns were written while thinking about one kind of game.
+
+    A tower climb keeps the player's progress in a checkpoint, and refusing
+    that plan is the check being wrong about the game rather than the plan
+    being wrong about the player.
+    """
+    result = validate_plan(
+        systems=[system("SessionLifecycleService"), system("CheckpointService"),
+                 system("LocomotionService")],
+        journey=journey(first_reward="reaching Floor 1",
+                        reward_destination="the player's active session state, holding "
+                                           "the checkpoint they last touched"),
+        path=path("Locomotion"), excluded_features=[])
+
+    assert result.ok, result.problems
+
+
+def test_a_system_that_says_it_stores_the_reward_counts_as_the_holder():
+    # The name is not the only place a plan can say what a system does.
+    result = validate_plan(
+        systems=[system("FishingService"),
+                 system("CreelService", purpose="keeps every fish the player lands")],
+        journey=journey(reward_destination="the player's creel"),
+        path=path("Fishing"), excluded_features=[])
+
+    assert result.ok, result.problems
 
 
 def test_a_reward_destination_a_system_does_provide_passes():

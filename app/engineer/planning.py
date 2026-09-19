@@ -41,6 +41,7 @@ class PlannedSystem:
     required_for_vertical_slice: bool = False
     player_flow_index: int = 999
     risk: str = "medium"
+    purpose: str = ""
 
     @property
     def sort_key(self) -> tuple:
@@ -168,7 +169,19 @@ def validate_plan(*, systems: list[PlannedSystem], journey: PlayerJourney,
         # Only the SYSTEMS are asked. The destination naming a satchel proves
         # the plan has a word for where the fish goes, not that anything in it
         # can hold one -- and that difference is the entire check.
-        holder = any(word in name.lower() for name in known for word in _STORAGE_WORDS)
+        #
+        # Asked two ways, because a vocabulary of storage nouns is a vocabulary
+        # of SOME genre. A tower climb keeps the player's progress in a
+        # CheckpointService, and a list written while thinking about fishing
+        # has no word for that. So the first question is whether any system
+        # shares a real word with the destination the plan itself named, which
+        # works whatever the game is about; the storage nouns stay as a second
+        # answer, for a plan that says "creel" and builds an InventoryService.
+        wanted = _significant(journey.reward_destination)
+        holder = any(
+            wanted & (_significant(system.name) | _significant(system.purpose))
+            for system in systems
+        ) or any(word in name.lower() for name in known for word in _STORAGE_WORDS)
         if not holder:
             result.problems.append(
                 f"the first reward goes to {journey.reward_destination!r} and no system in "

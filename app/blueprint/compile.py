@@ -124,6 +124,7 @@ def _validate(spec: GameBuildSpecification, blueprint: Blueprint) -> None:
             core_loop_blocker=system.core_loop_blocker,
             required_for_vertical_slice=system.required_for_vertical_slice,
             player_flow_index=system.player_flow_index,
+            purpose=system.purpose,
         )
         for system in spec.systems
     ]
