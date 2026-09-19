@@ -251,7 +251,17 @@ def command_check(args) -> int:
     for check in report.checks:
         print(f"  {'PASS' if check.passed else 'FAIL'}  {check.name}")
         if not check.passed:
-            for line in check.output.strip().splitlines()[:12]:
+            # The lines that say what went wrong, not the first dozen lines of
+            # the report. verify.ps1 prints each check in turn and the passing
+            # ones come first, so a head of the output is a list of PASSes and
+            # the actual failure is below the cut -- which is exactly what it
+            # showed the first time this was used.
+            lines = check.output.strip().splitlines()
+            interesting = [
+                line for line in lines
+                if re.search(r"error|fail|expected|caused by|\.luau", line, re.IGNORECASE)
+            ]
+            for line in (interesting or lines)[-25:]:
                 print(f"        {line}")
     print()
     print("GATE PASSED" if report.passed else "GATE FAILED")
