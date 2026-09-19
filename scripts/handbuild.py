@@ -44,6 +44,7 @@ from app.db import SessionLocal  # noqa: E402
 from app.engineer.from_spec import task_for  # noqa: E402
 from app.engineer.land import land  # noqa: E402
 from app.engineer.runs import build_gate, game_repo  # noqa: E402
+from app.engineer.cli import use_utf8  # noqa: E402
 from app.engineer.workspace import Worktree, read_normalized, services_for_project  # noqa: E402
 
 WORKTREE_MARK = "handbuilt"
@@ -369,6 +370,13 @@ def main(argv: list[str] | None = None) -> int:
     landing = commands.add_parser("land", help="put it into the project, if the project still builds")
     landing.add_argument("system")
     landing.add_argument("--keep", action="store_true", help="leave the worktree in place")
+
+    # The gate's own output is UTF-8: selene draws boxes, luau-lsp quotes
+    # source. Printing that to a cp1252 console raises, and the traceback lands
+    # exactly where the error message should have been -- which is how this was
+    # found, with the real failure replaced by a UnicodeEncodeError.
+    use_utf8(sys.stdout)
+    use_utf8(sys.stderr)
 
     args = parser.parse_args(argv)
     return {
