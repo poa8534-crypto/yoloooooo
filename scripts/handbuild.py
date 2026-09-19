@@ -20,6 +20,7 @@ and neither can the next build.
     python scripts/handbuild.py open MiningService      # a worktree to write in
     python scripts/handbuild.py check MiningService     # format, then the gate
     python scripts/handbuild.py land MiningService      # onto master, verified
+    python scripts/handbuild.py sync                    # into Studio, and play it
 
 The game, the specification and the base branch all come from configuration,
 so this works for whichever project GAME_PROJECT_DIR points at.
@@ -355,6 +356,123 @@ def command_land(args) -> int:
     return 0
 
 
+def command_sync(args) -> int:
+    """Send the project to the open Studio place and start a playtest.
+
+    A build ends by sending Studio everything it has, but a project finished
+    by hand has no build to do that. This sends the same batch a build does
+    (`studio_batch`), then reports what Studio's own log says the place's
+    scripts printed, warned and threw while the test ran.
+    """
+    import time
+    from collections import Counter
+
+    import httpx
+
+    from app.blueprint.api import BRIDGE_URL
+    from app.blueprint.builds import studio_batch
+    from app.bridge import studio_log
+    from app.bridge.from_project import read_project
+    from app.bridge.pairing import read_token
+
+    repo = game_repo(_settings())
+    spec = _spec()
+    token = read_token(ROOT)
+    if not token:
+        raise SystemExit("the bridge has no pairing token yet: start it once with "
+                         "`python -m app.bridge.run`")
+    headers = {"X-Bridge-Token": token}
+
+    def get(path: str, **params) -> httpx.Response:
+        return httpx.get(f"{BRIDGE_URL}{path}", headers=headers, params=params, timeout=10.0)
+
+    try:
+        status = get("/bridge/status")
+    except httpx.HTTPError:
+        raise SystemExit(f"no bridge at {BRIDGE_URL}: start it with "
+                         "`python -m app.bridge.run`") from None
+    if status.status_code == 401:
+        raise SystemExit("the bridge refused the stored pairing token")
+    state = status.json()
+    studio = state.get("studio") or {}
+    if not state.get("plugin_connected"):
+        raise SystemExit("the Studio plugin is not connected: open the Venture Engineer "
+                         "panel in Studio and press Connect")
+    if studio.get("mode") == "run":
+        raise SystemExit("Studio is already running a test: stop it, then sync")
+    place = str(studio.get("place_name", ""))
+    # The wrong-project trap, from this side: a sync pours the project into
+    # whatever place happens to be open.
+    if place.lower() != repo.name.lower() and not args.force:
+        raise SystemExit(f"Studio has {place!r} open, not {repo.name!r}. Open the right "
+                         "place, or pass --force if it is simply named differently.")
+
+    log = studio_log.newest()
+    offset = log.stat().st_size if log else 0
+
+    project = read_project(repo)
+    batch = studio_batch(spec, project, build_id=f"sync-{secrets.token_hex(4)}",
+                         play=not args.no_play)
+    queued = httpx.post(f"{BRIDGE_URL}/bridge/batches", headers=headers, timeout=30.0,
+                        json=batch.model_dump(by_alias=True, mode="json"))
+    if queued.status_code != 202:
+        print(f"the bridge refused the batch: {queued.status_code} {queued.text[:300]}")
+        return 1
+    print(f"sent {len(project)} file(s) to {place!r} as {len(batch.operations)} "
+          f"operation(s), batch {batch.batch_id}")
+
+    reported: dict[str, dict] = {}
+    deadline = time.monotonic() + args.timeout
+    while time.monotonic() < deadline and not reported:
+        answer = get(f"/bridge/results/{batch.batch_id}")
+        if answer.status_code == 200:
+            reported = {entry["operation_id"]: entry for entry in answer.json()["results"]}
+        else:
+            time.sleep(1.5)
+    if not reported:
+        print(f"Studio did not report within {args.timeout:.0f}s")
+        return 1
+    if not args.no_play:
+        # A play mode that refuses at once is reported a second time, over the
+        # first report, holding only the correction. Read it once more.
+        time.sleep(3)
+        again = get(f"/bridge/results/{batch.batch_id}")
+        if again.status_code == 200:
+            reported.update({entry["operation_id"]: entry for entry in again.json()["results"]})
+
+    counts = Counter(entry["status"] for entry in reported.values())
+    print("studio: " + ", ".join(f"{counts[name]} {name}" for name in
+                                 ("applied", "skipped", "started", "failed") if counts[name]))
+    for operation in batch.operations:
+        entry = reported.get(operation.operation_id)
+        kind = operation.operation.value
+        if entry is None:
+            print(f"  NO REPORT  {kind} {getattr(operation, 'path', '')}")
+        elif entry["status"] == "failed" or kind in ("build_world", "start_playtest"):
+            where = getattr(operation, "path", "") or getattr(operation, "mode", "")
+            print(f"  {entry['status'].upper():8} {kind} {where}: {entry['detail'][:400]}")
+
+    heard: list[studio_log.Entry] = []
+    if log is not None and not args.no_play:
+        print(f"\nwhat the place's scripts said in the first {args.watch:.0f}s, "
+              f"from {log.name}:")
+        deadline = time.monotonic() + args.watch
+        while time.monotonic() < deadline:
+            time.sleep(2)
+            entries, offset = studio_log.read_since(log, offset)
+            for entry in entries:
+                print(f"  {entry.level:7} {entry.message[:500]}")
+            heard.extend(entries)
+    elif log is None:
+        print("\nno Studio log was found, so what the test printed cannot be read here")
+
+    levels = Counter(entry.level for entry in heard)
+    if heard:
+        print(f"\n{levels['error']} error(s), {levels['warning']} warning(s), "
+              f"{levels['info']} other line(s)")
+    return 1 if counts["failed"] or levels["error"] else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -377,6 +495,15 @@ def main(argv: list[str] | None = None) -> int:
     landing.add_argument("system")
     landing.add_argument("--keep", action="store_true", help="leave the worktree in place")
 
+    sync = commands.add_parser("sync", help="send the project to Studio and start a playtest")
+    sync.add_argument("--no-play", action="store_true", help="send it, but do not start a test")
+    sync.add_argument("--watch", type=float, default=45.0,
+                      help="seconds of the test's output to report")
+    sync.add_argument("--timeout", type=float, default=90.0,
+                      help="seconds to wait for Studio to report the batch")
+    sync.add_argument("--force", action="store_true",
+                      help="send even though the open place is named after another game")
+
     # The gate's own output is UTF-8: selene draws boxes, luau-lsp quotes
     # source. Printing that to a cp1252 console raises, and the traceback lands
     # exactly where the error message should have been -- which is how this was
@@ -387,7 +514,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     return {
         "status": command_status, "brief": command_brief, "open": command_open,
-        "check": command_check, "land": command_land,
+        "check": command_check, "land": command_land, "sync": command_sync,
     }[args.command](args)
 
 

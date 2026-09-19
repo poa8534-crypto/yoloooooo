@@ -265,7 +265,27 @@ The route itself is in HANDOFF section 5a. What building on it taught:
   - The next draw never rescheduled.
 
 What the hand-built systems record but nothing reads yet is listed in HANDOFF
-section 9. Nothing in this phase played the game.
+section 9.
+
+## Phase 11 — the first playtest of NeuroMine
+
+NeuroMine (51 systems) was synced to Roblox Studio via `scripts/handbuild.py sync`.
+
+Two discoveries:
+1. **Client modules were never started.** The only generated bootstrap was a server
+   `Script` in `ServerScriptService`. Client modules in `StarterPlayer/StarterPlayerScripts`
+   were copied to each client by Roblox, but never started. A dedicated `LocalScript`
+   (`VentureClientBootstrap`) was added alongside `Client` in `StarterPlayerScripts`,
+   and modules are loaded and started in specification build order.
+2. **Playtest output is measured from Studio logs.** Instead of relying on plugin
+   reporting during playtest (which halts during `ExecutePlayModeAsync`), Studio's
+   active log file in `AppData/Local/Roblox/logs` is read directly (`app/bridge/studio_log.py`).
+   Server bootstrap: 45 loaded, 45 started. Client bootstrap: 5 loaded, 4 started
+   (`Services.luau` is a locator table with no `Start()` method). 0 errors, 4 DataStoreService
+   warnings (expected in Studio test mode).
+3. **Place files `.gitignore`.** `templates/game/.gitignore` and game repos now ignore
+   all `*.rbxl` and `*.rbxlx` files, preventing saved binary place files from being
+   unintentionally tracked.
 
 ## Bugs worth remembering
 
@@ -340,6 +360,11 @@ Ordered by how much time they cost, not by when they happened.
     or cast and check in the caller.
 31. **The hand-build check formatted one file of several**, so data added to
     a shared module failed the gate after the system passed it.
+32. **Client modules were never executed.** The only bootstrap created was
+    a server Script in `ServerScriptService`. Now `VentureClientBootstrap` is
+    generated as a `LocalScript` in `StarterPlayer/StarterPlayerScripts`.
+33. **Place files `.gitignore` missed `<game>.rbxl`.** Only `/game.rbxlx` was
+    ignored. Now `*.rbxl` and `*.rbxlx` are both ignored across all game projects.
 
 ## Method
 
@@ -370,12 +395,9 @@ The habit that found most of these: **measure, do not assume.**
 
 ## Open threads
 
-- NeuroMine is 51 of 51 on master, and nothing in the hand-build played it.
-  The next honest step is to sync it to Studio and play it. After that, the
-  owner's team decides the loose ends in HANDOFF section 9.
-- `templates/game/.gitignore` ignores only `game.rbxlx`. A place saved under
-  the game's own name, such as `neuromine.rbxl`, shows up as a new file, one
-  `git add .` away from a binary in the history.
+- NeuroMine is synced and playtested in Studio: 45 server modules loaded & started,
+  4 client modules started, world built, 0 errors. The owner's team decides the
+  loose ends in HANDOFF section 9.
 - Parallel builds are built but not yet measured on a real build. The
   projection says about 34 minutes for ascent at three at once; the first real
   run will say how much of that survives rate limits and CPU contention. The

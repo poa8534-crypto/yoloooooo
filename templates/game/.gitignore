@@ -1,9 +1,10 @@
 # Project place file
-/game.rbxlx
+*.rbxl
+*.rbxlx
 
 # Roblox Studio lock files
-/*.rbxlx.lock
-/*.rbxl.lock
+*.rbxlx.lock
+*.rbxl.lock
 
 # Generated from default.project.json on demand. Regenerating it is one
 # command, and committing it produces a diff on every file move.

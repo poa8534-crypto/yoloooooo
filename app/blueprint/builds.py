@@ -57,6 +57,21 @@ def new_id() -> str:
     return f"build-{secrets.token_hex(6)}"
 
 
+def studio_batch(spec: GameBuildSpecification, project: dict[str, str], *, build_id: str,
+                 play: bool):
+    """The batch that puts a project into Studio, started the way its
+    specification says.
+
+    One function for a build and for syncing a project built by hand, so the
+    two cannot send Studio different things.
+    """
+    # The one system the specification marked as building the place, so
+    # Studio shows it in edit mode rather than only under Play.
+    world = next((system.path for system in spec.systems if system.builds_world), None)
+    return operations_for(project, build_id=build_id, play=play, world_builder=world,
+                          order=spec.build_order)
+
+
 def files_on_branch(repo: Path, branch: str) -> dict[str, str]:
     """The .luau files as they are on a branch the gate accepted.
 
@@ -433,10 +448,7 @@ async def _build(blueprint_id: str, build_id: str, *, settings, factory, token: 
 
     record.move(BuildStatus.SYNCING, f"{len(project)} file(s) to send")
     try:
-        # The one system the specification marked as building the place, so
-        # Studio shows it in edit mode rather than only under Play.
-        world = next((system.path for system in spec.systems if system.builds_world), None)
-        batch = operations_for(project, build_id=record.id, play=play, world_builder=world)
+        batch = studio_batch(spec, project, build_id=record.id, play=play)
     except Unmappable as exc:
         record.move(BuildStatus.FAILED, str(exc))
         raise BuildFailed(str(exc)) from None

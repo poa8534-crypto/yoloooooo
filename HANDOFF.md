@@ -258,11 +258,15 @@ playable before breadth; do not build features nobody asked for.
     the owner's request, over two sessions ending 2026-09-19.
   - Measured on master at that date: `verify.ps1` exits 0, with all six checks
     passing, 0 selene warnings and 442 behaviour checks.
-  - The gate and the Lune specs have checked it. Neither of them plays the
-    game, and `handbuild.py` has no playtest step. Sync it to Studio and play
-    it before trusting it as a game.
-  - The place file `neuromine.rbxl` sits untracked in the repository, because
-    the template's `.gitignore` only ignores `game.rbxlx`. Do not commit it.
+  - Synced to Studio and playtested via `scripts/handbuild.py sync`:
+    - 45 server modules loaded and started cleanly (`[VentureBootstrap]`).
+    - 4 client modules loaded and started cleanly (`[VentureClientBootstrap]`).
+      (`Services.luau` is a locator table with no `Start()` method).
+    - World instantiated via `ColonyWorldService:Start()`.
+    - Measured from active Studio log: 0 errors, 4 DataStore warnings
+      (expected in Studio test mode).
+  - Place files `.gitignore`: `templates/game/.gitignore` and neuromine now
+    ignore `*.rbxl` and `*.rbxlx`.
   - Section 9 lists what these systems record that nothing reads yet.
 - The owner drives sessions from a Mac as well as this PC: Claude Code Remote
   Control links the running session to claude.ai, and the dashboard is on the

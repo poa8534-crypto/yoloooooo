@@ -13,6 +13,7 @@ import pytest
 
 from app.bridge.from_project import (
     BOOTSTRAP_NAME,
+    CLIENT_BOOTSTRAP_PATH,
     Unmappable,
     bootstrap_source,
     operations_for,
@@ -146,6 +147,83 @@ def test_the_bootstrap_says_what_it_did():
 def test_the_bootstrap_is_generated_in_build_order():
     source = bootstrap_source(["First", "Second", "Third"])
     assert source.index('"First"') < source.index('"Second"') < source.index('"Third"')
+
+
+def _script_at(batch, path: str):
+    return next(op for op in batch.operations
+                if op.operation is OperationKind.CREATE_SCRIPT and op.path == path)
+
+
+def test_client_modules_get_a_local_script_that_actually_starts_them():
+    """A Script never runs on a client. The HUD, the camera and every other
+    client module were copied into each player and never started, because the
+    only bootstrap was a server Script."""
+    batch = operations_for({"src/client/HudController.luau": MODULE}, build_id="b1", play=False)
+
+    created = _script_at(batch, CLIENT_BOOTSTRAP_PATH)
+    assert created.script_type == "LocalScript"
+    assert '"HudController"' in created.source
+    # Beside the Client folder rather than inside it, where Rojo would remove
+    # it; both are copied into the player, so it finds the folder by its side.
+    assert CLIENT_BOOTSTRAP_PATH == "StarterPlayer/StarterPlayerScripts/VentureClientBootstrap"
+    assert 'script.Parent :: Instance):WaitForChild("Client")' in created.source
+
+
+def test_a_project_with_no_client_modules_gets_no_client_bootstrap():
+    batch = operations_for({"src/server/A.luau": MODULE}, build_id="b1", play=False)
+    assert not any(getattr(op, "path", "") == CLIENT_BOOTSTRAP_PATH for op in batch.operations)
+
+
+def test_a_client_bootstrap_names_itself_in_what_it_reports():
+    """Both bootstraps print to the same Output window. A warning that does
+    not say which side it came from sends the reader to the wrong half."""
+    source = bootstrap_source(["HudController"], client=True)
+    assert "[VentureClientBootstrap]" in source
+    assert "[VentureBootstrap]" not in source
+
+
+def test_the_bootstraps_start_modules_in_the_specifications_build_order():
+    """The world has to be built before anything registers the nodes in it.
+    The bootstrap listed modules in the order of their file names, so a system
+    that sorts first could start before the system it relies on."""
+    files = {f"src/{side}/{name}.luau": MODULE
+             for side in ("server", "client") for name in ("Alpha", "Mid", "Zeta")}
+
+    batch = operations_for(files, build_id="b1", play=False, order=["Zeta", "Alpha"])
+
+    for path in (f"ServerScriptService/{BOOTSTRAP_NAME}", CLIENT_BOOTSTRAP_PATH):
+        source = _script_at(batch, path).source
+        # What the order names, in its order; what it does not name, after.
+        assert source.index('"Zeta"') < source.index('"Alpha"') < source.index('"Mid"'), path
+
+
+def test_without_a_build_order_the_bootstrap_is_still_stable():
+    batch = operations_for({"src/server/Zeta.luau": MODULE, "src/server/Alpha.luau": MODULE},
+                           build_id="b1", play=False)
+    source = _script_at(batch, f"ServerScriptService/{BOOTSTRAP_NAME}").source
+    assert source.index('"Alpha"') < source.index('"Zeta"')
+
+
+def test_a_build_sends_studio_its_specifications_order_and_world():
+    """A build and a hand-built project's sync share one function, so what
+    Studio is sent cannot depend on which of them sent it."""
+    from types import SimpleNamespace
+
+    from app.blueprint.builds import studio_batch
+
+    spec = SimpleNamespace(
+        build_order=["WorldService", "AlphaService"],
+        systems=[SimpleNamespace(path="src/server/WorldService.luau", builds_world=True),
+                 SimpleNamespace(path="src/server/AlphaService.luau", builds_world=False)])
+    project = {"src/server/AlphaService.luau": MODULE, "src/server/WorldService.luau": MODULE}
+
+    batch = studio_batch(spec, project, build_id="b1", play=True)
+
+    source = _script_at(batch, f"ServerScriptService/{BOOTSTRAP_NAME}").source
+    assert source.index('"WorldService"') < source.index('"AlphaService"')
+    world = next(op for op in batch.operations if op.operation is OperationKind.BUILD_WORLD)
+    assert world.path == "ServerScriptService/Server/WorldService"
+    assert batch.operations[-1].operation is OperationKind.START_PLAYTEST
 
 
 # ---- somewhere to stand ----------------------------------------------------
