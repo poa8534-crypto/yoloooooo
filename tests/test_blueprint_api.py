@@ -350,3 +350,117 @@ def test_a_sync_without_a_playtest_can_finish(session_factory):
         record.move(status)
 
     assert record.read()["status"] == BuildStatus.SUCCEEDED.value
+
+
+def test_build_history_counts_outcomes_rather_than_shipping_every_event():
+    """A list of builds is read to choose between them.
+
+    The counts are the backend's because a number worked out in the browser as
+    well can disagree with the one on the build, and the full record carries
+    every attempt of every system -- megabytes nobody reading a list needs.
+    """
+    from app.blueprint.api import _summary
+
+    row = _summary({
+        "id": "build-1", "blueprint_id": "bp", "title": "Checkpoint Ascent",
+        "status": "succeeded", "spec_revision": 3, "content_hash": "aa11",
+        "created_at": "2026-09-16T10:00:00+00:00",
+        "completed_at": "2026-09-16T10:42:00+00:00",
+        "systems": {
+            "TowerService": {"status": "built", "attempts": 1},
+            "DashService": {"status": "built", "attempts": 2},
+            "HazardService": {"status": "refused", "attempts": 3},
+        },
+    })
+
+    assert row["systems_attempted"] == 3
+    assert row["systems_built"] == 2
+    assert row["systems_refused"] == 1, "a refusal is the thing worth seeing in history"
+    assert row["attempts_spent"] == 6
+    assert row["duration_seconds"] == 2520
+    assert "events" not in row and "systems" not in row
+
+
+def test_a_build_still_running_has_no_duration_rather_than_a_guessed_one():
+    from app.blueprint.api import _summary
+
+    row = _summary({
+        "id": "build-2", "status": "generating",
+        "created_at": "2026-09-16T10:00:00+00:00", "completed_at": None,
+        "systems": {"TowerService": {"status": "built", "attempts": 1}},
+    })
+
+    assert row["duration_seconds"] is None
+
+
+class _UsageDb:
+    """The usage rows, without a database. Keyed by day, as the recorder writes
+    them, so the report is tested against the shape it actually reads."""
+
+    def __init__(self, days: dict):
+        self._days = days
+
+    def __call__(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def get(self, _model, key: str):
+        from app.engineer.runs import USAGE_PREFIX
+
+        day = key[len(USAGE_PREFIX):]
+        value = self._days.get(day)
+        if value is None:
+            return None
+        return type("Row", (), {"value_json": value})()
+
+
+def test_usage_reports_what_was_spent_and_no_remaining_without_a_limit():
+    """No provider we use returns a remaining quota.
+
+    Gemini answers 429 when it is gone; `agy` refuses when the subscription is
+    spent. So with nothing configured the report says what was spent and leaves
+    remaining null, rather than drawing a bar against an invented ceiling.
+    """
+    from app.usage import report
+
+    answer = report(_UsageDb({
+        "2026-09-19": {"key-a": {"calls": 40, "total_tokens": 900,
+                                 "rate_limited": 3, "models": {"flash": 40},
+                                 "hours": {"2026-09-19T06": {"calls": 9, "total_tokens": 120}}}},
+    }))
+
+    assert answer["week"]["calls"] == 40
+    assert answer["week"]["rate_limited"] == 3, "a 429 is the quota itself answering"
+    assert answer["week"]["limit"] is None
+    assert answer["week"]["remaining"] is None
+    assert answer["limits_configured"] is False
+
+
+def test_usage_reports_remaining_against_a_limit_that_was_configured():
+    from app.usage import report
+
+    answer = report(_UsageDb({
+        "2026-09-19": {"key-a": {"calls": 700, "models": {}, "hours": {}}},
+    }), weekly_limit=1000)
+
+    assert answer["week"]["remaining"] == 300
+    assert answer["week"]["percent_used"] == 70
+    assert answer["limits_configured"] is True
+
+
+def test_an_hour_with_nothing_recorded_is_not_reported_as_an_hour_with_no_calls():
+    """A build process started before hourly recording existed writes daily
+    totals only, and "0 calls this hour" would be a confident wrong answer."""
+    from app.usage import report
+
+    answer = report(_UsageDb({
+        "2026-09-19": {"key-a": {"calls": 40, "models": {}}},
+    }))
+
+    assert answer["hour"]["measured"] is False
+    assert answer["week"]["measured"] is True

@@ -141,6 +141,29 @@ export interface Plan {
   blocked_by_failure: string[]
 }
 
+// What the models were asked to do, and what is left of a limit the person
+// configured. `limit` is null when none was set: no provider reports a
+// remaining quota, so the strip says "no limit set" rather than drawing a bar
+// against a number the backend invented. `measured` is false when nothing in
+// range was recorded with hour buckets -- a missing answer, not a zero.
+export interface UsageWindow {
+  calls: number
+  tokens: number
+  models: Record<string, number>
+  rate_limited: number
+  measured: boolean
+  limit: number | null
+  remaining: number | null
+  percent_used: number | null
+}
+
+export interface ModelUsage {
+  generated_at: string
+  hour: UsageWindow
+  week: UsageWindow
+  limits_configured: boolean
+}
+
 export interface ExplorerRow {
   name: string
   class: string
@@ -175,14 +198,23 @@ export interface BuildGraph {
   events: Array<{ at: string; stage: string; detail: string }>
 }
 
+// One row of build history. The counts are the backend's, read off the build
+// record: a number worked out in the browser as well can disagree with the one
+// on the build, and only one of them is looking at what happened.
 export interface BuildSummaryRow {
   id: string
+  blueprint_id: string
   title: string
   status: string
   spec_revision: number
   content_hash: string
   created_at: string
   completed_at: string | null
+  systems_attempted: number
+  systems_built: number
+  systems_refused: number
+  attempts_spent: number
+  duration_seconds: number | null
 }
 
 export interface StudioStatus {
@@ -249,6 +281,7 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
 export const engineeringApi = {
   builds: () => call<{ builds: BuildSummaryRow[] }>('/api/builds'),
   toolchain: () => call<Toolchain>('/api/engineer/toolchain'),
+  usage: () => call<ModelUsage>('/api/builds/usage/models'),
   graph: (buildId: string) => call<BuildGraph>(`/api/builds/${buildId}/graph`),
   studio: (token: string) =>
     call<StudioStatus>(`/api/studio${token ? `?token=${encodeURIComponent(token)}` : ''}`),

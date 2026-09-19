@@ -827,3 +827,168 @@
   line-height: 1.45;
   color: var(--ink-faint);
 }
+
+/* ---- build history ------------------------------------------------------ */
+/* A detour from the graph rather than a replacement for it: same column, same
+   width, so coming back does not move anything the eye was resting on. */
+
+.history-button {
+  margin-left: auto;
+}
+
+.build-history {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.history-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.history-head h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) auto minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line, #e3e6ec);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.history-row:hover {
+  border-color: var(--accent, #4c6ef5);
+}
+
+.history-list li[data-current='true'] .history-row {
+  border-color: var(--accent, #4c6ef5);
+  box-shadow: inset 0 0 0 1px var(--accent, #4c6ef5);
+}
+
+.history-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.history-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-title code {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.history-when,
+.history-count,
+.history-spent {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.history-refused {
+  font-style: normal;
+  color: var(--danger, #c03030);
+}
+
+.history-status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--chip, #eef1f6);
+}
+
+.history-status[data-status='failed'] { background: #fbe4e4; color: #8a2020; }
+.history-status[data-status='succeeded'] { background: #e3f4e6; color: #1f6b33; }
+
+@media (max-width: 900px) {
+  .history-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
+/* ---- model usage -------------------------------------------------------- */
+
+.usage-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px;
+  border: 1px solid var(--line, #e3e6ec);
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.usage-window {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.usage-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.55;
+}
+
+.usage-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-window[data-spent='true'] .usage-value {
+  color: var(--danger, #c03030);
+  font-weight: 600;
+}
+
+.usage-tokens {
+  font-style: normal;
+  opacity: 0.6;
+}
+
+.usage-limited {
+  color: var(--danger, #c03030);
+}
+
+.usage-note,
+.usage-value.quiet {
+  opacity: 0.55;
+}
+
+@media (max-width: 1100px) {
+  .usage-tokens { display: none; }
+}

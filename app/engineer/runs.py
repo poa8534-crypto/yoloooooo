@@ -123,6 +123,18 @@ def usage_recorder(factory):
                 entry[name] = entry.get(name, 0) + amount
             entry.setdefault("models", {})
             entry["models"] = {**entry["models"], model: entry["models"].get(model, 0) + 1}
+            # Also bucketed by hour, because "am I about to be rate limited"
+            # and "what did today cost" are different questions and a daily
+            # total cannot answer the first one. Only the current day's hours
+            # are kept here; the day key already separates the rest.
+            hour = datetime.now(UTC).strftime("%Y-%m-%dT%H")
+            hours = dict(entry.get("hours", {}))
+            bucket = dict(hours.get(hour, {}))
+            bucket["calls"] = bucket.get("calls", 0) + 1
+            for name, amount in usage.items():
+                bucket[name] = bucket.get(name, 0) + amount
+            hours[hour] = bucket
+            entry["hours"] = hours
             value[key_label] = entry
             if row is None:
                 db.add(SystemState(key=key, value_json=value))
@@ -135,7 +147,7 @@ def usage_recorder(factory):
 
 def game_repo(settings: Settings) -> Path:
     if settings.game_project_dir is None:
-        raise NotConfigured("GAME_PROJECT_DIR is not set; point it at the game repository (e.g. C:/RobloxGames/game)")
+        raise NotConfigured("GAME_PROJECT_DIR is not set; point it at the game repository (e.g. C:/RobloxGames/ascent)")
     repo = Path(settings.game_project_dir)
     if not (repo / ".git").exists():
         raise NotConfigured(f"GAME_PROJECT_DIR {repo} is not a git repository")

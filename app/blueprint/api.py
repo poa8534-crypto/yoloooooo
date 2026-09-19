@@ -263,6 +263,13 @@ async def systems(blueprint_id: str) -> dict:
     design = load_design(factory, blueprint.audit_id)
     architect, clients = await _architect(factory)
     try:
+        # The player experience first, then the systems that produce it. The
+        # systems pass is given the journey, so they come out of it rather than
+        # being narrated around afterwards. See app/engineer/instruction.md.
+        journey, path = await architect.journey(design, blueprint,
+                                                time.monotonic() + ARCHITECT_SECONDS)
+        blueprint = store.save(blueprint.model_copy(
+            update={"player_journey": journey, "gameplay_path": path}))
         planned, assets = await architect.systems(design, blueprint,
                                                   time.monotonic() + ARCHITECT_SECONDS)
     except ArchitectRefused as exc:
@@ -479,6 +486,45 @@ async def start_build(request: BuildRequest) -> dict:
             "follow": f"/api/builds/{build_id}/events"}
 
 
+def _summary(record: dict) -> dict:
+    """One row of build history: enough to choose between builds, no more.
+
+    The outcomes are counted here rather than in the browser for the usual
+    reason -- a count worked out in two places can disagree in one of them --
+    and because the full record carries every event of every attempt, which is
+    megabytes nobody reading a list needs.
+    """
+    systems = record.get("systems") or {}
+    outcomes = [str((entry or {}).get("status", "")) for entry in systems.values()]
+    started = record.get("created_at") or ""
+    finished = record.get("completed_at") or ""
+    seconds: float | None = None
+    if started and finished:
+        from datetime import datetime
+
+        try:
+            seconds = (datetime.fromisoformat(finished)
+                       - datetime.fromisoformat(started)).total_seconds()
+        except ValueError:
+            seconds = None
+    return {
+        "id": record.get("id", ""),
+        "blueprint_id": record.get("blueprint_id", ""),
+        "title": record.get("title", ""),
+        "status": record.get("status", ""),
+        "spec_revision": record.get("spec_revision", 0),
+        "content_hash": record.get("content_hash", ""),
+        "created_at": started,
+        "completed_at": finished,
+        "systems_attempted": len(systems),
+        "systems_built": sum(1 for status_ in outcomes if status_ == "built"),
+        "systems_refused": sum(1 for status_ in outcomes if status_ == "refused"),
+        "attempts_spent": sum(int((entry or {}).get("attempts", 0) or 0)
+                              for entry in systems.values()),
+        "duration_seconds": seconds,
+    }
+
+
 @build_router.get("")
 def builds(blueprint_id: str = "", limit: int = 20) -> dict:
     """Build history, newest first. Reproducibility: every build carries the
@@ -486,7 +532,28 @@ def builds(blueprint_id: str = "", limit: int = 20) -> dict:
     from ..db import SessionLocal
     from .builds import list_builds
 
-    return {"builds": list_builds(SessionLocal, blueprint_id, max(1, min(limit, 100)))}
+    records = list_builds(SessionLocal, blueprint_id, max(1, min(limit, 100)))
+    return {"builds": [_summary(record) for record in records]}
+
+
+@build_router.get("/usage/models")
+def model_usage() -> dict:
+    """What the models were asked to do in the last hour and the last week.
+
+    Spending is measured. What is LEFT is only reported when the person has
+    configured what their plan allows, because no provider we use returns a
+    remaining quota -- Gemini answers 429 when it is gone, `agy` refuses when
+    the subscription is spent. A percentage against a number this process made
+    up would be the one thing on this page that nobody could check.
+    """
+    from ..config import get_settings
+    from ..db import SessionLocal
+    from ..usage import report
+
+    settings = get_settings()
+    return report(SessionLocal,
+                  hourly_limit=settings.usage_hourly_limit,
+                  weekly_limit=settings.usage_weekly_limit)
 
 
 @build_router.get("/{build_id}")

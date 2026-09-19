@@ -8,6 +8,8 @@ import { ArchitectureMap } from './ArchitectureMap'
 import { BuildMachine } from './BuildMachine'
 import { NodeInspector } from './NodeInspector'
 import { BuildOrderView, PlayerFlow } from './PlayerFlow'
+import { BuildHistory } from './BuildHistory'
+import { UsageStrip } from './UsageStrip'
 import { SteeringPanel } from './SteeringPanel'
 import { StudioExplorer } from './StudioExplorer'
 
@@ -51,6 +53,10 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
   // order the work happens in, and what is waiting on what. They answer
   // different questions, so they are views rather than one crowded diagram.
   const [view, setView] = useState<'systems' | 'flow' | 'order'>('systems')
+  // History is a detour, not a fourth view: the graph it replaces stays mounted
+  // in state, so coming back shows the build exactly as it was left rather than
+  // refetching it.
+  const [history, setHistory] = useState(false)
   // Whether the build list has come back yet. Without it, "no build yet" is
   // also what the first paint says, so the empty state flashes on every visit
   // and the panels below it mount twice.
@@ -158,6 +164,13 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
             </select>
           </label>
         )}
+
+        <button type="button" className="ghost-button history-button"
+          aria-pressed={history} onClick={() => setHistory(open => !open)}>
+          History{builds.length ? ` · ${builds.length}` : ''}
+        </button>
+
+        <UsageStrip />
 
         {graph && (
           <span className="status-pill" data-status={graph.status} data-live={live}>
@@ -272,6 +285,16 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
           </div>
         </section>
 
+        {history ? (
+          <BuildHistory builds={builds} active={active}
+            onOpen={id => {
+              // A different build is a different graph and a different event
+              // history; they are never merged.
+              if (id !== active) { setActive(id); setGraph(null); setSelected(null) }
+              setHistory(false)
+            }}
+            onClose={() => setHistory(false)} />
+        ) : (
         <section className="architecture panel">
           <header className="panel-head">
             <span className="micro-label">Architecture</span>
@@ -300,6 +323,7 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
                   onSelect={name => setSelected(
                     graph.nodes.find(node => node.id === name) ?? null)} />}
         </section>
+        )}
 
         <section className="activity panel">
           <header className="panel-head">

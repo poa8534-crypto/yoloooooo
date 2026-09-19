@@ -24,6 +24,8 @@ function node(id: string, state: NodeState, depends: string[] = [], order = 0,
     purpose: `What ${id} is for.`, acceptance_criteria: [`${id} refuses a bad amount.`],
     depends_on: depends, state, detail: '', branch: null, commit: '', attempts: 0,
     studio_path: `ServerScriptService/Server/${id}`, studio_class: 'ModuleScript', order,
+    priority_class: 'P5', core_loop_blocker: false, required_for_vertical_slice: false,
+    player_flow_index: 999, builds_world: false, dependents: [],
   }
 }
 
@@ -146,7 +148,7 @@ function reply(body: unknown, status = 200) {
   } as Response)
 }
 
-function serve(options: { builds?: unknown; graph?: BuildGraph; studio?: unknown
+function serve(options: { builds?: unknown; graph?: BuildGraph; studio?: unknown; usage?: unknown
   source?: unknown; steer?: unknown; steerStatus?: number; toolchain?: unknown } = {}) {
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
     if (url.includes('/api/engineer/toolchain')) {
@@ -162,11 +164,30 @@ function serve(options: { builds?: unknown; graph?: BuildGraph; studio?: unknown
         commit: 'abcdef1234567890', branch: 'engineer/x', detail: '', lines: 1 })
     }
     if (url.includes('/graph')) return reply(options.graph ?? graph())
+    if (url.includes('/api/builds/usage/models')) {
+      return reply(options.usage ?? {
+        generated_at: '2026-09-19T06:45:00+00:00',
+        hour: { calls: 12, tokens: 48000, models: {}, rate_limited: 0, measured: true,
+          limit: 60, remaining: 48, percent_used: 20 },
+        week: { calls: 276, tokens: 5864601, models: {}, rate_limited: 54, measured: true,
+          limit: null, remaining: null, percent_used: null },
+        limits_configured: true,
+      })
+    }
     if (url.includes('/api/builds')) {
       return reply(options.builds ?? {
-        builds: [{ id: 'build-1', title: 'Zombie Quarantine Lab', status: 'generating',
-          spec_revision: 4, content_hash: 'cf986b30', created_at: '2026-09-17T23:19:40',
-          completed_at: null }],
+        builds: [
+          { id: 'build-1', title: 'Zombie Quarantine Lab', status: 'generating',
+            blueprint_id: 'bp-1', spec_revision: 4, content_hash: 'cf986b30',
+            created_at: '2026-09-17T23:19:40', completed_at: null,
+            systems_attempted: 2, systems_built: 1, systems_refused: 0,
+            attempts_spent: 3, duration_seconds: null },
+          { id: 'build-0', title: 'Checkpoint Ascent', status: 'succeeded',
+            blueprint_id: 'bp-0', spec_revision: 2, content_hash: 'aa11bb22',
+            created_at: '2026-09-16T10:00:00', completed_at: '2026-09-16T10:42:00',
+            systems_attempted: 11, systems_built: 9, systems_refused: 2,
+            attempts_spent: 17, duration_seconds: 2520 },
+        ],
       })
     }
     if (url.includes('/api/studio')) {
@@ -516,8 +537,8 @@ describe('the steering panel', () => {
     await waitFor(() => {
       const posted = fetchMock.mock.calls.find(call =>
         String(call[0]).includes('/directives') && call[1]?.method === 'POST')
-      expect(posted).toBeTruthy()
-      expect(JSON.parse(posted[1].body as string))
+      if (!posted) throw new Error('the directive was never posted')
+      expect(JSON.parse(String(posted[1]?.body)))
         .toEqual({ text: 'Cap every wave at eight infected.', system: 'InfectedService' })
     })
   })
@@ -596,6 +617,7 @@ describe('mistakes that only show up at runtime', () => {
       if (url.includes('/source')) return reply({ detail: 'no such build' }, 404)
       if (url.includes('/directives')) return reply(steering())
       if (url.includes('/graph')) return reply(graph())
+      if (url.includes('/usage/models')) return reply(null)
       if (url.includes('/api/builds')) {
         return reply({ builds: [{ id: 'build-1', title: 'Lab', status: 'generating',
           spec_revision: 4, content_hash: 'cf986b30', created_at: '2026-09-17T23:19:40',
@@ -644,6 +666,7 @@ describe('mistakes that only show up at runtime', () => {
     fetchMock.mockImplementation((url: string) => {
       if (url.includes('/open')) return reply({ detail: 'The Studio plugin is not connected.' }, 503)
       if (url.includes('/graph')) return reply(graph())
+      if (url.includes('/usage/models')) return reply(null)
       if (url.includes('/api/builds')) {
         return reply({ builds: [{ id: 'build-1', title: 'Lab', status: 'generating',
           spec_revision: 4, content_hash: 'cf986b30', created_at: '2026-09-17T23:19:40',
@@ -721,6 +744,7 @@ describe('the build machine', () => {
     fetchMock.mockImplementation((url: string) => {
       if (url.includes('/api/engineer/toolchain')) return reply({ detail: 'nope' }, 500)
       if (url.includes('/graph')) return reply(graph())
+      if (url.includes('/usage/models')) return reply(null)
       if (url.includes('/api/builds')) {
         return reply({ builds: [{ id: 'build-1', title: 'Lab', status: 'generating',
           spec_revision: 4, content_hash: 'cf986b30', created_at: '2026-09-17T23:19:40',
@@ -793,5 +817,97 @@ describe('the planning views', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Player flow' }))
 
     expect(screen.getByText(/no player path/)).toBeTruthy()
+  })
+})
+
+
+describe('build history', () => {
+  it('lists earlier builds, with what each one actually produced', async () => {
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+
+    await userEvent.click(screen.getByRole('button', { name: /History/ }))
+
+    const history = screen.getByTestId('build-history')
+    expect(within(history).getByText('Checkpoint Ascent')).toBeTruthy()
+    // A refusal is the thing worth seeing in history, so it is not rounded off.
+    expect(within(history).getByText(/2 refused/)).toBeTruthy()
+    expect(within(history).getByText(/9\/11 built/)).toBeTruthy()
+  })
+
+  it('opens the graph of the build that is chosen', async () => {
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+    await userEvent.click(screen.getByRole('button', { name: /History/ }))
+
+    await userEvent.click(screen.getByText('Checkpoint Ascent'))
+
+    // Back on the graph, not left on the list.
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+    expect(screen.queryByTestId('build-history')).toBeNull()
+  })
+
+  it('keeps the graph rather than tearing it down to show the list', async () => {
+    // Opening history and closing it again must not refetch: the build being
+    // watched is live, and a remount loses the selected node with it.
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+    await waitFor(() => expect(screen.getByTestId('architecture-map')).toBeTruthy())
+
+    await userEvent.click(screen.getByRole('button', { name: /History/ }))
+    expect(screen.queryByTestId('architecture-map')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Back to the graph' }))
+
+    expect(screen.getByTestId('architecture-map')).toBeTruthy()
+  })
+})
+
+
+describe('model usage', () => {
+  it('shows what was spent against a limit that was configured', async () => {
+    serve()
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    const strip = await screen.findByTestId('usage-strip')
+    expect(within(strip).getByText('12/60')).toBeTruthy()
+    // A 429 is the quota itself answering, so it is shown whatever else is.
+    expect(within(strip).getByText(/54 rate limited/)).toBeTruthy()
+  })
+
+  it('says what was spent, not what is left, when no limit is configured', async () => {
+    // No provider reports a remaining quota. A bar drawn against a number this
+    // code invented would be the one figure on the page nobody could check.
+    serve({ usage: {
+      generated_at: '2026-09-19T06:45:00+00:00',
+      hour: { calls: 3, tokens: 900, models: {}, rate_limited: 0, measured: true,
+        limit: null, remaining: null, percent_used: null },
+      week: { calls: 276, tokens: 5864601, models: {}, rate_limited: 0, measured: true,
+        limit: null, remaining: null, percent_used: null },
+      limits_configured: false,
+    } })
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    const strip = await screen.findByTestId('usage-strip')
+    expect(within(strip).getByText('no limit set')).toBeTruthy()
+    expect(within(strip).getByText('3 calls')).toBeTruthy()
+  })
+
+  it('distinguishes nothing recorded from nothing spent', async () => {
+    // A build process started before hourly recording existed keeps writing
+    // daily totals only. "0 calls this hour" would be a confident wrong answer.
+    serve({ usage: {
+      generated_at: '2026-09-19T06:45:00+00:00',
+      hour: { calls: 0, tokens: 0, models: {}, rate_limited: 0, measured: false,
+        limit: null, remaining: null, percent_used: null },
+      week: { calls: 276, tokens: 5864601, models: {}, rate_limited: 0, measured: true,
+        limit: null, remaining: null, percent_used: null },
+      limits_configured: false,
+    } })
+    render(<EngineeringWorkspace onNavigate={() => {}} />)
+
+    const strip = await screen.findByTestId('usage-strip')
+    expect(within(strip).getByText('not recorded yet')).toBeTruthy()
   })
 })

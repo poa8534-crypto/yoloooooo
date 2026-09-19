@@ -142,6 +142,12 @@ class Settings(BaseSettings):
     engineer_gemini_max_output_tokens: int = Field(default=65_536, ge=1024)
     # The game repository the engineer writes into. Unset means the engineer
     # refuses to run rather than guessing a path.
+    # What the person's plan allows, in model calls. Nothing is assumed: no
+    # provider reports a remaining quota, so with these unset the dashboard
+    # shows what was spent and says no limit is set, rather than drawing a bar
+    # against a number this process made up.
+    usage_hourly_limit: int = 0
+    usage_weekly_limit: int = 0
     game_project_dir: Path | None = None
     game_base_branch: str = "master"
     # Worktrees live outside both repositories: one per run, removed after it.
