@@ -293,9 +293,16 @@ playable before breadth; do not build features nobody asked for.
     owner's request, on 2026-09-20, after Antigravity's quota ran out again.
   - Measured on master at that date: `verify.ps1` exits 0, with all six checks
     passing, 0 selene warnings and 159 behaviour checks.
-  - Not yet synced to Studio or played. `GAME_PROJECT_DIR` in `.env` still
-    names neuromine; builds and `handbuild.py` find island-haven from the
-    blueprint, but anything that reads the setting directly does not.
+  - Synced to Studio and started in Play with `handbuild.py sync` on
+    2026-09-20. From Studio's own log: the server bootstrap loaded and
+    started all 30 server modules, and the client bootstrap started both
+    client modules. 0 errors and 0 warnings came from the place's scripts in
+    the first minute. Nobody played it: nothing was picked up, fished,
+    placed or bought, so this shows the systems start, not that they play
+    well together.
+  - `GAME_PROJECT_DIR` in `.env` still names neuromine. Builds and
+    `handbuild.py` find island-haven from the blueprint, but anything that
+    reads the setting directly does not.
   - Section 9 lists what does not fit together yet.
 - The owner drives sessions from a Mac as well as this PC: Claude Code Remote
   Control links the running session to claude.ai, and the dashboard is on the
