@@ -83,6 +83,23 @@ The bridge pairing token is **not** in `.env`: it is generated once and
 persisted to `data/bridge_token.txt`, because regenerating it on every start
 made Studio fail to connect with `ConnectFail`.
 
+## 4a. Starting a new game
+
+One repository is one game, and a build refuses a repository that already
+holds another blueprint's systems (it answers the Build button with a 409
+naming that game). So a new game gets its own:
+
+```bash
+python scripts/new_game.py neuromine
+```
+
+It copies `templates/game` (the toolchain, owned by this repository), names
+the Rojo project after the game, copies the two generated type files from the
+current game, makes one commit, and runs the new repository's own
+`verify.ps1`, which must pass before the first build. Then set
+`GAME_PROJECT_DIR` in `.env` (the owner's file), restart the dashboard, and run
+`start-agents.bat` so Rojo serves the new project.
+
 ## 5. Running a build
 
 ```bash
@@ -185,6 +202,10 @@ playable before breadth; do not build features nobody asked for.
   Nothing reads it. Ignore the whole folder.
 - `C:\RobloxGames\fisherman` is the previous finished project: 11 systems, also
   zero refusals.
+- `C:\RobloxGames\neuromine` is the next game, NeuroMine: Symbiotic
+  Extraction (blueprint `452bb7a75e7ef765`): made by `scripts/new_game.py`,
+  toolchain only, `verify.ps1` passing. Its blueprint still needs three feature
+  decisions and the systems worked out before it can build.
 - The owner drives sessions from a Mac as well as this PC: Claude Code Remote
   Control links the running session to claude.ai, and the dashboard is on the
   tailnet. Both need this PC awake with the Claude app open; Studio itself is

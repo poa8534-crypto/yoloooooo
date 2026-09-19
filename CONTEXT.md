@@ -196,6 +196,33 @@ finish until a later-layer system has started -- and proved the build loop by
 disabling parallelism (the overlap test times out) and the landing lock (two
 landings overlap).
 
+## Phase 9 — the Build button that "was not working"
+
+It was working: NeuroMine's blueprint had three features undecided and no
+systems yet, and the button said so only in a side panel. The Review screen now
+lists what the button is waiting for beside it, each with a way to the tab
+that fixes it.
+
+The real danger was one click further on. `GAME_PROJECT_DIR` still named
+ascent, so the build would have written NeuroMine's systems into ascent's
+repository, landed them on its master and sent both games to the open place --
+the wrong-project failure a third time. A build now refuses a repository that
+holds another blueprint's systems: every landed commit names its build, every
+build names its blueprint, so the repository says whose it is. Proved against
+the real ascent repository, where it names Checkpoint Ascent.
+
+New games had been set up by copying the last one's first commit by hand.
+`scripts/new_game.py` does it from `templates/game`, and its first real run
+found the next trap immediately: the template has nothing in `src/server`, git
+does not carry empty folders, and Rojo refused the project. It now makes the
+folders Rojo maps, as the Engineer's worktrees already did, and runs the new
+repository's `verify.ps1` before calling it done. NeuroMine's passes.
+
+And one failed build had been drawn with its elapsed time still counting,
+hours later: a build that failed through `BuildFailed` never recorded when. It
+records it now, the dashboard counts only while a build runs, and the one
+record was given the time of its last event.
+
 ## Bugs worth remembering
 
 Ordered by how much time they cost, not by when they happened.
@@ -254,6 +281,13 @@ Ordered by how much time they cost, not by when they happened.
 25. **Records that say "running" were believed.** A killed process writes
     nothing, so a record's last word is not evidence that anything is still
     working. Ask something the operating system maintains: a held lock.
+26. **Which game a build writes into was one line in `.env`**, left pointing
+    at the last game. Now the repository says whose it is, and a build refuses
+    another game's repository.
+27. **A failed build recorded why but not when**, so its elapsed time counted
+    on forever.
+28. **A new repository had no `src/server`** -- git does not carry an empty
+    folder -- and Rojo refused the project.
 
 ## Method
 
