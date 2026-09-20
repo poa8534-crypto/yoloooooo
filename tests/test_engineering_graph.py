@@ -233,3 +233,54 @@ def test_source_is_refused_for_a_system_the_gate_never_accepted(session_factory,
     assert answer["state"] == "refused"
     assert answer["source"] == ""
     assert answer["detail"] == "All 6 attempts were refused"
+
+
+# ---- what the project actually holds ---------------------------------------
+#
+# The page drew its nodes from the build record alone, so Island Haven -- 33
+# systems on master, landed by a salvage and by hand -- read as "0 of 33
+# systems built, 20 waiting, 2 refused". None of that was true of the project;
+# it was true of one build.
+
+def test_a_system_the_project_holds_reads_as_in_the_project():
+    from app.blueprint.api import _node_state
+
+    assert _node_state("A", None, [], set(), {"A"}) == "existing"
+    assert _node_state("A", None, [], set(), set()) == "waiting"
+
+
+def test_a_system_refused_by_this_build_but_landed_since_is_in_the_project():
+    """What is true now is that the project has it, however it got there."""
+    from app.blueprint.api import _node_state
+
+    refused = {"status": "refused", "reason": "All 6 attempts were refused"}
+    assert _node_state("A", refused, [], set(), {"A"}) == "existing"
+    assert _node_state("A", refused, [], set(), set()) == "refused"
+
+
+def test_what_this_build_wrote_still_reads_as_built():
+    from app.blueprint.api import _node_state
+
+    built = {"status": "built"}
+    assert _node_state("A", built, [], set(), {"A"}) == "built"
+
+
+def test_a_system_being_written_is_never_drawn_as_already_there():
+    from app.blueprint.api import _node_state
+
+    assert _node_state("A", None, ["A"], set(), {"A"}) == "building"
+
+
+def test_the_project_is_read_from_the_checkout_not_from_a_record(tmp_path):
+    from app.blueprint.builds import systems_in_project
+
+    (tmp_path / "src" / "server").mkdir(parents=True)
+    (tmp_path / "src" / "shared").mkdir(parents=True)
+    (tmp_path / "src" / "server" / "ForagingService.luau").write_text("--!strict\nreturn {}\n")
+    (tmp_path / "src" / "shared" / "ItemCatalog.luau").write_text("--!strict\nreturn {}\n")
+    # The generated locator table is not a system.
+    (tmp_path / "src" / "shared" / "Services.luau").write_text("--!strict\nreturn {}\n")
+
+    assert systems_in_project(tmp_path) == {"ForagingService", "ItemCatalog"}
+    assert systems_in_project(tmp_path / "missing") == set()
+    assert systems_in_project(None) == set()

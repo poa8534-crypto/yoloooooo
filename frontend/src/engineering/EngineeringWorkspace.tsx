@@ -117,12 +117,15 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
   useEffect(() => { void refresh() }, [refresh])
 
   const live = Boolean(graph && LIVE.has(graph.status))
-  const polling = !graph || live
+  // Always polling, quickly while a build runs and slowly otherwise. A
+  // finished build's graph is not a still picture: its nodes say what the game
+  // repository holds, which changes when anything lands -- by a later build,
+  // by hand, or by a salvage. Left to refresh only while running, the page
+  // showed "0 of 33 built" for a project whose systems were all on master.
   useEffect(() => {
-    if (!polling) return
-    const timer = setInterval(() => { void refresh() }, 3000)
+    const timer = setInterval(() => { void refresh() }, live ? 3000 : 8000)
     return () => clearInterval(timer)
-  }, [refresh, polling])
+  }, [refresh, live])
 
   useEffect(() => {
     const ask = () => engineeringApi.studio(token).then(setStudio).catch(() => setStudio(null))
@@ -152,6 +155,8 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
 
   const counts = graph?.counts ?? {}
   const done = counts.built ?? 0
+  // What the game repository holds: written by this build, or already there.
+  const inProject = (counts.built ?? 0) + (counts.existing ?? 0)
   const total = counts.total ?? 0
   const flying = inFlight(graph)
   const writing = flying
@@ -316,7 +321,8 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
           </ol>
           {graph && (
             <p className="plan-progress">
-              {done} of {total} systems built
+              {inProject} of {total} in the project
+              {done ? ` · ${done} built by this build` : ''}
               {counts.refused ? ` · ${counts.refused} refused` : ''}
             </p>
           )}
@@ -423,7 +429,8 @@ export function EngineeringWorkspace({ buildId, onNavigate }: {
                   <p>{graph.goal.intent || graph.goal.title}</p>
 
                   <h3 className="micro-label">Progress</h3>
-                  <p>{done} of {total} systems built
+                  <p>{inProject} of {total} systems in the project
+                    {done ? `, ${done} written by this build` : ''}
                     {counts.building ? `, ${counts.building} building` : ''}
                     {counts.waiting ? `, ${counts.waiting} waiting` : ''}
                     {counts.refused ? `, ${counts.refused} refused` : ''}.</p>

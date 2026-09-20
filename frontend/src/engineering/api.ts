@@ -19,6 +19,8 @@ export interface GraphNode {
   acceptance_criteria: string[]
   depends_on: string[]
   state: NodeState
+  // Whether the game repository holds this system's file right now.
+  in_project: boolean
   detail: string
   branch: string | null
   commit: string

@@ -22,7 +22,8 @@ function node(id: string, state: NodeState, depends: string[] = [], order = 0,
   return {
     id, name: id, layer, path: `src/${layer}/${id}.luau`,
     purpose: `What ${id} is for.`, acceptance_criteria: [`${id} refuses a bad amount.`],
-    depends_on: depends, state, detail: '', branch: null, commit: '', attempts: 0,
+    depends_on: depends, state, in_project: state === 'built' || state === 'existing',
+    detail: '', branch: null, commit: '', attempts: 0,
     studio_path: `ServerScriptService/Server/${id}`, studio_class: 'ModuleScript', order,
     priority_class: 'P5', core_loop_blocker: false, required_for_vertical_slice: false,
     player_flow_index: 999, builds_world: false, dependents: [],
@@ -338,7 +339,7 @@ describe('the workspace', () => {
     serve()
     render(<EngineeringWorkspace onNavigate={() => {}} />)
 
-    await waitFor(() => expect(screen.getAllByText(/1 of 3 systems built/).length)
+    await waitFor(() => expect(screen.getAllByText(/1 of 3 (systems )?in the project/).length)
       .toBeGreaterThanOrEqual(1))
   })
 
@@ -733,7 +734,7 @@ describe('mistakes that only show up at runtime', () => {
     }
   })
 
-  it('stops asking once the build it is watching finishes', async () => {
+  it('keeps asking after the build finishes, because the project can still change', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
       let status = 'generating'
@@ -751,9 +752,14 @@ describe('mistakes that only show up at runtime', () => {
       status = 'succeeded'
       await vi.advanceTimersByTimeAsync(3000)
       await waitFor(() => expect(screen.getAllByText('Not running').length).toBeGreaterThan(0))
+      // A finished build's nodes still say what the game repository holds, and
+      // that changes when anything lands by any route. So the page keeps
+      // asking -- more slowly, one read per 8s rather than per 3s.
       const settled = reads()
-      await vi.advanceTimersByTimeAsync(9000)
-      expect(reads()).toBe(settled)
+      await vi.advanceTimersByTimeAsync(8100)
+      expect(reads()).toBe(settled + 1)
+      await vi.advanceTimersByTimeAsync(16200)
+      expect(reads()).toBe(settled + 3)
     } finally {
       vi.useRealTimers()
     }

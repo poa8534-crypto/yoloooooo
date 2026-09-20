@@ -683,6 +683,40 @@ def _progress(record: dict, spec) -> tuple[dict, bool, list[str], set[str]]:
     return outcomes, running, in_flight, skipped
 
 
+def _in_project(blueprint) -> set[str]:
+    """What the game repository holds right now, or nothing if it cannot be
+    read. A page that cannot find the repository says "waiting", never
+    invents a state for it."""
+    from ..engineer.runs import NotConfigured, resolve_game_repo
+    from .builds import systems_in_project
+
+    try:
+        repo = resolve_game_repo(get_settings(), blueprint)
+    except (NotConfigured, OSError):
+        return set()
+    return systems_in_project(repo)
+
+
+def _node_state(name: str, outcome: dict | None, in_flight: list[str], skipped: set[str],
+                in_project: set[str]) -> str:
+    """One node's state, from what was measured.
+
+    A system this build accepted is "built". A system the project holds is
+    "existing", including one this build refused that has since been landed by
+    another route -- what is true now is that the project has it. Nothing else
+    is in flight unless the Engineer was actually asked for it.
+    """
+    if outcome is not None and outcome.get("status") == "built":
+        return "built"
+    if name in in_flight:
+        return "building"
+    if name in in_project or name in skipped:
+        return "existing"
+    if outcome is None:
+        return "waiting"
+    return "refused" if outcome.get("status") == "refused" else "error"
+
+
 def _build_and_spec(build_id: str):
     """The build record and the specification it was made from, or a 404/409."""
     from ..db import SessionLocal
@@ -904,6 +938,7 @@ def build_graph(build_id: str) -> dict:
     blueprint = _load(record["blueprint_id"])
 
     outcomes, running, in_flight, skipped = _progress(record, spec)
+    in_project = _in_project(blueprint)
 
     by_name = {system.name: system for system in spec.systems}
     nodes = []
@@ -913,20 +948,13 @@ def build_graph(build_id: str) -> dict:
             continue
         outcome = outcomes.get(name)
         location, script_class = _studio_location(system.path)
-        if outcome is None:
-            state = ("building" if name in in_flight
-                     else "existing" if name in skipped else "waiting")
-        elif outcome["status"] == "built":
-            state = "built"
-        elif outcome["status"] == "refused":
-            state = "refused"
-        else:
-            state = "error"
+        state = _node_state(name, outcome, in_flight, skipped, in_project)
         nodes.append({
             "id": system.name, "name": system.name, "layer": system.layer.value,
             "path": system.path, "purpose": system.purpose,
             "acceptance_criteria": system.acceptance_criteria,
             "depends_on": system.depends_on, "state": state,
+            "in_project": name in in_project,
             "detail": (outcome or {}).get("reason") or (outcome or {}).get("detail") or "",
             "branch": (outcome or {}).get("branch"),
             "commit": (outcome or {}).get("commit") or "",

@@ -53,6 +53,24 @@ from .transitions import IllegalTransition, check, is_running
 PREFIX = "build:"
 
 
+def systems_in_project(repo: Path | None) -> set[str]:
+    """The system names the game repository holds, read from the checkout.
+
+    Measured from disk rather than from build records, so a system is "in the
+    project" however it got there: this build, an earlier one, a hand-build or
+    a salvage. The Engineering page draws from this, which is why a project
+    with thirty-three systems on master stopped reading as "0 of 33 built".
+    """
+    if repo is None or not repo.exists():
+        return set()
+    found: set[str] = set()
+    for root in ROOTS:
+        directory = repo / root
+        if directory.is_dir():
+            found.update(path.stem for path in directory.glob("*.luau") if path.stem != "Services")
+    return found
+
+
 def new_id() -> str:
     return f"build-{secrets.token_hex(6)}"
 
@@ -276,8 +294,7 @@ async def _build(blueprint_id: str, build_id: str, *, settings, factory, token: 
         reason = another_games_repo(repo, blueprint.title, others)
         record.move(BuildStatus.FAILED, reason)
         raise BuildFailed(reason)
-    existing = {path.stem for root in ROOTS
-                for path in (repo / root).glob("*.luau")} if repo.exists() else set()
+    existing = systems_in_project(repo)
 
     record.move(BuildStatus.PLANNING, "working out what still has to be built")
     try:
