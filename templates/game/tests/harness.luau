@@ -18,10 +18,14 @@ local luau = require("@lune/luau")
 
 local harness = {}
 
--- A player is a UserId to every module in this project.
+-- A player, as every module in this project meets one: an Instance with a
+-- UserId. An Instance because Roblox's Player is one -- a view looks for its
+-- screen with `player:FindFirstChild("PlayerGui")`, and a plain table answers
+-- that with "attempt to call missing method", which is how six view cases
+-- failed before this said so.
 function harness.player(userId: number): any
 	-- Said here rather than inside string.format, whose own complaint names
-	-- this line and not the call that was wrong.
+	-- that line and not the call that was wrong.
 	if type(userId) ~= "number" then
 		error(
 			string.format(
@@ -33,35 +37,42 @@ function harness.player(userId: number): any
 			2
 		)
 	end
+
+	local player: any = harness.instance("Player", string.format("Player_%d", userId))
+	player.UserId = userId
+
 	-- CharacterAdded, because a system that handles arrivals connects to it:
-	-- PlayerLifecycleManager's "player.CharacterAdded:Connect(...)" raised
-	-- "attempt to index nil with 'Connect'" against a player that was only a
-	-- UserId and a Name. harness.character fires it.
+	-- PlayerLifecycleManager's `player.CharacterAdded:Connect(...)` raised
+	-- "attempt to index nil with 'Connect'" against a player that had none.
+	-- harness.character fires it.
 	local handlers: { (...any) -> () } = {}
-	return {
-		UserId = userId,
-		Name = string.format("Player_%d", userId),
-		CharacterAdded = {
-			Connect = function(_self: any, handler: (...any) -> ()): any
-				table.insert(handlers, handler)
-				return {
-					Disconnect = function()
-						for index, existing in handlers do
-							if existing == handler then
-								table.remove(handlers, index)
-								break
-							end
+	player.CharacterAdded = {
+		Connect = function(_self: any, handler: (...any) -> ()): any
+			table.insert(handlers, handler)
+			return {
+				Disconnect = function()
+					for index, existing in handlers do
+						if existing == handler then
+							table.remove(handlers, index)
+							break
 						end
-					end,
-				}
-			end,
-			fire = function(...)
-				for _, handler in handlers do
-					handler(...)
-				end
-			end,
-		},
+					end
+				end,
+			}
+		end,
+		fire = function(...)
+			for _, handler in handlers do
+				handler(...)
+			end
+		end,
 	}
+
+	-- Where a client view puts what it draws. Roblox gives every player one,
+	-- and a view that had to make its own would be testing something the live
+	-- game never does.
+	local gui = harness.instance("PlayerGui", "PlayerGui")
+	gui.Parent = player
+	return player
 end
 
 local function signal(): any
@@ -92,6 +103,30 @@ end
 -- part?" of a Part, a SpawnLocation or a MeshPart gets the answer Roblox gives.
 local BASE_PARTS = { Part = true, SpawnLocation = true, MeshPart = true, WedgePart = true }
 
+-- The events a stand-in answers to, as a table: a view connects to these,
+-- and a spec fires them. Adding one is a row.
+local GUI_SIGNALS: { [string]: boolean } = {
+	Activated = true,
+	MouseButton1Click = true,
+	MouseButton1Down = true,
+	MouseButton1Up = true,
+	MouseEnter = true,
+	MouseLeave = true,
+	FocusLost = true,
+	Focused = true,
+	Changed = true,
+	InputBegan = true,
+	InputEnded = true,
+	Triggered = true,
+	TriggerEnded = true,
+	Touched = true,
+	TouchEnded = true,
+	AncestryChanged = true,
+	ChildAdded = true,
+	ChildRemoved = true,
+	Destroying = true,
+}
+
 function harness.instance(className: string, name: string?): any
 	local children: { [string]: any } = {}
 	local attributes: { [string]: any } = {}
@@ -99,6 +134,7 @@ function harness.instance(className: string, name: string?): any
 		ClassName = className,
 		Name = name or className,
 		__children = children,
+		__signals = {},
 	}
 	self.FindFirstChild = function(_self: any, key: string): any
 		return children[key]
@@ -122,6 +158,14 @@ function harness.instance(className: string, name: string?): any
 			end
 		end
 		return out
+	end
+	self.FindFirstChildOfClass = function(_self: any, wanted: string): any
+		for _, child in children do
+			if child.ClassName == wanted then
+				return child
+			end
+		end
+		return nil
 	end
 	self.FindFirstChildWhichIsA = function(_self: any, wanted: string): any
 		for _, child in children do
@@ -162,6 +206,24 @@ function harness.instance(className: string, name: string?): any
 		__index = function(_table: any, key: string): any
 			if key == "Parent" then
 				return rawget(self, "__parent")
+			end
+			--[[
+				The events a screen connects to.
+
+				A view builds its panel and then says
+				`closeButton.Activated:Connect(...)`, which against a
+				stand-in without the signal raised "attempt to index nil with
+				'Connect'" and ended the case before it had asked anything.
+				Each one is made once, on first use, and kept: two connections
+				to the same button must reach the same signal, and a spec that
+				fires it must reach the one the view connected to.
+			]]
+			if GUI_SIGNALS[key] ~= nil then
+				local made = rawget(self, "__signals")
+				if made[key] == nil then
+					made[key] = signal()
+				end
+				return made[key]
 			end
 			return nil
 		end,
@@ -222,11 +284,13 @@ end
 function harness.services(): any
 	-- Who is in the server. A spec that needs "everyone here" puts players in
 	-- `list`; GetPlayers hands back a copy, as Roblox does.
-	local players: any = {
-		PlayerAdded = signal(),
-		PlayerRemoving = signal(),
-		list = {},
-	}
+	-- An Instance, like Roblox's Players service: a spec puts a player in the
+	-- game the way the game does, `player.Parent = Services.Players`, and a
+	-- plain table cannot hold children.
+	local players: any = harness.instance("Players", "Players")
+	players.PlayerAdded = signal()
+	players.PlayerRemoving = signal()
+	players.list = {}
 	players.GetPlayers = function(_self: any): { any }
 		return table.clone(players.list)
 	end
@@ -388,7 +452,7 @@ end
 -- and measured. Several modules lay their world out with Vector3.new at module
 -- scope, so without it nothing that requires them can be loaded at all.
 local vector3 = (function()
-	local meta = {}
+	local meta = { __typeof = "Vector3" }
 	local function make(x: number, y: number, z: number): any
 		return setmetatable({ X = x, Y = y, Z = z }, meta)
 	end
@@ -453,7 +517,7 @@ end)()
 -- the positions and the turns, which is all the world building here asks of
 -- it; a spec reads `.Position`, never an orientation matrix.
 local cframe = (function()
-	local meta = {}
+	local meta = { __typeof = "CFrame" }
 	local function make(position: any, yaw: number): any
 		return setmetatable({ Position = position, Yaw = yaw }, meta)
 	end
@@ -487,6 +551,28 @@ end)()
 
 -- The globals a module may use. Deliberately short: anything missing is a
 -- module reaching for something this project has not needed before.
+-- What Roblox's typeof would say about the harness's stand-ins.
+--
+-- A module that validates a payload the careful way -- `typeof(raw.position)
+-- == "Vector3"` -- saw "table" here and threw the payload away, so a garden
+-- of real plots arrived as no plots at all and six view cases failed on an
+-- empty screen. Lune's own typeof cannot know about these, so it is wrapped
+-- rather than replaced: anything the harness did not make answers exactly as
+-- it did before.
+local function harnessTypeof(value: any): string
+	if type(value) == "table" then
+		local meta = getmetatable(value)
+		if meta ~= nil and type(meta.__typeof) == "string" then
+			return meta.__typeof
+		end
+		if rawget(value, "ClassName") ~= nil then
+			return "Instance"
+		end
+	end
+	return typeof(value)
+end
+
+
 function harness.environment(): any
 	return {
 		assert = assert,
@@ -500,7 +586,7 @@ function harness.environment(): any
 		tonumber = tonumber,
 		tostring = tostring,
 		type = type,
-		typeof = typeof,
+		typeof = harnessTypeof,
 		unpack = unpack,
 		setmetatable = setmetatable,
 		getmetatable = getmetatable,
@@ -538,6 +624,25 @@ function harness.environment(): any
 					G = (math.floor(value / 256) % 256) / 255,
 					B = (value % 256) / 255,
 				}
+			end,
+		},
+		-- Vector2, for the anchor points and sizes a screen is laid out with.
+		-- Without it a view that positions a panel cannot even be loaded:
+		-- `Vector2.new(0.5, 0.5)` at build time raised "attempt to index nil
+		-- with 'new'" and took the whole case with it.
+		Vector2 = {
+			new = function(x: number?, y: number?): any
+				return { X = x or 0, Y = y or 0 }
+			end,
+			zero = { X = 0, Y = 0 },
+			one = { X = 1, Y = 1 },
+		},
+		-- UDim, which every rounded corner and padding in this game is made
+		-- of. Missing it stopped a view at `UDim.new(0, 8)` before a single
+		-- case could ask it anything.
+		UDim = {
+			new = function(scale: number?, offset: number?): any
+				return { Scale = scale or 0, Offset = offset or 0 }
 			end,
 		},
 		UDim2 = {
