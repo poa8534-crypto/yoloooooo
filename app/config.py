@@ -198,14 +198,18 @@ class Settings(BaseSettings):
     # because three is what was measured: three `agy` calls at once all
     # answered, in 34 s of wall time against 17 s for one alone. On ascent's
     # own timings three would take a build from 82 minutes to about 34.
-    engineer_parallel_systems: int = Field(default=3, ge=1, le=16)
+    # Five, not three: three is Antigravity's measured limit, and the two
+    # systems beyond it now spill to a backup provider instead of queueing.
+    engineer_parallel_systems: int = Field(default=5, ge=1, le=16)
     # Per provider, how many calls may be in flight at once across the whole
     # build, as name=count pairs ("ollama=1,gemini=2"). A provider not named is
-    # limited only by engineer_parallel_systems. A call waits for its provider
-    # rather than skipping to the next one: which model writes a system is not
-    # something to change because the first choice was busy. Ollama runs on
-    # this machine's one GPU, where three at once would each go a third as fast.
-    engineer_provider_concurrency: str = "ollama=1"
+    # limited only by engineer_parallel_systems. A provider whose slots are all
+    # busy hands the system to the NEXT provider rather than making it queue,
+    # so a build with more systems than Antigravity slots spreads across the
+    # backups instead of taking turns; the last provider in the chain waits,
+    # because after it there is nobody to ask. Ollama runs on this machine's
+    # one GPU, where three at once would each go a third as fast.
+    engineer_provider_concurrency: str = "ollama=1,antigravity=3"
     engineer_max_attempts: int = Field(default=6, ge=1, le=20)
     engineer_run_seconds: float = Field(default=5400.0, gt=0)
     engineer_tool_timeout_seconds: float = Field(default=300.0, gt=0)

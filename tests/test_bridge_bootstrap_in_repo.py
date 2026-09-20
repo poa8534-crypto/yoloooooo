@@ -47,3 +47,15 @@ def test_the_in_repo_form_reaches_its_folder_as_its_own_parent():
     assert "local folder = script.Parent :: Instance" in source
     assert "game:GetService" not in source
     assert source.index('"A"') < source.index('"B"')
+
+
+def test_a_behaviour_spec_is_never_offered_to_studio():
+    """Specs are landed with the work and run under Lune here; Roblox has no
+    place for them. Offering one failed a whole build after three systems had
+    already landed: "tests/AnalyticsService.spec.luau: outside src/client,
+    src/server, src/shared"."""
+    from app.blueprint.builds import buildable
+
+    files = {"src/server/A.luau": "a", "tests/A.spec.luau": "spec",
+             "src/shared/B.luau": "b"}
+    assert buildable(files) == {"src/server/A.luau": "a", "src/shared/B.luau": "b"}

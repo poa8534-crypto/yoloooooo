@@ -29,7 +29,7 @@ from .antigravity import AntigravityClient, antigravity_models, chain
 from .capture import AttemptRecorder
 from .catalog import load_services
 from .gate import Gate, run_command
-from .gemini import GeminiClient
+from .gemini import GeminiClient, GeminiUnavailable
 from .loop import EngineerLoop, EngineerResult, gemini_models
 from .planner import PLANNER_SYSTEM, PlanRefused, build_planner_prompt, parse_plan
 from .ollama import OllamaClient, ollama_models
@@ -314,9 +314,21 @@ def provider_limits(settings: Settings) -> dict[str, int]:
     return limits
 
 
-def _held(call, slots: asyncio.Semaphore):
-    """The same call, waiting for one of its provider's slots first."""
+def _held(call, slots: asyncio.Semaphore, provider: str = "", *, spill: bool = False):
+    """The same call, holding one of its provider's slots.
+
+    With `spill`, a provider whose slots are all taken is treated as
+    unavailable, which is how the chain says "ask the next one". That turns a
+    queue into a division of labour: three systems on Antigravity and the
+    other two on a backup that is otherwise idle, rather than five taking
+    turns at three slots.
+
+    The last provider in the chain never spills: there is nobody after it, and
+    waiting for a slot is better than refusing work nobody else will take.
+    """
     async def held(system: str, prompt: str, deadline: float) -> tuple[str, str]:
+        if spill and slots.locked():
+            raise GeminiUnavailable(f"{provider}: all {provider} slots are busy; another provider can take this")
         async with slots:
             return await call(system, prompt, deadline)
     return held
@@ -341,7 +353,7 @@ def build_model_call(settings: Settings, clients: list[tuple[str, object]],
         else:
             call = gemini_models(client, engineer_models(settings))
         if slots and name in slots:
-            call = _held(call, slots[name])
+            call = _held(call, slots[name], name, spill=name != clients[-1][0])
         calls.append(call)
     return chain(calls)
 

@@ -90,6 +90,16 @@ def studio_batch(spec: GameBuildSpecification, project: dict[str, str], *, build
                           order=spec.build_order)
 
 
+def buildable(files: dict[str, str]) -> dict[str, str]:
+    """Only the files that belong in a Roblox place.
+
+    The behaviour specs are part of a build's work and are landed with it, but
+    they are not part of the game: they run under Lune, against the harness,
+    on this machine.
+    """
+    return {path: source for path, source in files.items() if not SPEC_PATH.match(path)}
+
+
 def files_on_branch(repo: Path, branch: str) -> dict[str, str]:
     """The .luau files as they are on a branch the gate accepted.
 
@@ -454,8 +464,12 @@ async def _build(blueprint_id: str, build_id: str, *, settings, factory, token: 
     record.move(BuildStatus.VALIDATING, "reading what the gate accepted")
     from ..bridge.from_project import read_project
 
-    # What is on the base branch already, plus what this build just generated.
-    project = {**read_project(repo), **generated}
+    # What is on the base branch already, plus what this build just generated,
+    # minus what Roblox has no place for. A behaviour spec runs under Lune
+    # here and is not a script in the DataModel; offering one to the bridge
+    # failed the whole build with "outside src/client, src/server, src/shared"
+    # after three systems had already landed.
+    project = buildable({**read_project(repo), **generated})
     if not project:
         record.move(BuildStatus.FAILED, "nothing was generated and the project is empty")
         raise BuildFailed("there is nothing to build: no system was accepted and the "
