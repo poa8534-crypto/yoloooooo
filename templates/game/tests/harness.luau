@@ -20,6 +20,19 @@ local harness = {}
 
 -- A player is a UserId to every module in this project.
 function harness.player(userId: number): any
+	-- Said here rather than inside string.format, whose own complaint names
+	-- this line and not the call that was wrong.
+	if type(userId) ~= "number" then
+		error(
+			string.format(
+				"harness.player expects a numeric UserId, e.g. harness.player(1); got %s (%s). "
+					.. "The player's name is derived from it: read .Name if you need one.",
+				typeof(userId),
+				tostring(userId)
+			),
+			2
+		)
+	end
 	return { UserId = userId, Name = string.format("Player_%d", userId) }
 end
 
