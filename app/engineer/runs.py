@@ -33,6 +33,7 @@ from .gemini import GeminiClient
 from .loop import EngineerLoop, EngineerResult, gemini_models
 from .planner import PLANNER_SYSTEM, PlanRefused, build_planner_prompt, parse_plan
 from .ollama import OllamaClient, ollama_models
+from .openai_compat import OpenAICompatClient, compat_models
 from .schemas import EngineeringTask
 from .workspace import Worktree
 
@@ -205,17 +206,32 @@ def ollama_model_names(settings: Settings) -> list[str]:
     return [name.strip() for name in settings.engineer_ollama_models.split(",") if name.strip()]
 
 
+# Providers that speak the OpenAI chat-completions API, as settings field
+# names: (key, base url, comma-separated models). A new one is a row here and
+# three fields in config.py.
+COMPAT_PROVIDERS: dict[str, tuple[str, str, str]] = {
+    "glm": ("glm_api_key", "glm_base_url", "engineer_glm_models"),
+    "deepseek": ("deepseek_api_key", "deepseek_base_url", "engineer_deepseek_models"),
+}
+KNOWN_PROVIDERS: tuple[str, ...] = ("antigravity", "gemini", "ollama", *COMPAT_PROVIDERS)
+
+
+def compat_model_names(name: str, settings: Settings) -> list[str]:
+    field = COMPAT_PROVIDERS[name][2]
+    return [model.strip() for model in str(getattr(settings, field)).split(",") if model.strip()]
+
+
 def provider_names(settings: Settings) -> list[str]:
     """The chain, in order. `engineer_provider` still wins when it is set, so
     an .env written before the chain existed keeps meaning what it said."""
     if settings.engineer_provider:
         return [settings.engineer_provider]
     names = [name.strip().lower() for name in settings.engineer_providers.split(",") if name.strip()]
-    unknown = [name for name in names if name not in ("antigravity", "gemini", "ollama")]
+    unknown = [name for name in names if name not in KNOWN_PROVIDERS]
     if unknown:
         raise NotConfigured(f"unknown engineer provider(s): {', '.join(unknown)}")
     if not names:
-        raise NotConfigured("ENGINEER_PROVIDERS is empty; name at least one of antigravity, gemini, ollama")
+        raise NotConfigured(f"ENGINEER_PROVIDERS is empty; name at least one of {', '.join(KNOWN_PROVIDERS)}")
     return names
 
 
@@ -234,6 +250,14 @@ def build_one_client(name: str, settings: Settings, **kwargs):
         return AntigravityClient(executable=settings.engineer_antigravity_executable,
                                  timeout=settings.engineer_antigravity_timeout_seconds,
                                  effort=settings.engineer_antigravity_effort, **kwargs)
+    if name in COMPAT_PROVIDERS:
+        key_field, url_field, _models = COMPAT_PROVIDERS[name]
+        key = str(getattr(settings, key_field) or "").strip()
+        if not key:
+            raise NotConfigured(f"no {name} key is set")
+        return OpenAICompatClient(provider=name, base_url=str(getattr(settings, url_field)), api_key=key,
+                                  timeout=settings.engineer_compat_timeout_seconds,
+                                  max_output_tokens=settings.engineer_compat_max_output_tokens, **kwargs)
     if not engineer_keys(settings):
         raise NotConfigured("no Gemini key is set")
     return GeminiClient(keys=engineer_keys(settings), base_url=settings.engineer_gemini_base_url,
@@ -255,7 +279,7 @@ def build_clients(settings: Settings, **kwargs) -> list[tuple[str, object]]:
         except NotConfigured:
             continue
     if not built:
-        raise NotConfigured("no engineer provider is configured: set a Gemini key, install `agy`, "
+        raise NotConfigured("no engineer provider is configured: set a GLM, DeepSeek or Gemini key, install `agy`, "
                             "or run Ollama")
     return built
 
@@ -274,7 +298,7 @@ def provider_limits(settings: Settings) -> dict[str, int]:
             continue
         name, _, count = pair.partition("=")
         name = name.strip().lower()
-        if name not in ("antigravity", "gemini", "ollama"):
+        if name not in KNOWN_PROVIDERS:
             raise NotConfigured(f"ENGINEER_PROVIDER_CONCURRENCY names an unknown provider: {name!r}")
         try:
             value = int(count)
@@ -310,6 +334,8 @@ def build_model_call(settings: Settings, clients: list[tuple[str, object]],
             call = ollama_models(client, ollama_model_names(settings))
         elif name == "antigravity":
             call = antigravity_models(client, antigravity_model_names(settings))
+        elif name in COMPAT_PROVIDERS:
+            call = compat_models(client, compat_model_names(name, settings))
         else:
             call = gemini_models(client, engineer_models(settings))
         if slots and name in slots:

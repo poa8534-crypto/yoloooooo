@@ -112,10 +112,10 @@ class Settings(BaseSettings):
     # or not configured is skipped, so the chain is also how a machine without
     # `agy` keeps working. Only "unavailable" moves down the chain: a refusal
     # and a truncated answer belong to the attempt that got them.
-    engineer_providers: str = "antigravity,gemini,ollama"
+    engineer_providers: str = "antigravity,glm,deepseek,gemini,ollama"
     # The single-provider setting the chain replaced. Still read, so an .env
     # that sets it keeps working: it becomes the whole chain.
-    engineer_provider: Literal["gemini", "ollama", "antigravity"] | None = None
+    engineer_provider: Literal["gemini", "ollama", "antigravity", "glm", "deepseek"] | None = None
     engineer_antigravity_executable: str = "agy"
     # Tried in order. Flash 3.8 throughout, at descending effort: a rate-limited
     # high is a reason to think less about the same problem, not to change model
@@ -140,6 +140,20 @@ class Settings(BaseSettings):
     engineer_ollama_timeout_seconds: float = Field(default=900.0, gt=0)
     engineer_gemini_timeout_seconds: float = Field(default=900.0, gt=0)
     engineer_gemini_max_output_tokens: int = Field(default=65_536, ge=1024)
+    # Providers that speak the OpenAI chat-completions API, used as backups
+    # when Antigravity is out of quota (app/engineer/openai_compat.py). Each is
+    # skipped until its key is set. The owner types the keys into .env; they
+    # are never asked for, printed or committed. Model names are tried in
+    # order, so a provider's exact model id can be corrected here without code.
+    glm_api_key: str = ""
+    glm_base_url: str = "https://api.z.ai/api/paas/v4"
+    engineer_glm_models: str = "glm-5.2"
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+    engineer_deepseek_models: str = "deepseek-chat"
+    engineer_compat_timeout_seconds: float = Field(default=900.0, gt=0)
+    # 8192 because DeepSeek's chat model refuses a larger max_tokens outright.
+    engineer_compat_max_output_tokens: int = Field(default=8192, ge=1024)
     # The game repository the engineer writes into. Unset means the engineer
     # refuses to run rather than guessing a path.
     # What the person's plan allows, in model calls. Nothing is assumed: no
