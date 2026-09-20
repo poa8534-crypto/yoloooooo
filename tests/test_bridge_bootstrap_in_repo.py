@@ -59,3 +59,30 @@ def test_a_behaviour_spec_is_never_offered_to_studio():
     files = {"src/server/A.luau": "a", "tests/A.spec.luau": "spec",
              "src/shared/B.luau": "b"}
     assert buildable(files) == {"src/server/A.luau": "a", "src/shared/B.luau": "b"}
+
+
+def test_the_foundation_starts_before_the_systems_that_use_it():
+    """Build order answers "what can be written next"; start order answers
+    "what must already be running". Taking the first as an answer to the
+    second put RemoteRegistry twenty-ninth, so twenty-eight services had each
+    made their own remotes before the system whose job is to make them first
+    ever ran."""
+    from types import SimpleNamespace
+
+    import scripts.write_bootstrap as bootstrap
+
+    def system(name, priority, flow):
+        return SimpleNamespace(name=name, priority_class=priority, player_flow_index=flow)
+
+    built = ["IslandService", "PlayerDataService", "NetworkManifest", "RemoteRegistry", "ShopView"]
+    systems = [system("IslandService", "P1", 10), system("PlayerDataService", "P1", 11),
+               system("NetworkManifest", "P0", 2), system("RemoteRegistry", "P0", 1),
+               system("ShopView", "P4", 41)]
+
+    order = bootstrap.start_order(built, systems)
+    assert order[0] == "RemoteRegistry", f"the first system started is {order[0]}"
+    assert order[1] == "NetworkManifest", "the foundation should start in the plan's flow order"
+    assert order.index("RemoteRegistry") < order.index("IslandService"), (
+        "RemoteRegistry starts after a service that creates its own remotes")
+    assert sorted(order) == sorted(built), "hoisting changed which systems start"
+    assert len(order) == len(set(order)), "a system appears twice in the start order"

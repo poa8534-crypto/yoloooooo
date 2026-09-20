@@ -95,18 +95,41 @@ def wanted(repo: Path, order: list[str] | None) -> dict[Path, str]:
     return written
 
 
-def build_order() -> list[str] | None:
-    """The approved order, when a blueprint compiles; otherwise alphabetical.
+def start_order(order: list[str], systems) -> list[str]:
+    """The build order with the plan's foundation hoisted to the front.
 
-    A system that another requires at start-up must be started first, and the
-    specification is where that order is decided. Without one the files are
-    still written -- a game with no blueprint should not be left unstartable.
+    Separated from the blueprint lookup so the rule can be checked without a
+    database: what belongs in a test is "P0 first, in flow order, the rest
+    unchanged", not whether this machine can reach its own store.
+    """
+    foundation = sorted((system for system in systems if system.priority_class == "P0"),
+                        key=lambda system: (system.player_flow_index, system.name))
+    first = [system.name for system in foundation]
+    return first + [name for name in order if name not in set(first)]
+
+
+def build_order() -> list[str] | None:
+    """The order to START the systems in, which is not the order they were built in.
+
+    The build order answers "what can be written next", and puts a system
+    after everything it depends on. Start-up asks something else: what must
+    already be RUNNING before the rest begin. Those are not the same question,
+    and taking the first as an answer to the second put RemoteRegistry
+    twenty-ninth -- so twenty-eight services had each made their own remotes
+    before the system whose whole job is to make them first ever ran, and the
+    race it exists to end went on exactly as before.
+
+    So the foundation goes first: the systems the plan calls P0, in the order
+    the plan puts them in the player's path. Everything else keeps the build
+    order behind them. Both come from the blueprint, so a system promoted to
+    P0 starts earlier without a line of code changing here.
     """
     try:
         store = BlueprintStore(SessionLocal)
         for blueprint in store.list(limit=20):
-            if blueprint.systems:
-                return compile_spec(blueprint).build_order
+            if not blueprint.systems:
+                continue
+            return start_order(compile_spec(blueprint).build_order, blueprint.systems)
     except Exception as exc:  # noqa: BLE001 - reported, never fatal
         print(f"(no build order from the blueprint: {type(exc).__name__}: {exc})")
     return None
