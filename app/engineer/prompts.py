@@ -162,8 +162,14 @@ six times, three of them on the same lint warning):
       roblox_manual_fromscale_or_fromoffset
   Write `UDim2.fromOffset(180, 32)` when both scales are 0, and
   `UDim2.fromScale(0.5, 0.5)` when both offsets are 0. Use `UDim2.new` only when
-  you genuinely need scale AND offset on the same axis. The same rule applies to
-  `UDim.new`.
+  you genuinely need scale AND offset on the same axis.
+- `UDim` itself has NO fromOffset or fromScale. It is one scale and one offset,
+  so `UDim.new(0, 8)` is the only way to write it, and selene refuses the rest:
+      error[incorrect_standard_library_use]: standard library global `UDim`
+      does not contain the field `fromOffset`
+  Measured: this line used to end "the same rule applies to UDim.new", and
+  DialogueView was refused all six attempts writing `UDim.fromOffset(8)` for a
+  UICorner radius.
 - A service from the generated Services module is NEVER nil, so comparing one to
   nil is a type error, not a safety check:
       if Services.ReplicatedStorage ~= nil then   -- TypeError: Types
@@ -184,6 +190,37 @@ six times, three of them on the same lint warning):
   Then `self.distanceConnection = nil` in the constructor and after
   `:Disconnect()` both type-check. This matters most for connections, which a
   cleanup path always clears.
+
+METHODS ON `self`, AND ON A SIBLING MODULE (measured; this refused
+DailyGiftService on all six attempts, and four hand-built systems once each):
+- luau-lsp works out a module's `self` from the bodies of its own methods, so a
+  local holding the result of `self:Something(...)` has no known type:
+      local currentDay = self:Day(now)
+      if currentDay - saved > 0 then   -- TypeError: Unknown type used in
+      -- - operation; consider adding a type annotation to 'currentDay'
+  Annotate the local with what the method returns, and the rest type-checks:
+      local currentDay: number = self:Day(now)
+      local held: Slot? = self:GetSlot(player, index)
+  Or do not go through `self` at all: a plain local function above the methods,
+  called directly, has an ordinary type.
+- The same inference makes a call ON ANOTHER MODULE fail from outside it, even
+  though that module type-checks alone:
+      local plot = IslandService:GetPlayerPlot(player)
+      -- Expected this to be exactly 'IslandService' ... but got 'Folder?'
+  Reach a sibling through a cast and check what comes back, which is what every
+  system on this island does:
+      local island: any = IslandService
+      local found = island:GetAnchor("TotemPedestal")
+      if typeof(found) == "Instance" and found:IsA("BasePart") then
+- Never iterate a value that might be nil with `or {{}}`. The union of the two
+  tables is not a table luau-lsp will loop over:
+      for _, slot in read(player) or {{}} do   -- TypeError: Cannot call a value
+      -- of type {{Slot}} in union
+  Check it first and return, or annotate the local:
+      local slots = read(player)
+      if not slots then
+          return 0
+      end
 
 WRITING COMMENTS (measured, and it has refused a whole run):
 - Every line of a comment needs its own `--`. A wrapped second line without one is not a comment,
