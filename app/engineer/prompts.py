@@ -13,7 +13,7 @@ import unicodedata
 
 from .doctrine import doctrine_summary
 from .schemas import EngineeringTask
-from .workspace import SERVICES_PATH, WRITABLE_ROOTS
+from .workspace import SERVICES_PATH, WRITABLE_ROOTS, spec_path
 
 DESIGN_FIELDS = (
     "concept_title", "executive_summary", "core_loop", "differentiator", "essential_features",
@@ -257,6 +257,12 @@ THE SPEC YOU MUST SHIP WITH THE SYSTEM (`tests/<SystemName>.spec.luau`):
   system -- a `now` argument, an injected roll -- so the case asserts one answer rather than
   whichever one today produced. A system built to be tested this way is also the one that can
   be replayed when it misbehaves in a live game.
+- SET THE WORLD UP THROUGH THE SYSTEMS THEMSELVES, never by writing a table you invented into
+  one of them. To give a player an item, call the inventory system's own add; to place a flower,
+  call the garden's own plant. A hand-made profile or inventory is refused by the system that
+  owns it -- one spec spent three attempts on a one-slot inventory that the data system rejects
+  because a profile has sixteen -- and every case then fails saying the system did nothing,
+  which is true and is not about the system you are testing.
 - Test what the acceptance criteria say, including the refusals: that a second claim of the same
   reward gives nothing, that an action without the resource is denied, that a full container
   takes nothing more. A spec of only the happy path passes while the system is still broken.
@@ -293,6 +299,20 @@ def design_brief(audit_payload: dict) -> str:
     return "\n".join(lines)
 
 
+SPEC_ONLY = """<deliverable>
+THIS TASK IS THE SPEC ONLY. {system} is already written, accepted and running; its source is
+in the project listing below. You are not being asked to improve it, and you must not change it.
+
+Return EXACTLY ONE file: {path}. An answer containing any other path is refused before it is
+checked, including a corrected version of the system itself.
+
+Read the system as it is and write cases that hold its real behaviour to the acceptance criteria
+above -- including the refusals, which is where an unproven system is usually wrong. If the
+system and a criterion genuinely disagree, write the case that says what the criterion requires:
+a failing check is the finding. Do not weaken a case to make it pass.
+</deliverable>"""
+
+
 def build_prompt(task: EngineeringTask, audit_payload: dict, existing: dict[str, str],
                  feedback: str | None, attempt: int, project_file: str = "") -> str:
     sections = [
@@ -302,6 +322,8 @@ def build_prompt(task: EngineeringTask, audit_payload: dict, existing: dict[str,
                                   "acceptance_criteria": task.acceptance_criteria,
                                   "notes": task.notes}, indent=2) + "\n</task>",
     ]
+    if task.deliverable == "spec":
+        sections.append(SPEC_ONLY.format(system=task.system, path=spec_path(task.system)))
     if project_file:
         sections.append("<rojo_project>\n" + project_file.strip() + "\n</rojo_project>")
     if existing:

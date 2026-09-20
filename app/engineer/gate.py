@@ -126,7 +126,21 @@ class GateReport:
 
     def summary(self) -> list[dict]:
         return [{"check": check.name, "passed": check.passed, "exit_code": check.exit_code,
-                 "output": _clip(check.output, 1200)} for check in self.checks]
+                 "output": _clip_around(check.output, 1200)} for check in self.checks]
+
+
+def _clip_around(text: str, limit: int) -> str:
+    """The start AND the end, for a stored record somebody will read later.
+
+    A report's verdict is at the bottom: verify.ps1 prints each check in turn
+    and the passing ones come first, so keeping only the head stores a list of
+    PASSes and throws away the failure that the record exists to explain.
+    """
+    if len(text) <= limit:
+        return text
+    head = limit // 3
+    tail = limit - head
+    return f"{text[:head]}\n... [{len(text) - limit} characters omitted]\n{text[-tail:]}"
 
 
 def _clip(text: str, limit: int) -> str:

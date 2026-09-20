@@ -41,7 +41,7 @@ from ..engineer.catalog import load_services
 from ..engineer.land import land
 from ..engineer.runs import build_gate, game_repo, provider_limits, resolve_game_repo, run_task
 from ..engineer.schedule import in_dependency_order
-from ..engineer.workspace import run_git, services_for_project
+from ..engineer.workspace import run_git, services_for_project, spec_path
 from ..models import SystemState
 from ..ownership import Held, is_held, whoami
 from .compile import NotReady, compile_spec
@@ -383,9 +383,14 @@ async def _build(blueprint_id: str, build_id: str, *, settings, factory, token: 
             # generated Services module and whatever was already on the base
             # branch, and sending those as this system's work would misreport
             # what was built.
+            # The system's own file AND its behaviour spec. Matching on the
+            # stem alone kept `src/server/X.luau` and dropped
+            # `tests/X.spec.luau`, whose stem is "X.spec" -- so a spec would
+            # have been written, checked, committed to the branch and then
+            # never landed, leaving the project as unproven as before.
             mine: dict[str, str] = {}
             for path, source in files.items():
-                if Path(path).stem == task.system:
+                if Path(path).stem == task.system or path == spec_path(task.system):
                     mine[path] = source
             generated.update(mine)
             systems[task.system] = {"status": "built", "branch": result.branch,

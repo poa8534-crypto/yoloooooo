@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -21,6 +23,11 @@ class EngineeringTask(_Strict):
     goal: str = Field(min_length=10, max_length=4000)
     acceptance_criteria: list[str] = Field(min_length=1, max_length=20)
     notes: list[str] = Field(default_factory=list, max_length=20)
+    # What this task asks for. "system" is the system itself, with its spec
+    # beside it. "spec" is for a system already on master and unproven: the
+    # source is read but never rewritten, so a backfill cannot change code
+    # that has already been accepted and synced.
+    deliverable: Literal["system", "spec"] = "system"
 
 
 class GeneratedFile(_Strict):

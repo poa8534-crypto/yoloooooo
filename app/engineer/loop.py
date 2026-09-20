@@ -39,7 +39,7 @@ from .gemini import GeminiIncomplete, GeminiRefused, GeminiUnavailable
 from .luau_guard import DATAMODEL_NAME
 from .prompts import SYSTEM, build_prompt
 from .schemas import EngineeringTask, EngineerOutput
-from .workspace import UnsafePath, Worktree, validate_path
+from .workspace import UnsafePath, Worktree, spec_path, validate_path
 
 REPEATED_FAILURE_LIMIT = 3
 
@@ -151,7 +151,7 @@ class EngineerLoop:
                     services=sorted(services or ()), refusal=refusal, checks=checks or []))
 
             try:
-                output, services = self._accept(text, base_services)
+                output, services = self._accept(text, base_services, task)
             except Refusal as exc:
                 feedback = str(exc)
                 capture(passed=False, refusal=feedback)
@@ -203,7 +203,8 @@ class EngineerLoop:
         return EngineerResult("blocked", stop_reason, attempts=attempt, handoff=str(handoff), planned=planned,
                               branch=branch, commit=commit, files=last_written or [])
 
-    def _accept(self, text: str, base_services: set[str]) -> tuple[EngineerOutput, set[str]]:
+    def _accept(self, text: str, base_services: set[str],
+                task: EngineeringTask | None = None) -> tuple[EngineerOutput, set[str]]:
         try:
             output = EngineerOutput.model_validate_json(_strip_fence(text))
         except ValidationError as exc:
@@ -225,6 +226,15 @@ class EngineerLoop:
         # `BindToClose` lives nowhere else. Refusing it here left the engineer
         # asking for the only thing that makes `BindToClose` reachable and
         # being told it did not exist, four attempts running.
+        if task is not None and task.deliverable == "spec":
+            # A backfill reads the system and writes only its spec. Without
+            # this, an answer "fixing" the system while writing its test would
+            # land a rewrite of code already accepted and synced to Studio.
+            wanted = spec_path(task.system)
+            strayed = sorted({file.path for file in output.files} - {wanted})
+            if strayed:
+                problems.append(f"this task is the spec only: return {wanted} and nothing else, "
+                                f"but you also returned {', '.join(strayed)}")
         unknown = sorted(set(output.services) - self.known_services - {DATAMODEL_NAME})
         if unknown:
             problems.append(f"not Roblox services: {', '.join(unknown)} -- `services` lists services by exact class name")

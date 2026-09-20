@@ -96,3 +96,70 @@ def test_the_preflight_run_asks_for_no_spec(tmp_path):
     report = gate().run(project(tmp_path))
     assert report.passed
     assert not any("behaviour spec" in check.name for check in report.checks)
+
+
+def spec_task(**overrides):
+    from app.engineer.schemas import EngineeringTask
+
+    base = dict(audit_id="audit-1", system="WidgetService", goal="Prove the widget behaves.",
+                acceptance_criteria=["A second claim gives nothing"], deliverable="spec")
+    base.update(overrides)
+    return EngineeringTask(**base)
+
+
+def test_a_spec_only_task_says_so_in_the_prompt():
+    from app.engineer.prompts import build_prompt
+
+    prompt = build_prompt(spec_task(), {}, {"src/server/WidgetService.luau": "return {}"}, None, 1)
+    assert "THIS TASK IS THE SPEC ONLY" in prompt
+    assert "tests/WidgetService.spec.luau" in prompt
+
+
+def test_an_ordinary_task_gets_no_spec_only_section():
+    from app.engineer.prompts import build_prompt
+
+    prompt = build_prompt(spec_task(deliverable="system"), {}, {}, None, 1)
+    assert "THIS TASK IS THE SPEC ONLY" not in prompt
+
+
+def test_a_backfill_that_rewrites_the_system_is_refused():
+    """The system is already accepted, synced and running. A spec-only task
+    that returns it too would land a rewrite nobody asked for."""
+    import json
+
+    from app.engineer.loop import EngineerLoop, Refusal
+
+    answer = json.dumps({"files": [
+        {"path": "tests/WidgetService.spec.luau", "content": "return function(h) return {} end\n"},
+        {"path": "src/server/WidgetService.luau", "content": "--!strict\nreturn {}\n"},
+    ], "services": [], "summary": "spec and a fix"})
+    loop = EngineerLoop.__new__(EngineerLoop)
+    loop.known_services = frozenset()
+    with pytest.raises(Refusal) as raised:
+        loop._accept(answer, set(), spec_task())
+    assert "spec only" in str(raised.value) and "src/server/WidgetService.luau" in str(raised.value)
+
+
+def test_a_backfill_returning_only_the_spec_is_accepted():
+    import json
+
+    from app.engineer.loop import EngineerLoop
+
+    answer = json.dumps({"files": [
+        {"path": "tests/WidgetService.spec.luau", "content": "return function(h) return {} end\n"},
+    ], "services": [], "summary": "the spec"})
+    loop = EngineerLoop.__new__(EngineerLoop)
+    loop.known_services = frozenset()
+    output, _services = loop._accept(answer, set(), spec_task())
+    assert [file.path for file in output.files] == ["tests/WidgetService.spec.luau"]
+
+
+def test_a_stored_summary_keeps_the_end_where_the_failure_is():
+    """verify.ps1 prints its PASSes first and the reason last, so a summary
+    clipped from the front stores everything except what it is for."""
+    from app.engineer.gate import CheckResult, GateReport
+
+    output = ("PASS filler line\n" * 400) + "FAIL  the case that matters: expected 4, got 7"
+    stored = GateReport((CheckResult("verify.ps1", False, output),)).summary()[0]["output"]
+    assert "expected 4, got 7" in stored
+    assert len(stored) < len(output)

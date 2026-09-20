@@ -33,7 +33,35 @@ function harness.player(userId: number): any
 			2
 		)
 	end
-	return { UserId = userId, Name = string.format("Player_%d", userId) }
+	-- CharacterAdded, because a system that handles arrivals connects to it:
+	-- PlayerLifecycleManager's "player.CharacterAdded:Connect(...)" raised
+	-- "attempt to index nil with 'Connect'" against a player that was only a
+	-- UserId and a Name. harness.character fires it.
+	local handlers: { (...any) -> () } = {}
+	return {
+		UserId = userId,
+		Name = string.format("Player_%d", userId),
+		CharacterAdded = {
+			Connect = function(_self: any, handler: (...any) -> ()): any
+				table.insert(handlers, handler)
+				return {
+					Disconnect = function()
+						for index, existing in handlers do
+							if existing == handler then
+								table.remove(handlers, index)
+								break
+							end
+						end
+					end,
+				}
+			end,
+			fire = function(...)
+				for _, handler in handlers do
+					handler(...)
+				end
+			end,
+		},
+	}
 end
 
 local function signal(): any
@@ -166,6 +194,12 @@ function harness.character(player: any, position: any): any
 	root.Parent = model
 	model.PrimaryPart = root
 	player.Character = model
+	-- The order a live game uses: the character exists, then the listeners
+	-- hear about it.
+	local added: any = player.CharacterAdded
+	if added ~= nil and type(added.fire) == "function" then
+		added.fire(model)
+	end
 	return model
 end
 
