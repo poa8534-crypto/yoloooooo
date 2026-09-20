@@ -31,6 +31,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import subprocesses
 from .gemini import GeminiIncomplete, GeminiRefused, GeminiUnavailable
 
 UsageHook = Callable[[str, str, str, dict], None] | None
@@ -340,9 +341,17 @@ class AntigravityClient:
         return self._reply(model, text, usage)
 
     def _run(self, command: list[str], message: bytes) -> subprocess.CompletedProcess:
-        return (self.runner or subprocess.run)(
-            command, input=message, cwd=str(self.workspace()), capture_output=True,
-            timeout=self.timeout, check=False)
+        # Through subprocesses.run, not subprocess.run: `agy` is a launcher,
+        # and the model runs in processes it spawns. A timeout here used to
+        # kill the launcher and leave those behind, and a stopped build left
+        # the whole tree running -- seven of them accumulated in one
+        # afternoon, until a build died with "can't start new thread".
+        runner = self.runner
+        if runner is not None:
+            return runner(command, input=message, cwd=str(self.workspace()),
+                          capture_output=True, timeout=self.timeout, check=False)
+        return subprocesses.run(command, input=message, cwd=str(self.workspace()),
+                                timeout=self.timeout)
 
     def _reply(self, model: str, text: str, usage: dict) -> AntigravityReply:
         counts = {"prompt_tokens": int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0),

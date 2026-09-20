@@ -35,6 +35,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import subprocesses
 from .luau_guard import check_project
 from .workspace import CLIENT_SERVICES_PATH, SERVICES_PATH, WRITABLE_ROOTS, spec_path
 
@@ -84,8 +85,10 @@ def resolve_tool(args: list[str]) -> list[str]:
 def run_command(args: list[str], cwd: Path, timeout: float) -> tuple[int | None, str]:
     """(exit code, combined output). A missing tool is exit None, not a crash."""
     try:
-        completed = subprocess.run(resolve_tool(args), cwd=cwd, capture_output=True,
-                                   timeout=timeout, check=False, env=rokit_environment())
+        # The checks start rojo, selene, luau-lsp, StyLua and PowerShell, and a
+        # timed-out check used to leave whatever they had started running.
+        completed = subprocesses.run(resolve_tool(args), cwd=str(cwd),
+                                     timeout=timeout, env=rokit_environment())
     except FileNotFoundError:
         return None, f"`{args[0]}` was not found on PATH (expected via Rokit in %USERPROFILE%\\.rokit\\bin)"
     except subprocess.TimeoutExpired:

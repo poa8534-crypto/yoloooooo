@@ -198,9 +198,16 @@ class Settings(BaseSettings):
     # because three is what was measured: three `agy` calls at once all
     # answered, in 34 s of wall time against 17 s for one alone. On ascent's
     # own timings three would take a build from 82 minutes to about 34.
-    # Five, not three: three is Antigravity's measured limit, and the two
-    # systems beyond it now spill to a backup provider instead of queueing.
-    engineer_parallel_systems: int = Field(default=5, ge=1, le=16)
+    # Four: Antigravity's measured three, plus one that spills to a backup so
+    # the backups are used rather than queued. Five was tried,
+    # and the cost was measured the hard way: each system in flight runs its
+    # own gate, and a generated spec that loops under Lune grows without
+    # bound. Two such runners reached 16GB and 9GB of this machine's 32 and
+    # took the whole machine down with them. Children now carry a memory
+    # limit (app/engineer/subprocesses.py), and the width of the build is the
+    # second half of that answer: fewer gates at once, less to go wrong at
+    # once, and a worst case that fits in this machine rather than filling it.
+    engineer_parallel_systems: int = Field(default=4, ge=1, le=16)
     # Per provider, how many calls may be in flight at once across the whole
     # build, as name=count pairs ("ollama=1,gemini=2"). A provider not named is
     # limited only by engineer_parallel_systems. A provider whose slots are all
