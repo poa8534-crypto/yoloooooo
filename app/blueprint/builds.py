@@ -41,7 +41,7 @@ from ..engineer.catalog import load_services
 from ..engineer.land import land
 from ..engineer.runs import build_gate, game_repo, provider_limits, resolve_game_repo, run_task
 from ..engineer.schedule import in_dependency_order
-from ..engineer.workspace import run_git, services_for_project, spec_path
+from ..engineer.workspace import SPEC_PATH, run_git, services_for_project, spec_path
 from ..models import SystemState
 from ..ownership import Held, is_held, whoami
 from .compile import NotReady, compile_spec
@@ -103,7 +103,14 @@ def files_on_branch(repo: Path, branch: str) -> dict[str, str]:
         return {}
     found: dict[str, str] = {}
     for path in listing.stdout.decode("utf-8", "replace").splitlines():
-        if not path.endswith(".luau") or not any(path.startswith(root + "/") for root in ROOTS):
+        if not path.endswith(".luau"):
+            continue
+        # The source roots, plus the behaviour specs. A spec lives outside src
+        # because it never ships to Roblox, and keeping only src meant a spec
+        # that had passed every check was invisible to the code that lands it:
+        # "accepted but tests/ItemCatalog.spec.luau is not on ...; nothing
+        # landed", on a branch that was holding the file all along.
+        if not any(path.startswith(root + "/") for root in ROOTS) and not SPEC_PATH.match(path):
             continue
         blob = subprocess.run(["git", "show", f"{branch}:{path}"], cwd=repo,
                               capture_output=True, check=False)
