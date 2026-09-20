@@ -51,6 +51,14 @@ TRUNCATED = re.compile(r"cut off|output token limit|exceeded the (?:maximum|outp
 # subscription to increase your limits. Resets in 1h21m19s." Read as a refusal,
 # it stopped every attempt at Antigravity and the chain never reached the
 # providers behind it -- which exist for exactly this.
+# Nothing to do with the prompt: the tool could not sign in, reach the service
+# or be trusted with the session. Unavailable, like an exhausted quota, so the
+# chain asks someone else instead of burning the system's attempts.
+NOT_SIGNED_IN = re.compile(
+    r"authentication failed|not authenticated|unauthori[sz]ed|sign[ -]?in|log[ -]?in required|"
+    r"credentials?|token expired|permission denied|connection refused|network error|"
+    r"could not connect|timed out",
+    re.IGNORECASE)
 OUT_OF_QUOTA = re.compile(r"quota|rate.?limit|resource.?exhausted|too many requests|upgrade your subscription",
                           re.IGNORECASE)
 
@@ -294,8 +302,10 @@ class AntigravityClient:
 
         error = envelope.get("error")
         status = str(envelope.get("status") or "")
-        if error and OUT_OF_QUOTA.search(str(error)):
-            # Unavailable, so the chain moves on to the next provider.
+        if error and (OUT_OF_QUOTA.search(str(error)) or NOT_SIGNED_IN.search(str(error))):
+            # Unavailable, so the chain moves on to the next provider. An
+            # exhausted quota and a failed sign-in are the same kind of fact:
+            # they describe the tool's own situation, not the request.
             raise GeminiUnavailable(f"{model}: {str(error)[:300]}")
         if error and TRUNCATED.search(str(error)):
             # Not a refusal: the model had more to say. The loop's answer to
