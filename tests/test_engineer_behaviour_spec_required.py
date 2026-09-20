@@ -163,3 +163,32 @@ def test_a_stored_summary_keeps_the_end_where_the_failure_is():
     stored = GateReport((CheckResult("verify.ps1", False, output),)).summary()[0]["output"]
     assert "expected 4, got 7" in stored
     assert len(stored) < len(output)
+
+
+def test_the_project_listing_fits_a_budget_and_keeps_what_matters():
+    """One prompt reached 761,280 characters at forty-five systems, which no
+    model in the chain could read. What is quoted is now chosen by relevance:
+    the system's own file, then the files that name it."""
+    from app.engineer.prompts import select_sources
+
+    existing = {
+        "src/server/Huge.luau": "x" * 200_000,
+        "src/server/WidgetService.luau": "--!strict\nreturn {}\n",
+        "src/server/Neighbour.luau": "-- talks to WidgetService\n",
+    }
+    quoted, named = select_sources(spec_task(), existing, 1_000)
+    assert "src/server/WidgetService.luau" in quoted
+    assert "src/server/Neighbour.luau" in quoted
+    assert named == ["src/server/Huge.luau"]
+
+
+def test_what_does_not_fit_is_still_named():
+    """A model that can see a file exists can say it needs it; one that cannot
+    invents what it contains."""
+    from app.engineer.prompts import build_prompt
+
+    existing = {"src/server/Huge.luau": "x" * 200_000,
+                "src/server/WidgetService.luau": "return {}\n"}
+    prompt = build_prompt(spec_task(), {}, existing, None, 1, listing_budget=1_000)
+    assert "src/server/Huge.luau" in prompt and "did not fit" in prompt
+    assert len(prompt) < 20_000

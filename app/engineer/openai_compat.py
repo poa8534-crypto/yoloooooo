@@ -30,6 +30,12 @@ import httpx
 from .gemini import GeminiIncomplete, GeminiRefused, GeminiUnavailable, UsageHook
 
 RETRYABLE_STATUS = {500, 502, 503, 504}
+# A 400 whose complaint is the size of the prompt, not its content. The next
+# model may have a larger window, so this is a reason to move on rather than a
+# verdict on the request: measured when Dahl's MiniMax refused a 171,809-token
+# prompt that Antigravity had been reading all run.
+TOO_LONG = re.compile(r"context length|context_length|too many tokens|maximum context|"
+                      r"reduce the length|input is too long|prompt is too long", re.IGNORECASE)
 UNAVAILABLE_STATUS = {401, 402, 403, 404, 408, 429}
 ATTEMPTS = 2
 RETRY_PAUSE_SECONDS = 3.0
@@ -127,6 +133,10 @@ class OpenAICompatClient:
                     self._usage(model, f"http_{status}", {})
                     raise GeminiUnavailable(f"{self.provider}/{model}: HTTP {status}: {detail}")
                 if status == 400 or status == 422:
+                    if TOO_LONG.search(detail):
+                        self._usage(model, f"http_{status}_too_long", {})
+                        raise GeminiUnavailable(
+                            f"{self.provider}/{model}: the prompt does not fit this model: {detail}")
                     raise GeminiRefused(f"{self.provider}/{model}: HTTP {status}: {detail}")
                 if status in RETRYABLE_STATUS:
                     problems.append(f"HTTP {status}: {detail}")

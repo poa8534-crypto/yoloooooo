@@ -177,3 +177,25 @@ def test_a_backup_with_a_key_joins_the_chain_with_its_own_address():
 def test_an_unknown_provider_name_is_refused():
     with pytest.raises(NotConfigured):
         provider_names(settings(engineer_providers="antigravity,claude"))
+
+
+@pytest.mark.anyio
+async def test_a_prompt_too_long_for_this_model_hands_over_to_the_next():
+    """A 400 about the size of the prompt is not a verdict on the request.
+
+    Measured: Dahl's MiniMax refused a 171,809-token prompt that Antigravity
+    had been reading all run. Classified as a refusal it stopped the chain, so
+    three systems were abandoned without a single real attempt.
+    """
+    body = ('{"error":{"code":400,"message":"This model\'s maximum context length is 180000 '
+            'tokens. However, you requested 8192 output tokens and your prompt contains at '
+            'least 171809 input tokens"}}')
+    with pytest.raises(GeminiUnavailable):
+        await client_answering(400, body).generate(model="m", system="s", prompt="p")
+
+
+@pytest.mark.anyio
+async def test_a_400_about_the_content_is_still_a_refusal():
+    with pytest.raises(GeminiRefused):
+        await client_answering(400, '{"error":"unsupported role"}').generate(
+            model="m", system="s", prompt="p")
