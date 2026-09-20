@@ -258,6 +258,11 @@ THE SPEC YOU MUST SHIP WITH THE SYSTEM (`tests/<SystemName>.spec.luau`):
   system -- a `now` argument, an injected roll -- so the case asserts one answer rather than
   whichever one today produced. A system built to be tested this way is also the one that can
   be replayed when it misbehaves in a live game.
+- MAKE THINGS WITH THE HARNESS, not with tables of your own: harness.player(userId) for a
+  player, harness.character(player, position) for their character, and
+  harness.instance(className, name) for anything in the tree. A hand-made player passed
+  where a real one goes fails inside the harness -- "attempt to index nil" naming the
+  harness's own line -- and says nothing about your system. One spec spent six attempts there.
 - SET THE WORLD UP THROUGH THE SYSTEMS THEMSELVES, never by writing a table you invented into
   one of them. To give a player an item, call the inventory system's own add; to place a flower,
   call the garden's own plant. A hand-made profile or inventory is refused by the system that

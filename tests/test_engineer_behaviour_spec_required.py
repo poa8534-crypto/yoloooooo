@@ -192,3 +192,15 @@ def test_what_does_not_fit_is_still_named():
     prompt = build_prompt(spec_task(), {}, existing, None, 1, listing_budget=1_000)
     assert "src/server/Huge.luau" in prompt and "did not fit" in prompt
     assert len(prompt) < 20_000
+
+
+def test_a_stored_summary_keeps_a_failure_buried_in_the_middle():
+    """The behaviour runner prints specs alphabetically, so a failure sits
+    wherever the alphabet puts it. Head and tail were both PASSes on the
+    report that made this necessary."""
+    from app.engineer.gate import CheckResult, GateReport
+
+    output = ("PASS early\n" * 300) + "FAIL  the buried case: expected 4, got 7\n" + ("PASS late\n" * 300)
+    stored = GateReport((CheckResult("verify.ps1", False, output),)).summary()[0]["output"]
+    assert "the buried case: expected 4, got 7" in stored
+    assert len(stored) < len(output)

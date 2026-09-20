@@ -174,6 +174,21 @@ function harness.instance(className: string, name: string?): any
 				end
 				rawset(table_, "__parent", value)
 				if value ~= nil then
+					-- Said here because the alternative is "attempt to index nil
+					-- with '<name>'" pointing at this line, which sent one spec
+					-- round six attempts. A plain table is not a parent.
+					if rawget(value, "__children") == nil then
+						error(
+							string.format(
+								"%s.Parent was set to something that is not a harness instance. "
+									.. "Make containers with harness.instance(className, name), players with "
+									.. "harness.player(userId) and characters with harness.character(player, position); "
+									.. "a table you built yourself cannot hold children.",
+								tostring(leaf)
+							),
+							2
+						)
+					end
 					value.__children[leaf] = table_
 				end
 				return

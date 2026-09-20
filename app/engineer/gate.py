@@ -129,18 +129,31 @@ class GateReport:
                  "output": _clip_around(check.output, 1200)} for check in self.checks]
 
 
-def _clip_around(text: str, limit: int) -> str:
-    """The start AND the end, for a stored record somebody will read later.
+_FAILING = re.compile(r"\bFAIL(ED)?\b|\berror\b|TypeError", re.IGNORECASE)
 
-    A report's verdict is at the bottom: verify.ps1 prints each check in turn
-    and the passing ones come first, so keeping only the head stores a list of
-    PASSes and throws away the failure that the record exists to explain.
+
+def _clip_around(text: str, limit: int) -> str:
+    """A stored record that keeps the lines it exists to explain.
+
+    Two things were learned the hard way here. A report's verdict is at the
+    bottom, so keeping only the head stores a list of PASSes -- and the
+    behaviour runner prints its specs in alphabetical order, so a failing
+    case sits wherever the alphabet puts it, which a head-and-tail clip drops
+    just as thoroughly. PlayerLifecycleManager's two failures were 16,000
+    characters inside a report whose head and tail were both PASSes.
+
+    So the failing lines are kept first, and the head and tail fill whatever
+    room is left.
     """
     if len(text) <= limit:
         return text
-    head = limit // 3
-    tail = limit - head
-    return f"{text[:head]}\n... [{len(text) - limit} characters omitted]\n{text[-tail:]}"
+    failing = [line.strip() for line in text.splitlines() if _FAILING.search(line)]
+    kept = "\n".join(failing[:30])[: limit * 2 // 3]
+    room = max(limit - len(kept), limit // 3)
+    head, tail = room // 2, room - room // 2
+    omitted = max(len(text) - head - tail, 0)
+    return (f"{text[:head]}\n... [{omitted} characters omitted; the failing lines follow]\n"
+            f"{kept}\n...\n{text[-tail:]}")
 
 
 def _clip(text: str, limit: int) -> str:
