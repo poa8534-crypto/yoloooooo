@@ -85,6 +85,11 @@ SCRIPT_MESSAGE = (
     "a typed value instead, such as the Services module"
 )
 
+# An entry point is not a module: Rojo makes it a Script, Roblox runs it, and
+# the folder of modules it starts is its own parent. `script.Parent` is the
+# only way in, so the `script` ban is relaxed there -- and only that far.
+ENTRY_SCRIPT = (".server.luau", ".client.luau")
+
 STRICT_HEADER = "--!strict"
 SERVICES_HEADER = (
     "--!strict\n"
@@ -318,6 +323,7 @@ def check_source(source: str, path: str) -> list[Violation]:
         return [*found, Violation(path, 1, 1, "syntax", str(exc))]
 
     in_require = require_argument_span(tokens)
+    is_entry = path.replace("\\", "/").endswith(ENTRY_SCRIPT)
     for index, token in enumerate(tokens):
         if token.kind != "name":
             continue
@@ -326,7 +332,11 @@ def check_source(source: str, path: str) -> list[Violation]:
         if previous is not None and previous.kind == "op" and previous.text in (".", ":"):
             continue
         if token.text == SCRIPT_GLOBAL and index not in in_require:
-            found.append(violation(token.offset, "untyped-script", SCRIPT_MESSAGE))
+            following = tokens[index + 1 : index + 3]
+            reaches_parent_only = (len(following) == 2 and following[0].text == "."
+                                   and following[1].text == "Parent")
+            if not (is_entry and reaches_parent_only):
+                found.append(violation(token.offset, "untyped-script", SCRIPT_MESSAGE))
         elif token.text in FORBIDDEN_GLOBALS:
             found.append(violation(token.offset, "forbidden-global",
                                    f"`{token.text}`: {FORBIDDEN_GLOBALS[token.text]}"))
