@@ -210,6 +210,7 @@ def ollama_model_names(settings: Settings) -> list[str]:
 # names: (key, base url, comma-separated models). A new one is a row here and
 # three fields in config.py.
 COMPAT_PROVIDERS: dict[str, tuple[str, str, str]] = {
+    "dahl": ("dahl_api_key", "dahl_base_url", "engineer_dahl_models"),
     "glm": ("glm_api_key", "glm_base_url", "engineer_glm_models"),
     "deepseek": ("deepseek_api_key", "deepseek_base_url", "engineer_deepseek_models"),
 }
@@ -279,7 +280,8 @@ def build_clients(settings: Settings, **kwargs) -> list[tuple[str, object]]:
         except NotConfigured:
             continue
     if not built:
-        raise NotConfigured("no engineer provider is configured: set a GLM, DeepSeek or Gemini key, install `agy`, "
+        raise NotConfigured("no engineer provider is configured: set a Dahl, GLM, DeepSeek or Gemini key, "
+                            "install `agy`, "
                             "or run Ollama")
     return built
 

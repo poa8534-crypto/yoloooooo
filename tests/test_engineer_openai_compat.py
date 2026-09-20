@@ -127,7 +127,9 @@ async def test_an_unavailable_model_hands_over_to_the_next_listed():
 def settings(**overrides) -> SimpleNamespace:
     base = dict(
         engineer_provider=None,
-        engineer_providers="antigravity,glm,deepseek,gemini,ollama",
+        engineer_providers="antigravity,dahl,glm,deepseek,gemini,ollama",
+        dahl_api_key="", dahl_base_url="https://inference.dahl.global/v1",
+        engineer_dahl_models="zai-org/GLM-5.3-Flash,deepseek-ai/DeepSeek-V4-Flash-0731",
         glm_api_key="", glm_base_url="https://api.z.ai/api/paas/v4", engineer_glm_models="glm-5.2",
         deepseek_api_key="", deepseek_base_url="https://api.deepseek.com",
         engineer_deepseek_models="deepseek-chat",
@@ -142,16 +144,27 @@ def settings(**overrides) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
-def test_glm_and_deepseek_sit_behind_antigravity_in_the_default_chain():
+def test_the_backups_sit_behind_antigravity_in_the_default_chain():
     from app.config import Settings
 
     names = provider_names(Settings(_env_file=None))
-    assert names[:3] == ["antigravity", "glm", "deepseek"]
+    assert names[:4] == ["antigravity", "dahl", "glm", "deepseek"]
+
+
+def test_dahl_serves_a_glm_and_a_deepseek_model_on_one_key():
+    """One address, two vendors: the second model is what the first falls back
+    to, which is the whole reason Dahl needs no second key."""
+    from app.engineer.runs import compat_model_names
+
+    built = dict(build_clients(settings(dahl_api_key="k")))
+    assert built["dahl"].base_url == "https://inference.dahl.global/v1"
+    models = compat_model_names("dahl", settings())
+    assert len(models) == 2 and all("/" in model for model in models)
 
 
 def test_a_backup_with_no_key_is_skipped_not_fatal():
     built = [name for name, _client in build_clients(settings())]
-    assert "glm" not in built and "deepseek" not in built
+    assert "dahl" not in built and "glm" not in built and "deepseek" not in built
 
 
 def test_a_backup_with_a_key_joins_the_chain_with_its_own_address():

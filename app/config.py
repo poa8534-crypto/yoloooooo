@@ -112,10 +112,10 @@ class Settings(BaseSettings):
     # or not configured is skipped, so the chain is also how a machine without
     # `agy` keeps working. Only "unavailable" moves down the chain: a refusal
     # and a truncated answer belong to the attempt that got them.
-    engineer_providers: str = "antigravity,glm,deepseek,gemini,ollama"
+    engineer_providers: str = "antigravity,dahl,glm,deepseek,gemini,ollama"
     # The single-provider setting the chain replaced. Still read, so an .env
     # that sets it keeps working: it becomes the whole chain.
-    engineer_provider: Literal["gemini", "ollama", "antigravity", "glm", "deepseek"] | None = None
+    engineer_provider: Literal["gemini", "ollama", "antigravity", "dahl", "glm", "deepseek"] | None = None
     engineer_antigravity_executable: str = "agy"
     # Tried in order. Flash 3.8 throughout, at descending effort: a rate-limited
     # high is a reason to think less about the same problem, not to change model
@@ -145,6 +145,15 @@ class Settings(BaseSettings):
     # skipped until its key is set. The owner types the keys into .env; they
     # are never asked for, printed or committed. Model names are tried in
     # order, so a provider's exact model id can be corrected here without code.
+    # Dahl serves several vendors' models behind one OpenAI-compatible address,
+    # so its models field carries every id its /v1/models listed, in the order
+    # to try them: a free account meets "at concurrency capacity" often, and
+    # the next model is the answer to it, on the same key.
+    dahl_api_key: str = ""
+    dahl_base_url: str = "https://inference.dahl.global/v1"
+    engineer_dahl_models: str = (
+        "zai-org/GLM-5.3-Flash,deepseek-ai/DeepSeek-V4-Flash-0731,MiniMaxAI/MiniMax-M2.7"
+    )
     glm_api_key: str = ""
     glm_base_url: str = "https://api.z.ai/api/paas/v4"
     engineer_glm_models: str = "glm-5.2"
