@@ -254,6 +254,23 @@ async def test_a_truncated_answer_is_incomplete_not_a_refusal(tmp_path, message)
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("message", [
+    "gemini-3.8-flash-high: Individual quota reached. Please upgrade your subscription to "
+    "increase your limits. Resets in 1h21m19s.",
+    "429 Too Many Requests",
+    "RESOURCE_EXHAUSTED: rate limit",
+])
+async def test_an_exhausted_quota_is_unavailable_so_the_chain_moves_on(tmp_path, message):
+    """Measured on Island Haven's build: this came back as a refusal, which
+    stops the chain, so no backup provider was ever asked while Antigravity
+    was out of quota."""
+    payload = {"status": "ERROR", "error": message}
+    with pytest.raises(GeminiUnavailable):
+        await client_for([], tmp_path, fake={"payload": payload}).generate(
+            model="m", system="s", prompt="p")
+
+
+@pytest.mark.anyio
 async def test_a_real_refusal_is_still_a_refusal(tmp_path):
     """The truncation test must not be so broad that it swallows a decline."""
     payload = {"status": "ERROR", "error": "blocked by safety settings"}

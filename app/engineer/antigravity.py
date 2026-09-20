@@ -46,6 +46,13 @@ EFFORT_SUFFIX = re.compile(r"-(low|medium|high)$")
 #     shorter. Retries remaining: 3
 TRUNCATED = re.compile(r"cut off|output token limit|exceeded the (?:maximum|output)|truncat",
                        re.IGNORECASE)
+# The account has run out, not the model declining. Measured on 2026-09-19:
+# "gemini-3.8-flash-high: Individual quota reached. Please upgrade your
+# subscription to increase your limits. Resets in 1h21m19s." Read as a refusal,
+# it stopped every attempt at Antigravity and the chain never reached the
+# providers behind it -- which exist for exactly this.
+OUT_OF_QUOTA = re.compile(r"quota|rate.?limit|resource.?exhausted|too many requests|upgrade your subscription",
+                          re.IGNORECASE)
 
 
 # `agy` is an agent, so its first instinct on any task is to orient itself.
@@ -287,6 +294,9 @@ class AntigravityClient:
 
         error = envelope.get("error")
         status = str(envelope.get("status") or "")
+        if error and OUT_OF_QUOTA.search(str(error)):
+            # Unavailable, so the chain moves on to the next provider.
+            raise GeminiUnavailable(f"{model}: {str(error)[:300]}")
         if error and TRUNCATED.search(str(error)):
             # Not a refusal: the model had more to say. The loop's answer to
             # this is a smaller ask, not the end of the run.
