@@ -59,7 +59,23 @@ _JOBOBJECTEXTENDEDLIMITINFORMATION = 9
 #   reaches this limit is not working, and failing it is cheaper for everyone
 #   than letting it take the machine.
 #]]
-_PROCESS_MEMORY_LIMIT = int(os.environ.get("ENGINEER_CHILD_MEMORY_LIMIT_BYTES") or 4 * 1024**3)
+_PROCESS_MEMORY_LIMIT = int(os.environ.get("ENGINEER_CHILD_MEMORY_LIMIT_BYTES") or 2 * 1024**3)
+
+#[[
+#   What EVERY child together may take.
+#
+#   A per-process limit answers one runaway. It does not answer four, which is
+#   how many gates a build runs at once: four children of two gigabytes each
+#   is eight, and with Studio, a browser and the model's own processes beside
+#   them, a 32GB machine is gone. This machine went down twice in one evening.
+#
+#   So the job carries a ceiling of its own. Eight gigabytes is roughly
+#   twenty times what a full build's tools legitimately hold at any moment,
+#   and a quarter of what this machine has, which leaves the machine usable
+#   while the pipeline is working.
+#]]
+_JOB_MEMORY_LIMIT = int(os.environ.get("ENGINEER_TOTAL_CHILD_MEMORY_LIMIT_BYTES") or 8 * 1024**3)
+_JOB_OBJECT_LIMIT_JOB_MEMORY = 0x0200
 _PROCESS_SET_QUOTA = 0x0100
 _PROCESS_TERMINATE = 0x0001
 
@@ -113,8 +129,11 @@ def _windows_job():
 
             limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
             limits.BasicLimitInformation.LimitFlags = (
-                _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | _JOB_OBJECT_LIMIT_PROCESS_MEMORY)
+                _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                | _JOB_OBJECT_LIMIT_PROCESS_MEMORY
+                | _JOB_OBJECT_LIMIT_JOB_MEMORY)
             limits.ProcessMemoryLimit = ctypes.c_size_t(_PROCESS_MEMORY_LIMIT)
+            limits.JobMemoryLimit = ctypes.c_size_t(_JOB_MEMORY_LIMIT)
             if not kernel32.SetInformationJobObject(
                     handle, _JOBOBJECTEXTENDEDLIMITINFORMATION,
                     ctypes.byref(limits), ctypes.sizeof(limits)):
@@ -124,6 +143,17 @@ def _windows_job():
             _job_failed = True
             _job = None
         return _job
+
+
+def limits_are_in_force() -> bool:
+    """Whether a child started now would be held to the memory limits.
+
+    Anything that deliberately tests the limits must ask first: without the
+    job, "allocate until something stops you" has nothing to stop it, and the
+    machine is what gives way. That is not hypothetical -- it is how this
+    machine went down while its own safety net was being written.
+    """
+    return _windows_job() is not None if _WINDOWS else False
 
 
 def _adopt(pid: int) -> None:

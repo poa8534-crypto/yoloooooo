@@ -1,10 +1,17 @@
-"""A child process does not outlive the run that started it.
+"""A child process does not outlive its run, and cannot take the machine.
 
-Seven orphaned Antigravity processes accumulated over an afternoon of stopped
-builds, and the next build died with "RuntimeError: can't start new thread" --
-a message that names nothing about its cause. Two holes made them:
-`subprocess.run` kills a child on timeout and not what the child started, and
-a parent that is killed leaves everything it started running.
+Three failures in one evening, all from one hole: children were started with
+`subprocess.run` and nothing owned them afterwards.
+
+Seven orphaned Antigravity processes accumulated across stopped builds, until
+a build died with "RuntimeError: can't start new thread". Then a generated
+spec looped under Lune -- `task.wait` does nothing there and `task.spawn` is
+synchronous, so a `while` loop in a Start never yields -- and two runners grew
+to 16GB and 9GB of this machine's 32. The machine went down twice.
+
+The tests that prove the limits bite are themselves bounded. Trusting the
+limit to be the only thing between a test and the machine is how it went down
+the second time, while this safety net was being written.
 """
 
 from __future__ import annotations
@@ -59,7 +66,6 @@ def test_a_child_that_starts_a_child_is_killed_with_it():
         pytest.skip("the child did not report its own child's pid before it was killed")
     pid = int(printed.splitlines()[0])
 
-    # Give the kill a moment to walk the tree, then ask whether it is gone.
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         if not _alive(pid):
@@ -94,22 +100,40 @@ def test_the_job_is_made_once_and_kills_what_it_holds_when_this_process_ends():
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the job object is the Windows answer")
 def test_a_child_that_eats_memory_is_refused_before_the_machine_is():
-    """A generated spec looped under Lune and two runners grew to 16GB and
-    9GB -- 25 of this machine's 32 -- and the machine went down with them.
-    A child that reaches the limit must fail on its own."""
+    """Two Lune runners reached 16GB and 9GB, and the machine went down.
+
+    The allocation here stops at a bound of its own: four gigabytes of
+    attempts against a two-gigabyte limit is enough to prove the limit bites,
+    and bounded so that a limit which does NOT bite costs four gigabytes and
+    a failed assertion rather than the machine.
+    """
+    if not subprocesses.limits_are_in_force():
+        pytest.skip("the job object is not in force here; this must not run without it")
+
     greedy = (
         "blocks = []\n"
-        "while True:\n"
+        "for _ in range(64):\n"
         "    blocks.append(bytearray(64 * 1024 * 1024))\n"
+        "print('allocated', len(blocks) * 64, 'MB')\n"
     )
     done = subprocesses.run([sys.executable, "-c", greedy], timeout=120)
-    assert done.returncode != 0, "a child allocating without end was allowed to keep going"
+    assert done.returncode != 0, (
+        "a child allocated four gigabytes against a two-gigabyte limit and was not stopped")
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the job object is the Windows answer")
 def test_the_limit_is_far_above_what_the_toolchain_uses():
-    """Four gigabytes must not fail honest work: a whole-project Lune run sits
-    in the low hundreds of megabytes."""
+    """The limit must not fail honest work: a whole-project Lune run of 230
+    checks sits in the low hundreds of megabytes."""
     modest = "data = bytearray(256 * 1024 * 1024); print(len(data))"
     done = subprocesses.run([sys.executable, "-c", modest], timeout=120)
     assert done.returncode == 0, "a quarter of a gigabyte was refused; the limit is too tight"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the job object is the Windows answer")
+def test_the_limits_are_reported_honestly():
+    """Whether the net exists is a fact the test above depends on, so it is
+    not allowed to be a guess."""
+    assert subprocesses.limits_are_in_force() is True
+    assert subprocesses._PROCESS_MEMORY_LIMIT <= 4 * 1024**3, "one child may take too much"
+    assert subprocesses._JOB_MEMORY_LIMIT <= 12 * 1024**3, "the children together may take too much"
