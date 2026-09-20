@@ -14,6 +14,19 @@ would start twice, the second Start() landing on a service already running.
 from __future__ import annotations
 
 from app.bridge.from_project import bootstrap_source, entry_scripts, operations_for
+from app.bridge.protocol import OperationKind
+
+
+def created(batch) -> list[str]:
+    """The paths a batch CREATES. A delete carries a path too, and counting
+    both made a batch that removes a stale bootstrap look like one that
+    writes a second copy of it."""
+    return [op.path for op in batch.operations
+            if op.operation in (OperationKind.CREATE_SCRIPT, OperationKind.CREATE_INSTANCE)]
+
+
+def deleted(batch) -> list[str]:
+    return [op.path for op in batch.operations if op.operation is OperationKind.DELETE_INSTANCE]
 
 
 def test_an_entry_script_in_the_repo_is_recognised_per_side():
@@ -26,7 +39,7 @@ def test_the_bridge_stands_down_where_the_project_brings_its_own():
     files = {"src/server/Main.server.luau": "--!strict\nreturn nil\n",
              "src/server/A.luau": "--!strict\nreturn {}\n",
              "src/client/C.luau": "--!strict\nreturn {}\n"}
-    paths = [getattr(op, "path", "") for op in operations_for(files).operations]
+    paths = created(operations_for(files))
     assert not any("VentureBootstrap" in str(path) for path in paths)
     # The client brought none, so it still gets one: a HUD that never starts
     # is indistinguishable from a build that failed.
@@ -35,7 +48,7 @@ def test_the_bridge_stands_down_where_the_project_brings_its_own():
 
 def test_without_an_entry_script_the_bridge_still_provides_one():
     files = {"src/server/A.luau": "--!strict\nreturn {}\n"}
-    paths = [getattr(op, "path", "") for op in operations_for(files).operations]
+    paths = created(operations_for(files))
     assert any("VentureBootstrap" in str(path) for path in paths)
 
 
@@ -86,3 +99,31 @@ def test_the_foundation_starts_before_the_systems_that_use_it():
         "RemoteRegistry starts after a service that creates its own remotes")
     assert sorted(order) == sorted(built), "hoisting changed which systems start"
     assert len(order) == len(set(order)), "a system appears twice in the start order"
+
+
+def test_a_stale_bootstrap_is_removed_when_the_project_brings_its_own():
+    """Not creating it any more is not enough: the one an earlier sync left
+    behind is still in the place, starting everything a second time.
+
+    Measured on island-haven: "[VentureStart] 27 started" and
+    "[VentureBootstrap] 25 started" in the same run, with eleven warnings
+    about systems that had since been retired. Every service ran twice,
+    each copy with its own state, against one DataStore.
+    """
+    files = {"src/server/Main.server.luau": "--!strict\nreturn nil\n",
+             "src/server/A.luau": "--!strict\nreturn {}\n",
+             "src/client/Main.client.luau": "--!strict\nreturn nil\n",
+             "src/client/B.luau": "--!strict\nreturn {}\n"}
+    gone = deleted(operations_for(files))
+    assert any("VentureBootstrap" in path for path in gone), (
+        "the stale server bootstrap is left in the place, starting every system twice")
+    assert any("VentureClientBootstrap" in path for path in gone), (
+        "the stale client bootstrap is left in the place")
+
+
+def test_nothing_is_deleted_when_the_bridge_provides_the_bootstrap():
+    """A project without its own entry point still needs the generated one,
+    and deleting what this same batch creates would leave a dead place."""
+    files = {"src/server/A.luau": "--!strict\nreturn {}\n"}
+    gone = deleted(operations_for(files))
+    assert not gone, f"a batch that provides the bootstrap also deleted {gone}"

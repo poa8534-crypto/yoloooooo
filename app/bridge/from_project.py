@@ -26,6 +26,7 @@ from __future__ import annotations
 import secrets
 
 from .protocol import (
+    DeleteInstance,
     CreateInstance,
     BuildWorld,
     CreateScript,
@@ -236,6 +237,22 @@ def operations_for(files: dict[str, str], *, build_id: str | None = None,
 
     # A project that brings its own entry point keeps it; see entry_scripts.
     carried = entry_scripts(files)
+    #[[
+    #   A bootstrap this bridge wrote in an earlier sync is still in the place,
+    #   and it starts everything a second time.
+    #
+    #   Measured: a sync of island-haven reported "[VentureStart] 27 started"
+    #   and "[VentureBootstrap] 25 started" in the same run, plus eleven
+    #   warnings about systems that had since been retired. Every service was
+    #   running twice, each with its own state, against one DataStore.
+    #
+    #   Not creating it any more is not enough; the old one has to go.
+    #]]
+    for root, stale in (("src/server", f"ServerScriptService/{BOOTSTRAP_NAME}"),
+                        ("src/client", CLIENT_BOOTSTRAP_PATH)):
+        if root in carried:
+            operations.append(op(DeleteInstance, path=stale))
+
     if bootstrap and server_modules and "src/server" not in carried:
         operations.append(op(CreateScript, path=f"ServerScriptService/{BOOTSTRAP_NAME}",
                              scriptType="Script",
