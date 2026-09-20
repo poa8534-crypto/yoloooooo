@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .luau_guard import check_project
-from .workspace import CLIENT_SERVICES_PATH, SERVICES_PATH
+from .workspace import CLIENT_SERVICES_PATH, SERVICES_PATH, WRITABLE_ROOTS, spec_path
 
 OUTPUT_LIMIT = 6000
 _SELENE_COUNTS = re.compile(r"^\s*(\d+)\s+(?:errors?|warnings?|parse errors?)\s*$", re.MULTILINE | re.IGNORECASE)
@@ -136,6 +136,18 @@ def _clip(text: str, limit: int) -> str:
 VERIFY_SCRIPT = "scripts/verify.ps1"
 
 
+def _sources_for(root: Path, system: str) -> list[str]:
+    """Where this system's source could be, as a spec would name it.
+
+    Measured from the tree rather than assumed, so a system in src/client is
+    not asked to name a path under src/server.
+    """
+    found = [path.relative_to(root).as_posix()
+             for source_root in WRITABLE_ROOTS
+             for path in sorted((root / source_root).glob(f"{system}.luau"))]
+    return found or [f"{source_root}/{system}.luau" for source_root in WRITABLE_ROOTS]
+
+
 class Gate:
     def __init__(self, known_services: frozenset[str], definitions: Path, *,
                  runner: CommandRunner = run_command, timeout: float = 300.0,
@@ -165,10 +177,47 @@ class Gate:
             return None
         return output.strip() or f"stylua exited {code}"
 
-    def run(self, root: Path) -> GateReport:
+    def run(self, root: Path, system: str | None = None) -> GateReport:
+        """`system` is the system this attempt is building, when there is one.
+
+        Given, the gate also requires that system's behaviour spec. The
+        preflight run passes nothing: it judges the untouched project, which
+        cannot be expected to hold a spec for a system not yet written.
+        """
+        checks = [self._behaviour_spec(root, system)] if system else []
         if self.mode == "verify-script":
-            return GateReport((self._guard(root), self._verify_script(root)))
-        return self._builtin(root)
+            return GateReport((self._guard(root), self._verify_script(root), *checks))
+        report = self._builtin(root)
+        return GateReport((*report.checks, *checks))
+
+    def _behaviour_spec(self, root: Path, system: str) -> CheckResult:
+        """The system must come with a spec that executes it.
+
+        Every other check reads the code. This one insists something runs it:
+        `verify.ps1` runs whatever specs exist, so a system delivered without
+        one passes the behaviour check by contributing nothing to it. Twelve
+        systems reached master that way before this existed.
+
+        Existence is not enough -- a spec that never loads the module it names
+        is the same silence with a file around it -- so the spec must mention
+        the source file it covers.
+        """
+        name = f"behaviour spec ({system})"
+        path = root / spec_path(system)
+        if not path.is_file():
+            return CheckResult(name, False,
+                               f"{spec_path(system)} is missing. Every system ships with a behaviour "
+                               f"spec that loads {_sources_for(root, system)[0]} through the harness "
+                               f"and checks its acceptance criteria; see tests/ for the specs already "
+                               f"in the project.")
+        text = path.read_text(encoding="utf-8", errors="replace")
+        covered = [source for source in _sources_for(root, system) if source in text]
+        if not covered:
+            wanted = " or ".join(_sources_for(root, system)) or f"src/**/{system}.luau"
+            return CheckResult(name, False,
+                               f"{spec_path(system)} never loads {wanted}. A spec that does not run the "
+                               f"module it names proves nothing; load it with harness.load(...).")
+        return CheckResult(name, True, f"{spec_path(system)} loads {covered[0]}")
 
     def _verify_script(self, root: Path) -> CheckResult:
         script = root / VERIFY_SCRIPT

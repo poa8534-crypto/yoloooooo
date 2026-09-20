@@ -282,7 +282,9 @@ def command_check(args) -> int:
     problem = gate.format(worktree, targets)
     print(f"formatted {len(targets)} file(s)" if problem is None else f"not formatted: {problem}")
 
-    report = gate.run(worktree)
+    # The same rule the Engineer answers to: the system's behaviour spec,
+    # or it is not checked.
+    report = gate.run(worktree, system.name)
     print()
     for check in report.checks:
         print(f"  {'PASS' if check.passed else 'FAIL'}  {check.name}")
@@ -320,7 +322,7 @@ def command_land(args) -> int:
 
     def project_check(root: Path) -> tuple[bool, str]:
         """Does the WHOLE project still build with this file in it?"""
-        report = gate.run(root)
+        report = gate.run(root, system.name)
         if report.passed:
             return True, ""
         return False, "; ".join(

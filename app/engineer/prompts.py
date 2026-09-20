@@ -42,7 +42,9 @@ HARD RULES (enforced by the guard):
   `DataModel` in `services` like any other name and call it through the module:
   `Services.DataModel:BindToClose(save)`. Never write `game:BindToClose(...)`;
   it is the same forbidden global and the guard refuses it.
-- Only write .luau files under {", ".join(WRITABLE_ROOTS)}.
+- Only write .luau files under {", ".join(WRITABLE_ROOTS)}, plus ONE more file: the behaviour
+  spec for your system, at `tests/<SystemName>.spec.luau`. It is required; see THE SPEC below.
+  `tests/harness.luau` and `tests/runner.luau` are not yours to change.
 - CLIENT CODE (src/client) has one extra rule, and it is not negotiable. Roblox COPIES your client
   folder into Player.PlayerScripts when the game runs, so a require that walks above it resolves
   to a different tree than the one the type checker saw -- and type-checks perfectly anyway.
@@ -234,8 +236,34 @@ decides what the work is, and it always wins over anything here.
 
 {{DOCTRINE}}
 
+THE SPEC YOU MUST SHIP WITH THE SYSTEM (`tests/<SystemName>.spec.luau`):
+- Every other check reads your code. This one runs it. A system delivered without a spec is
+  refused, and so is a spec that never loads the module it names.
+- Shape: `return function(harness) ... return {{ ["what it does"] = function() ... end }} end`.
+  The labels are sentences about behaviour, and one case per acceptance criterion is the target.
+- Load the module through the harness, never with `require`:
+  `harness.reset()`, then `local services = harness.services()`, then
+  `local system = harness.load("src/server/YourService.luau", services)`. Load any collaborator
+  the same way, and give them the same `services` table so they share one world.
+- A case fails by raising: `assert(got == 4, "expected 4, got " .. got)` or `error(...)`. A case
+  that raises nothing passed. Say what was expected and what happened in the message; that text
+  is what the next attempt has to work from.
+- THE HARNESS IS NOT ROBLOX, and two differences have cost whole runs:
+  `task.wait` does nothing and returns immediately, and `task.spawn` runs its function
+  synchronously, right there. So a `Start()` that loops forever NEVER RETURNS under the runner
+  and the whole check times out. Call the smaller methods, or have `Start()` take the loop's
+  work as a function you can call once.
+- Never read the clock or the random source inside a case. Pass time and randomness into the
+  system -- a `now` argument, an injected roll -- so the case asserts one answer rather than
+  whichever one today produced. A system built to be tested this way is also the one that can
+  be replayed when it misbehaves in a live game.
+- Test what the acceptance criteria say, including the refusals: that a second claim of the same
+  reward gives nothing, that an action without the resource is denied, that a full container
+  takes nothing more. A spec of only the happy path passes while the system is still broken.
+
 ANSWER FORMAT: a single JSON object, nothing else:
-{{"files": [{{"path": "src/server/Example.luau", "content": "--!strict\\n..."}}],
+{{"files": [{{"path": "src/server/Example.luau", "content": "--!strict\\n..."}},
+            {{"path": "tests/Example.spec.luau", "content": "--!strict\\n..."}}],
   "services": ["Players", "ReplicatedStorage"],
   "summary": "what you built and how it meets each acceptance criterion"}}
 Return the COMPLETE content of every file you create or change, and ONLY those files. Each attempt

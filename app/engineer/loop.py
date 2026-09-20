@@ -165,7 +165,7 @@ class EngineerLoop:
 
             files = {file.path: file.content for file in output.files}
             written = await asyncio.to_thread(self._write, worktree, files, services)
-            report: GateReport = await asyncio.to_thread(self.gate.run, worktree.path)
+            report: GateReport = await asyncio.to_thread(self.gate.run, worktree.path, task.system)
             last_written, last_report, last_checked = written, report, attempt
             capture(passed=report.passed, files=files, services=services, checks=report.summary())
             self.emit("gate", "All checks passed" if report.passed else

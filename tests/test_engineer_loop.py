@@ -36,8 +36,20 @@ GOOD = "--!strict\nlocal Services = require(script.Parent.Parent.shared.Services
 HALLUCINATED = "--!strict\nlocal Services = require(script.Parent.Parent.shared.Services)\nServices.Players:MadeUp()\nreturn {}\n"
 
 
-def answer(content=GOOD, path="src/server/DataService.luau", services=("Players", "DataStoreService")):
-    return json.dumps({"files": [{"path": path, "content": content}], "services": list(services),
+# The gate requires the system's behaviour spec beside it, and requires that
+# the spec load the module it names -- so the fixture spec names the source.
+SPEC = ('return function(harness)\n'
+        '\tlocal system = harness.load("src/server/DataService.luau")\n'
+        '\treturn { ["it loads"] = function() assert(system) end }\n'
+        'end\n')
+
+
+def answer(content=GOOD, path="src/server/DataService.luau", services=("Players", "DataStoreService"),
+           spec=SPEC):
+    files = [{"path": path, "content": content}]
+    if spec is not None:
+        files.append({"path": "tests/DataService.spec.luau", "content": spec})
+    return json.dumps({"files": files, "services": list(services),
                        "summary": "Session-locked coin persistence"})
 
 
@@ -116,7 +128,8 @@ async def test_a_refused_attempt_teaches_the_next_one_and_only_passing_code_is_c
 
 
 async def test_files_from_a_refused_attempt_do_not_survive_into_the_next(repo, tmp_path):
-    first = json.dumps({"files": [{"path": "src/server/DataService.luau", "content": GOOD},
+    first = json.dumps({"files": [{"path": "tests/DataService.spec.luau", "content": SPEC},
+                                  {"path": "src/server/DataService.luau", "content": GOOD},
                                   {"path": "src/server/Leftover.luau", "content": HALLUCINATED}],
                         "services": ["Players"]})
     model = ScriptedModel(first, answer(GOOD))

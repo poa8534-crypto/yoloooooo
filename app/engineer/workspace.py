@@ -38,6 +38,20 @@ PROJECT_FILE = "default.project.json"
 # is not, and the checks cannot see the difference.
 WRITABLE_ROOTS = ("src/server", "src/shared", "src/client")
 READABLE_ROOTS = ("src/server", "src/client", "src/shared")
+# The one file outside the source roots a model may write: the behaviour spec
+# for the system it is building. Until this existed the source roots were the
+# whole allowance, so every attempt to write a test was refused as an unsafe
+# path -- and twelve systems reached master having passed five checks that only
+# read the code and one that ran nothing. The harness and the runner stay out
+# of reach: they decide what a passing test means, and a model that can rewrite
+# them can pass by lowering the bar.
+SPEC_PATH = re.compile(r"^tests/[A-Za-z0-9_]+\.spec\.luau$")
+PROTECTED_TEST_FILES = ("tests/harness.luau", "tests/runner.luau")
+
+
+def spec_path(system: str) -> str:
+    """Where the behaviour spec for a system belongs; the runner globs this."""
+    return f"tests/{system}.spec.luau"
 _SEGMENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 _WINDOWS_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
                      *(f"lpt{i}" for i in range(1, 10))}
@@ -76,8 +90,12 @@ def validate_path(path: str) -> str:
     parts = PurePosixPath(path).parts
     if any(part in ("", ".", "..") for part in path.split("/")):
         raise UnsafePath(f"{path!r}: empty, '.' and '..' path segments are not allowed")
-    if not any(path.startswith(root + "/") for root in WRITABLE_ROOTS):
-        raise UnsafePath(f"{path!r}: files may only be written under {', '.join(WRITABLE_ROOTS)}")
+    if path.lower() in PROTECTED_TEST_FILES:
+        raise UnsafePath(f"{path!r}: the test harness and runner are not yours to change; "
+                         f"write only your system's own spec")
+    if not any(path.startswith(root + "/") for root in WRITABLE_ROOTS) and not SPEC_PATH.match(path):
+        raise UnsafePath(f"{path!r}: files may only be written under {', '.join(WRITABLE_ROOTS)}, "
+                         f"plus your system's behaviour spec at tests/<System>.spec.luau")
     if not path.endswith(".luau"):
         raise UnsafePath(f"{path!r}: generated files must be .luau")
     if path.lower() in (SERVICES_PATH.lower(), CLIENT_SERVICES_PATH.lower()):
