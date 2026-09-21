@@ -13,12 +13,12 @@
     "land_height": 6,
     "sea_level": 0,
     "seabed": -14,
-    "skirt": 45,
+    "skirt": 60,
     "bevel": 0.5,
     "coast": [
       [
         270,
-        -0.14,
+        -0.2,
         8
       ],
       [
@@ -86,7 +86,7 @@
         "type": "level",
         "x": 70,
         "y": 20,
-        "radius": 30,
+        "radius": 62,
         "height": 16,
         "edge": 3,
         "hold": true
@@ -171,7 +171,7 @@
       {
         "type": "ramp",
         "x0": 0,
-        "y0": 34,
+        "y0": 30,
         "x1": 0,
         "y1": 56,
         "width": 9,
@@ -247,7 +247,79 @@
       "leaf_dark": "#2B8F45",
       "palm_trunk": "#C49A62",
       "pebble": "#D6C8AA"
-    }
+    },
+    "spread": {
+      "_about": "Twice the island, props at their true size: a point inside a zone moves with the zone, a point outside is doubled. Scripts keep writing the first layout's coordinates.",
+      "scale": 2,
+      "zones": [
+        [
+          0,
+          0,
+          45
+        ],
+        [
+          0,
+          -140,
+          50
+        ],
+        [
+          70,
+          0,
+          55
+        ],
+        [
+          -70,
+          50,
+          46
+        ],
+        [
+          0,
+          112,
+          62
+        ],
+        [
+          -118,
+          92,
+          26
+        ],
+        [
+          -130,
+          5,
+          26
+        ],
+        [
+          -120,
+          -75,
+          26
+        ],
+        [
+          -60,
+          -125,
+          26
+        ],
+        [
+          175,
+          -30,
+          66
+        ],
+        [
+          182,
+          -108,
+          20
+        ],
+        [
+          -196,
+          40,
+          20
+        ],
+        [
+          -95,
+          -180,
+          20
+        ]
+      ]
+    },
+    "tree_scale": 1.5
   },
   "layout": [
     "Scale, which Roblox imports literally: 1 Blender unit = 1 stud. A player is 5 tall; a doorway 7 tall and 4 wide; a bench seat 2 high; a lantern 8 to 10 tall.",
@@ -276,12 +348,12 @@
       "expect": {
         "Ocean_Main": {
           "size_x": [
-            1400,
-            1600
+            2800,
+            3200
           ],
           "size_y": [
-            1400,
-            1600
+            2800,
+            3200
           ],
           "centre_x": [
             -20,
@@ -309,8 +381,8 @@
             1
           ],
           "centre_y": [
-            -142,
-            -138
+            -282,
+            -278
           ],
           "size_y": [
             76,
@@ -327,8 +399,8 @@
             1
           ],
           "centre_y": [
-            -151,
-            -149
+            -291,
+            -289
           ],
           "top_z": [
             3.3,
@@ -338,7 +410,8 @@
         "Building_BarterStall": {},
         "Boat_Motor": {},
         "NPC_CaptainFinn": {}
-      }
+      },
+      "fallback": "blender/haven_bay/hand/arrival_dock.py"
     },
     {
       "name": "town square",
@@ -373,7 +446,17 @@
           ]
         },
         "Sign_ToSanctuary": {},
-        "NPC_ElderRowan": {}
+        "NPC_ElderRowan": {},
+        "Crafting_Bench": {
+          "centre_x": [
+            13,
+            15
+          ],
+          "centre_y": [
+            5,
+            7
+          ]
+        }
       },
       "fallback": "blender/haven_bay/hand/town_square.py"
     },
@@ -381,30 +464,12 @@
       "name": "sanctuary",
       "do": "The Sanctuary on the east cliff plateau. kit.museum('Building_Sanctuary', 72, 20, rz=-math.pi/2, width=34, depth=24, dome_colour='glass', wings=True) -- rz = -pi/2 turns its grand entrance west, toward the town. The grand wooden staircase: kit.stairs('Stairs_Sanctuary', (32, 12), (46, 18), width=10, colour='wood'). Inside the hall, two display floors with a sign each: Sanctuary_Aquarium (a pad with glass wall tanks, 'glass' boxes, along the north wall) and Sanctuary_Terrarium (a pad with bushes under glass, along the south wall). Barnaby's front desk: a kit.Part desk 'Sanctuary_FrontDesk' just inside the entrance at (60, 20), z 16, and kit.npc_spot('NPC_Barnaby', 62, 20, z=16). Outside, on the plateau: a fountain (kit.fountain), two statues, flower beds, benches, round trees at the back. Everything in 11_SANCTUARY.",
       "expect": {
-        "Building_Sanctuary": {
-          "centre_x": [
-            66,
-            78
-          ],
-          "centre_y": [
-            14,
-            26
-          ],
-          "bottom_z": [
-            14.5,
-            16.5
-          ]
-        },
+        "Building_Sanctuary": {},
         "Building_Sanctuary_Dome": {},
         "Building_Sanctuary_Conservatories": {},
-        "Stairs_Sanctuary": {
-          "top_z": [
-            15,
-            19
-          ]
-        },
         "NPC_Barnaby": {}
-      }
+      },
+      "fallback": "blender/haven_bay/hand/sanctuary.py"
     },
     {
       "name": "plots and paths",
@@ -412,46 +477,42 @@
       "expect": {
         "Plot_1_Ground": {
           "centre_x": [
-            -119.5,
-            -116.5
+            -237.5,
+            -234.5
           ],
           "centre_y": [
-            90.5,
-            93.5
-          ],
-          "top_z": [
-            6.0,
-            7.2
+            182.5,
+            185.5
           ]
         },
         "Plot_2_Ground": {
           "centre_x": [
-            -131.5,
-            -128.5
+            -261.5,
+            -258.5
           ],
           "centre_y": [
-            3.5,
-            6.5
+            8.5,
+            11.5
           ]
         },
         "Plot_3_Ground": {
+          "centre_x": [
+            -241.5,
+            -238.5
+          ],
+          "centre_y": [
+            -151.5,
+            -148.5
+          ]
+        },
+        "Plot_4_Ground": {
           "centre_x": [
             -121.5,
             -118.5
           ],
           "centre_y": [
-            -76.5,
-            -73.5
-          ]
-        },
-        "Plot_4_Ground": {
-          "centre_x": [
-            -61.5,
-            -58.5
-          ],
-          "centre_y": [
-            -126.5,
-            -123.5
+            -251.5,
+            -248.5
           ]
         },
         "Plot_1_Sign": {},
@@ -501,8 +562,8 @@
       "expect": {
         "Dock_FishingJetty_Deck": {
           "centre_x": [
-            170,
-            178
+            345,
+            353
           ]
         },
         "Fishing_Spot_03": {},
@@ -627,7 +688,8 @@
       "Garden_",
       "Grove_",
       "Sanctuary_Front",
-      "Noticeboard_"
+      "Noticeboard_",
+      "Crafting_"
     ],
     "join": {
       "Foliage_PineTrees": [

@@ -143,6 +143,68 @@ for obj in meshes:
         mod = obj.modifiers.new("WeightedNormal", "WEIGHTED_NORMAL")
         mod.keep_sharp = True
 
+# 5. One palette texture for everything. Roblox's importer carries colour
+# across only as textures, so flat material colours arrived as a grey island.
+# Each colour becomes a cell of a small palette image; every face's UVs point
+# at the centre of its colour's cell; every mesh ends with one material that
+# samples the palette. One texture, shared by every MeshPart.
+colours = []
+for obj in meshes:
+    for mat in obj.data.materials:
+        if mat is not None and mat.name not in colours:
+            colours.append(mat.name)
+side = max(1, math.ceil(math.sqrt(len(colours))))
+cell = 8
+size = side * cell
+image = bpy.data.images.new("HavenPalette", size, size, alpha=False)
+
+
+def to_srgb(c):
+    return 12.92 * c if c <= 0.0031308 else 1.055 * (c ** (1 / 2.4)) - 0.055
+
+
+pixels = [0.0] * (size * size * 4)
+centre = {}
+for index, name in enumerate(colours):
+    r, g, b, _a = bpy.data.materials[name].diffuse_color
+    rgb = (to_srgb(r), to_srgb(g), to_srgb(b))
+    cx, cy = index % side, index // side
+    for py in range(cy * cell, cy * cell + cell):
+        for px in range(cx * cell, cx * cell + cell):
+            at = (py * size + px) * 4
+            pixels[at:at + 4] = [rgb[0], rgb[1], rgb[2], 1.0]
+    centre[name] = ((cx + 0.5) / side, (cy + 0.5) / side)
+image.pixels[:] = pixels
+image.filepath_raw = CONFIG["palette_png"]
+image.file_format = "PNG"
+image.save()
+
+palette = bpy.data.materials.new("HavenPalette")
+try:
+    palette.use_nodes = True
+except AttributeError:
+    pass
+tree = palette.node_tree
+shader = tree.nodes.get("Principled BSDF") or tree.nodes.new("ShaderNodeBsdfPrincipled")
+texture = tree.nodes.new("ShaderNodeTexImage")
+texture.image = image
+texture.interpolation = "Closest"
+tree.links.new(texture.outputs["Color"], shader.inputs["Base Color"])
+shader.inputs["Roughness"].default_value = 0.9
+
+for obj in meshes:
+    mesh = obj.data
+    names = [m.name if m is not None else colours[0] for m in mesh.materials] or [colours[0]]
+    uv = mesh.uv_layers.get("UVMap") or mesh.uv_layers.new(name="UVMap")
+    for poly in mesh.polygons:
+        u, v = centre.get(names[min(poly.material_index, len(names) - 1)], (0.5, 0.5))
+        for loop in poly.loop_indices:
+            uv.data[loop].uv = (u, v)
+        poly.material_index = 0
+    mesh.materials.clear()
+    mesh.materials.append(palette)
+report["palette_colours"] = len(colours)
+
 for obj in meshes:
     if tris(obj) > budget:
         report["over_budget"].append(f"{obj.name}: {tris(obj)}")
@@ -163,6 +225,8 @@ def main(argv: list[str]) -> int:
     copy = Path(config["copy"]).resolve()
     fbx = Path(config["fbx"]).resolve()
 
+    fbx.parent.mkdir(parents=True, exist_ok=True)
+    config = {**config, "palette_png": str(fbx.with_name(fbx.stem + "_Palette.png"))}
     shutil.copyfile(source, copy)
     script = FINISH.replace("__CONFIG__", repr(json.dumps(config)))
     ran, error, out = bridge._invoke(script, copy, name="last_finish", timeout=900)

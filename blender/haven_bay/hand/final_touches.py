@@ -6,9 +6,11 @@ import bpy
 
 # -- The freshwater pond on the bluff: lily pads and smooth river stones, so
 # it reads as the freshwater fishing spot (Golden Trout, Catfish, Frogs).
+# The pond's layout position, not its object's: positions read back out of the
+# scene are already spread, and handing one to the kit would move it twice.
+px, py = 6.0, 118.0
 pond = bpy.data.objects.get("Forest_Pond")
-px, py = (6.0, 118.0) if pond is None else (pond.location.x, pond.location.y)
-surface = kit.ground(px, py) - 0.4 if pond is None else pond.location.z
+surface = pond.location.z if pond is not None else kit.ground(px + 11, py) - 0.4
 pads = kit.Part()
 for k, (dx, dy, r) in enumerate(((-3, 2, 1.4), (2.5, -3, 1.1), (3.5, 3, 1.2))):
     pads.cylinder(dx, dy, 0.08, r, 0.12, "leaf_light", sides=8)

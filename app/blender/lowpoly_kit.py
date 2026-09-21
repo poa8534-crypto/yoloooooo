@@ -563,8 +563,15 @@ def ground(x: float, y: float, radius: float = 0.0) -> float:
 # --------------------------------------------------------------------------
 # Terrain and water
 # --------------------------------------------------------------------------
-def build_terrain(prefix: str = "Terrain_MainIsland", spacing: float = 5.0) -> list[str]:
-    """The island as a height grid, split into tiles that each fit a MeshPart."""
+def build_terrain(prefix: str = "Terrain_MainIsland", spacing: float = 5.0,
+                  max_tile: float = 0.0) -> list[str]:
+    """The island as a height grid, split into tiles that each fit a MeshPart.
+
+    `max_tile` caps a tile's width in studs. Roblox builds a mesh's collision
+    from a limited number of convex pieces, so a 165-stud tile's collision
+    bridged every dip and players floated over the low ground; tiles of about
+    64 studs follow the surface closely.
+    """
     isl = island()
     reach = max(isl.rx, isl.ry) * 1.3 + isl.skirt
     for ix, iy, r, _top in isl.islets:
@@ -606,7 +613,7 @@ def build_terrain(prefix: str = "Terrain_MainIsland", spacing: float = 5.0) -> l
             return "sand"
         return "grass"
 
-    tiles = 1
+    tiles = max(1, math.ceil(reach * 2 / max_tile)) if max_tile > 0 else 1
     while True:
         size = reach * 2 / tiles
         buckets: dict[tuple[int, int], list] = {}
@@ -615,7 +622,7 @@ def build_terrain(prefix: str = "Terrain_MainIsland", spacing: float = 5.0) -> l
             cy = sum(p[1] for p in tri) / 3
             key = (min(int((cx - origin) // size), tiles - 1), min(int((cy - origin) // size), tiles - 1))
             buckets.setdefault(key, []).append(tri)
-        if max(len(v) for v in buckets.values()) <= TRIANGLE_BUDGET or tiles >= 8:
+        if max(len(v) for v in buckets.values()) <= TRIANGLE_BUDGET or tiles >= 16:
             break
         tiles += 1
 
@@ -1303,7 +1310,7 @@ def pavilion(prefix: str, x: float, y: float, size: float = 48.0, top: float = 7
 
 def museum(prefix: str, x: float, y: float, rz: float = 0.0, width: float = 36.0, depth: float = 24.0,
            wall: float = 14.0, coll: str = "11_SANCTUARY", dome_colour: str = "teal_roof",
-           wings: bool = False) -> list[str]:
+           wings: bool = False, scale: float = 1.0) -> list[str]:
     """The museum: a white hall with a teal dome and a grand double-door entrance facing local -Y.
 
     Makes `<prefix>` (the hall), `_Dome`, `_Doors`, `_Columns`, `_Steps`.
@@ -1375,7 +1382,12 @@ def museum(prefix: str, x: float, y: float, rz: float = 0.0, width: float = 36.0
     for k in range(3):
         steps.box(0, -depth / 2 - 4 - k * 1.6, 1.0 - k * 0.5, 22 - k * 0 , 2 + k * 1.6, 1.0, "white_stone")
     put(f"{prefix}_Steps", steps)
-    _PATH_ZONES.append((x, y, max(width, depth) * 0.72 + 4))
+    if scale != 1.0:
+        # Grown as a whole about its own footprint, so a grander hall keeps
+        # every proportion -- the doors grow with the walls.
+        for name in names:
+            bpy.data.objects[name].data.transform(Matrix.Scale(scale, 4))
+    _PATH_ZONES.append((x, y, max(width, depth) * 0.72 * scale + 4))
     return names
 
 
@@ -2125,3 +2137,168 @@ def fish_crate_mesh() -> bpy.types.Mesh:
             part.blob(-0.9 + k * 0.9, 0, 1.6, 0.45, "pastel_blue", stretch=2.0, squash=0.6)
         return part.finish("Kit_FishCrate")
     return _cached("Kit_FishCrate", build)
+
+
+# --------------------------------------------------------------------------
+# Spread: a bigger island without bigger props
+# --------------------------------------------------------------------------
+# Scripts are written in one set of coordinates (the island as first laid
+# out). An island spec may ask for it to be SPREAD: {"scale": 2, "zones":
+# [[x, y, radius], ...]}. A point inside a zone moves with its zone -- the
+# zone's centre goes to scale x centre, and everything around it keeps its
+# distance -- so a plot, the dock or the town keeps its layout and every prop
+# its size. A point outside every zone is simply scaled, so the land between
+# zones, the coast and the paths connecting them grow.
+#
+# Every public function that takes a world position spreads it once, at the
+# call from a script. Calls the kit makes to itself are already in spread
+# space and are left alone, which is what the depth counter is for.
+import contextlib as _contextlib
+import functools as _functools
+import inspect as _inspect
+
+_SPREAD = {"scale": 1.0, "zones": []}
+_DEPTH = 0
+_ABSOLUTE = False
+TREE_SCALE = 1.0
+
+
+def spread(x: float, y: float) -> tuple[float, float]:
+    """Where a script's (x, y) lands on the spread island."""
+    scale = _SPREAD["scale"]
+    if _ABSOLUTE or scale == 1.0:
+        return x, y
+    best = None
+    for zx, zy, zr in _SPREAD["zones"]:
+        d = math.hypot(x - zx, y - zy)
+        if d <= zr and (best is None or d < best[0]):
+            best = (d, zx, zy)
+    if best is not None:
+        _d, zx, zy = best
+        return x + zx * (scale - 1.0), y + zy * (scale - 1.0)
+    return x * scale, y * scale
+
+
+@_contextlib.contextmanager
+def absolute():
+    """Inside this, positions are taken as they are: already where they land."""
+    global _ABSOLUTE
+    before = _ABSOLUTE
+    _ABSOLUTE = True
+    try:
+        yield
+    finally:
+        _ABSOLUTE = before
+
+
+def _point(value):
+    if value is None:
+        return value
+    x, y = spread(float(value[0]), float(value[1]))
+    return (x, y, *value[2:])
+
+
+def _spreading(fn, xy=(), pts=(), pt=(), centre=None, keep=None):
+    signature = _inspect.signature(fn)
+
+    @_functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        global _DEPTH
+        if _DEPTH > 0 or _SPREAD["scale"] == 1.0 or _ABSOLUTE:
+            _DEPTH += 1
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                _DEPTH -= 1
+        bound = signature.bind(*args, **kwargs)
+        values = bound.arguments
+        if xy and xy[0] in values and xy[1] in values:
+            values[xy[0]], values[xy[1]] = spread(float(values[xy[0]]), float(values[xy[1]]))
+        for name in pt:
+            if name in values:
+                values[name] = _point(values[name])
+        for name in pts:
+            if name in values:
+                values[name] = [_point(p) for p in values[name]]
+        if centre and centre in values:
+            before = values[centre]
+            values[centre] = _point(before)
+            # A scatter over the whole island grows with it; one over a zone
+            # (the forest, a garden) keeps the zone's size.
+            if "radius" in values and float(values["radius"]) > 100:
+                values["radius"] = float(values["radius"]) * _SPREAD["scale"]
+        if keep and values.get(keep):
+            zones = []
+            for zone in values[keep]:
+                if len(zone) == 3:
+                    x, y = spread(zone[0], zone[1])
+                    zones.append((x, y, zone[2]))
+                else:
+                    x0, y0 = spread(zone[0], zone[1])
+                    x1, y1 = spread(zone[2], zone[3])
+                    zones.append((min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)))
+            values[keep] = zones
+        _DEPTH += 1
+        try:
+            return fn(*bound.args, **bound.kwargs)
+        finally:
+            _DEPTH -= 1
+
+    return wrapper
+
+
+def _grown(fn):
+    """Tree meshes at TREE_SCALE, grown once however often they are asked for."""
+    @_functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        mesh = fn(*args, **kwargs)
+        had = float(mesh.get("haven_grown", 1.0))
+        if abs(had - TREE_SCALE) > 1e-6:
+            mesh.transform(Matrix.Scale(TREE_SCALE / had, 4))
+            mesh["haven_grown"] = TREE_SCALE
+        return mesh
+    return wrapper
+
+
+for _name in ("ground", "place", "obj", "house", "plot", "pavilion", "museum", "domed_hall", "fountain",
+              "statue", "totem_bell", "plaza", "stall", "hut", "well", "crop_plot", "platform", "lookout",
+              "pond", "npc_spot", "plot_sign", "mailbox", "tent", "noticeboard", "life_ring"):
+    globals()[_name] = _spreading(globals()[_name], xy=("x", "y"))
+for _name in ("path", "fence_run", "stream"):
+    globals()[_name] = _spreading(globals()[_name], pts=("points",))
+for _name in ("pier", "stairs", "bridge"):
+    globals()[_name] = _spreading(globals()[_name], pt=("start", "end"))
+waterfall = _spreading(waterfall, pt=("top",))
+scatter = _spreading(scatter, centre="centre", keep="keep_out")
+for _name in ("palm_mesh", "pine_mesh", "round_tree_mesh"):
+    globals()[_name] = _grown(globals()[_name])
+
+_load_island_unspread = load_island
+
+
+def load_island(spec: dict) -> Island:
+    """Load the island, spreading its features first when the spec asks."""
+    global TREE_SCALE
+    layout = spec.get("spread") or {}
+    _SPREAD["scale"] = float(layout.get("scale", 1.0))
+    _SPREAD["zones"] = [tuple(float(v) for v in zone) for zone in layout.get("zones", [])]
+    TREE_SCALE = float(spec.get("tree_scale", 1.0))
+    if _SPREAD["scale"] == 1.0:
+        return _load_island_unspread(spec)
+    s = _SPREAD["scale"]
+    spread_spec = dict(spec)
+    spread_spec["radius_x"] = float(spec.get("radius_x", 245)) * s
+    spread_spec["radius_y"] = float(spec.get("radius_y", 215)) * s
+    features = []
+    for feature in spec.get("features", []):
+        f = dict(feature)
+        if f.get("type") == "ramp":
+            f["x0"], f["y0"] = spread(f["x0"], f["y0"])
+            f["x1"], f["y1"] = spread(f["x1"], f["y1"])
+        else:
+            f["x"], f["y"] = spread(f["x"], f["y"])
+        features.append(f)
+    spread_spec["features"] = features
+    spread_spec["sandbars"] = [[*spread(b[0], b[1]), *b[2:]] for b in spec.get("sandbars", [])]
+    spread_spec["islets"] = [[*spread(i[0], i[1]), *i[2:]] for i in spec.get("islets", [])]
+    return _load_island_unspread(spread_spec)

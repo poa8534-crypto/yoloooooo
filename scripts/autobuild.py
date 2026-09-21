@@ -64,7 +64,55 @@ class _AlreadyPlanned(Exception):
     """The blueprint already carries a plan, so the architect is not asked."""
 
 
-async def main(audit: str, prompt: str) -> int:
+def apply_revisions(blueprint, revisions: dict, marker: str = ""):
+    """Append each revision's purpose and criteria to its system in the blueprint.
+
+    Idempotent: a revision already present (by its exact text) is not added
+    twice, so rerunning a revise build does not grow the specification.
+
+    With a `marker`, a revision SUPERSEDES the last one carrying the same
+    marker: purpose paragraphs and criteria containing it are removed first,
+    and the new ones are written with it. Without that, moving the world a
+    second time appended new coordinates beside the old ones, and the
+    Engineer was handed both.
+    """
+    systems = []
+    touched = []
+    for system in blueprint.systems:
+        change = revisions.get(system.name)
+        if not change:
+            systems.append(system)
+            continue
+        purpose = system.purpose
+        criteria = list(system.acceptance_criteria)
+        new_purpose = change.get("purpose", "")
+        new_criteria = list(change.get("criteria", []))
+        if marker:
+            tag = f" [{marker}]"
+            purpose = "\n\n".join(p for p in purpose.split("\n\n") if marker not in p)
+            criteria = [c for c in criteria if marker not in c]
+            new_purpose = f"{new_purpose}{tag}" if new_purpose else ""
+            new_criteria = [f"{c}{tag}" for c in new_criteria]
+        if new_purpose and new_purpose not in purpose:
+            purpose = f"{purpose}\n\n{new_purpose}"
+        for criterion in new_criteria:
+            if criterion not in criteria:
+                criteria.append(criterion)
+        # The schema caps both; a revision that does not fit is refused here
+        # rather than silently cut.
+        if len(purpose) > 2000:
+            raise ValueError(f"{system.name}: revised purpose is {len(purpose)} characters, over 2000")
+        if len(criteria) > 20:
+            raise ValueError(f"{system.name}: {len(criteria)} acceptance criteria, over 20")
+        systems.append(system.model_copy(update={"purpose": purpose, "acceptance_criteria": criteria}))
+        touched.append(system.name)
+    missing = sorted(set(revisions) - set(touched))
+    if missing:
+        raise ValueError(f"the blueprint has no system named: {', '.join(missing)}")
+    return blueprint.model_copy(update={"systems": systems}), touched
+
+
+async def main(audit: str, prompt: str, revise_file: str = "") -> int:
     settings = get_settings()
     store = BlueprintStore(SessionLocal)
     design = load_design(SessionLocal, audit)
@@ -147,6 +195,20 @@ async def main(audit: str, prompt: str) -> int:
         for _name, client in clients:
             await client.close()
 
+    revise: set[str] = set()
+    if revise_file:
+        import json as _json
+        loaded = _json.loads(Path(revise_file).read_text(encoding="utf-8"))
+        revisions = loaded["systems"]
+        try:
+            revised, touched = apply_revisions(blueprint, revisions, loaded.get("marker", ""))
+        except ValueError as exc:
+            problem(f"the revisions do not fit the blueprint: {exc}")
+            return 1
+        blueprint = store.save(revised)
+        revise = set(touched)
+        line(f"revising {len(touched)} system(s) from {revise_file}: {', '.join(touched)}")
+
     readiness = assess(blueprint)
     line(f"readiness {readiness.percent}% ready={readiness.ready}")
     if not readiness.ready:
@@ -163,7 +225,7 @@ async def main(audit: str, prompt: str) -> int:
     line("starting the build (the Engineer writes each system, then Studio)")
     try:
         record = await run_build(blueprint.id, settings=settings, factory=SessionLocal,
-                                 token=token, play=False)
+                                 token=token, play=False, revise=revise)
     except BuildFailed as exc:
         problem(f"the build failed: {str(exc)[:300]}")
         return 1
@@ -212,5 +274,8 @@ if __name__ == "__main__":
     parser.add_argument("--audit", required=True, help="the audited idea to build")
     parser.add_argument("--prompt", default="",
                         help="what the game is, in a paragraph; omit to reuse the saved one")
+    parser.add_argument("--revise", default="",
+                        help="a revisions json: those systems get new criteria and are rebuilt "
+                             "even though the project already has them")
     args = parser.parse_args()
-    raise SystemExit(asyncio.run(main(args.audit, args.prompt)))
+    raise SystemExit(asyncio.run(main(args.audit, args.prompt, args.revise)))

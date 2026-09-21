@@ -16,11 +16,11 @@ for k in range(4):
     shells.cylinder(math.cos(a) * 0.9, math.sin(a) * 0.9, 0, 0.55, 0.35, "cloth_white", sides=5, top=0.15)
 shell_mesh = shells.finish("Kit_ShellCluster")
 lane = [(-25, -190, 25, -90), (140, -50, 210, -34)]
-kit.scatter([kit.log_mesh()], "Beach_Driftwood", (0, 0), 200, 14, coll="09_PROPS", seed=51, min_inland=1,
+kit.scatter([kit.log_mesh()], "Beach_Driftwood", (0, 0), 200, 30, coll="09_PROPS", seed=51, min_inland=1,
             max_inland=5, spacing=20, keep_out=lane)
-kit.scatter([shell_mesh], "Beach_ShellCluster", (0, 0), 200, 24, coll="09_PROPS", seed=52, min_inland=1,
+kit.scatter([shell_mesh], "Beach_ShellCluster", (0, 0), 200, 50, coll="09_PROPS", seed=52, min_inland=1,
             max_inland=5, spacing=12, keep_out=lane)
-kit.scatter([glass_mesh], "Beach_SeaGlass", (0, 0), 200, 20, coll="09_PROPS", seed=53, min_inland=0.5,
+kit.scatter([glass_mesh], "Beach_SeaGlass", (0, 0), 200, 44, coll="09_PROPS", seed=53, min_inland=0.5,
             max_inland=4, spacing=14, keep_out=lane)
 
 # The dock: fish crates stacked by the barter shack.

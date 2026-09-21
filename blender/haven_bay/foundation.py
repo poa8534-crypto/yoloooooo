@@ -4,7 +4,7 @@
 # own IslandService, converted to Blender (Blender y = -Roblox z).
 
 kit.remove("Terrain_")
-tiles = kit.build_terrain("Terrain_MainIsland", spacing=4.0)
-kit.build_ocean(1500.0)
-kit.daylight(camera_at=(0, -156, 9), look_at=(0, 0, 14))
+tiles = kit.build_terrain("Terrain_MainIsland", spacing=4.0, max_tile=64.0)
+kit.build_ocean(3000.0)
+kit.daylight(camera_at=(0, -296, 9), look_at=(0, 0, 14))
 print("foundation:", len(tiles), "terrain tiles")

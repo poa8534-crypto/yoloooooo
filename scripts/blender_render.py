@@ -22,18 +22,18 @@ from app.blender import bridge  # noqa: E402
 
 # (camera location, point looked at, lens) -- or "scene" for the file's camera.
 VIEWS = {
-    "overview": ((330, -470, 300), (0, -10, 0), 30),
-    "close": ((210, -260, 150), (0, 10, 8), 30),
-    "hub": ((70, -110, 55), (0, 10, 10), 26),
-    "lawn": ((30, -190, 40), (0, -50, 6), 28),
-    "plots": ((-40, -20, 60), (-120, -40, 6), 26),
-    "sanctuary": ((0, 5, 30), (60, 20, 18), 26),
-    "sandbar": ((235, -165, 40), (182, -100, -2), 28),
-    "pond": ((10, 96, 75), (6, 118, 23), 30),
-    "farm": ((-20, 36, 28), (-48, 60, 12), 28),
-    "jetty": ((222, -72, 22), (194, -42, 3), 28),
-    "south": ((0, -560, 190), (0, -40, 0), 32),
-    "top": ((0, 0, 900), (0, 0.01, 0), 30),
+    "overview": ((660, -940, 600), (0, -20, 0), 30),
+    "south": ((0, -1100, 380), (0, -80, 0), 32),
+    "top": ((0, 0, 1800), (0, 0.01, 0), 30),
+    "close": ((420, -520, 300), (0, 20, 8), 30),
+    "hub": ((110, -170, 70), (10, 10, 10), 26),
+    "lawn": ((40, -330, 40), (0, -110, 6), 28),
+    "plots": ((-110, -40, 70), (-240, -80, 6), 26),
+    "sanctuary": ((40, 20, 34), (140, 20, 22), 26),
+    "sandbar": ((430, -300, 50), (364, -216, -2), 28),
+    "pond": ((10, 208, 80), (6, 230, 23), 30),
+    "farm": ((-80, 60, 34), (-116, 110, 12), 28),
+    "jetty": ((380, -120, 24), (350, -72, 3), 28),
     "spawn": "scene",
 }
 
@@ -57,7 +57,7 @@ if {light!r} == "STUDIO":
         scene.display.shading.studio_light = {studio!r}
     except TypeError:
         pass
-scene.display.shading.color_type = "MATERIAL"
+scene.display.shading.color_type = {colour_type!r}
 scene.display.shading.show_shadows = {shadows}
 scene.display.shading.show_cavity = False
 # Standard, not AgX: the palette is picked as hex, and AgX's filmic curve
@@ -98,6 +98,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--light", default="STUDIO", choices=("STUDIO", "FLAT", "MATCAP"))
     parser.add_argument("--studio", default="outdoor.sl")
     parser.add_argument("--no-shadows", action="store_true")
+    parser.add_argument("--texture", action="store_true",
+                        help="colour by image texture, as Roblox will, instead of material colour")
     parser.add_argument("--width", type=int, default=1600)
     parser.add_argument("--height", type=int, default=900)
     args = parser.parse_args(argv[1:])
@@ -107,7 +109,8 @@ def main(argv: list[str]) -> int:
     script = RENDER.format(width=args.width, height=args.height, view=VIEWS[args.view], out=str(out),
                            engine=args.engine, exposure=args.exposure,
                            light=args.light, studio=args.studio,
-                           shadows=not args.no_shadows)
+                           shadows=not args.no_shadows,
+                           colour_type="TEXTURE" if args.texture else "MATERIAL")
     ran, error, _output = bridge._invoke(script, args.blend.resolve(), name="last_render", timeout=600)
     if not ran:
         print(error)

@@ -9,11 +9,11 @@ isl = kit.island()
 rocks = [kit.rock_mesh(0, 4), kit.rock_mesh(1, 6), kit.rock_mesh(2, 3)]
 kit.scatter(rocks, "Coast_Boulder", (120, -80), 110, 14, coll="09_PROPS", seed=21, min_inland=-2,
             max_inland=12, spacing=14, keep_out=[(140, -50, 210, -34)])
-kit.scatter([kit.palm_mesh(0), kit.palm_mesh(1), kit.palm_mesh(2)], "Tree_Palm", (0, 0), 200, 16,
+kit.scatter([kit.palm_mesh(0), kit.palm_mesh(1), kit.palm_mesh(2)], "Tree_Palm", (0, 0), 200, 44,
             min_inland=3, max_inland=20, spacing=20, seed=22, keep_out=[(-25, -185, 25, -95), (140, -50, 210, -34)])
 kit.scatter([kit.log_mesh()], "Driftwood", (60, -110), 120, 8, coll="09_PROPS", seed=23, min_inland=1,
             max_inland=14, spacing=18, keep_out=[(-25, -185, 25, -95)])
-kit.scatter([kit.shell_mesh()], "Beach_Shell", (0, 0), 200, 16, coll="09_PROPS", seed=24, min_inland=1,
+kit.scatter([kit.shell_mesh()], "Beach_Shell", (0, 0), 200, 40, coll="09_PROPS", seed=24, min_inland=1,
             max_inland=12, spacing=10, keep_out=[(-25, -185, 25, -95)])
 # Driftwood names as the brief asks: Driftwood_01.. rather than scatter's _001.
 import bpy

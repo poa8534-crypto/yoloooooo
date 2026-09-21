@@ -1,0 +1,71 @@
+{
+  "_about": "What the game's code must change so it matches the Haven Bay island built from the owner's world spec (blender/haven_bay/brief.md), at TWICE the first layout: zones keep their size and props their true scale, and the land between them doubled (the `spread` in blender/haven_bay/stages.json). All positions are ROBLOX coordinates (Y is height; Roblox z = -Blender y), taken from where the art actually put each thing. Each entry is appended to that system's purpose and acceptance criteria in the blueprint, and the system is rebuilt with `autobuild --revise`. The island's visuals come from an imported mesh, so the code's parts become invisible markers and colliders where the art already draws the thing.",
+  "systems": {
+    "IslandService": {
+      "purpose": "REVISION for the Haven Bay world spec: the island is now an imported art mesh about 660 studs across (beach at Y 0 to 2.5, meadows at Y 6), so IslandService no longer draws the ground. Keep every public method and every zone id other systems use; move the zones to the new layout; make parts the art already draws invisible (Transparency 1) but keep them, by name, as markers and colliders.",
+      "criteria": [
+        "IslandBaseplate and BeachTerrain are no longer created; ShorelineBoundary walls move out to 400 studs from the centre on each side",
+        "WaterPlane stays and is the tide surface: 2800 x 2 x 2800, top at Y 0 at high tide, Color (80, 220, 240), Transparency 0.85, CanCollide false, Material Glass or SmoothPlastic",
+        "arrival_dock zone: bounds x -20..20, z 240..320; ArrivalDock part 20 x 3 x 80 centred (0, 1.5, 280), Transparency 1; SpawnLocation 12 x 1 x 12 at (0, 3.1, 290), Transparency 1; BarterStagingPad 8 x 1 x 8 with its top at Y 3.5 at (0, 3, 260)",
+        "central_pavilion zone keeps its id but is the Town Square: centre (0, 8, 0), radius 36, bounds x -36..36, z -36..36; TotemPedestal 8 x 1 x 8 with its top at Y 8.5 at (0, 8, 0); the four pillar parts are removed",
+        "a sanctuary zone: plateau centre (140, 16, -20), radius 62, bounds x 78..202, z -82..42, Y 16; SanctuaryEntrance marker at (128, 16, -20) facing west",
+        "botany_gardens zone is the farm terrace: bounds x -172..-108, z -132..-68, Y 12; soil beds GardenSoilBed_1..6 (16 x 1 x 12, top at Y 12.5) at (-156, -120), (-136, -120), (-156, -102), (-136, -102), (-156, -84), (-136, -84); WaterPump marker at (-116, 12, -110)",
+        "foraging_grove zone is the forest bluff: lower tier centre (0, 16, -217) radius 55, peak centre (0, 24, -224) radius 34; GroveClearingPad 20 x 1 x 20 at (-20, 24, -237), Transparency 1",
+        "settler plots, 32 x 32, surface at Y 7: Plot_1 (-236, -184), Plot_2 (-260, -10), Plot_3 (-240, 150), Plot_4 (-120, 250); bounds are the centre +-16 in x and z, Y 6 to 16; PlotFoundation parts Transparency 1",
+        "waypoints: ArrivalDock (0, 3, 290), TownSquare (0, 8, 0), Sanctuary (128, 16, -20), Farm (-114, 12, -80), ForestBluff (0, 16, -168), Beach (323, 1, 72)",
+        "the behaviour spec checks the plot centres, the spawn position and that IslandBaseplate is not created"
+      ]
+    },
+    "TideCycleService": {
+      "purpose": "REVISION for the Haven Bay world spec: the sea is Roblox terrain water filled up to Y -6 (low tide) plus IslandService's WaterPlane as the moving surface. The tide moves the WaterPlane between Y 0 (high) and Y -6 (low). Three sandbars have crests at Y -3, so they are under water at high tide and uncovered at low tide.",
+      "criteria": [
+        "the water level runs from 0 at high tide to -6 at low tide and the WaterPlane's top follows it",
+        "IsSandbarExposed(sandbarId) is true exactly when the water level is below -3",
+        "sandbars: sandbar_se (364, -3, 216), sandbar_sw (-190, -3, 360), sandbar_w (-392, -3, -80)"
+      ]
+    },
+    "ForagingService": {
+      "purpose": "REVISION for the Haven Bay world spec: foraging spots move to the new island. Shore spots sit on the sand about 9 studs in from the waterline, clear of the plots, the dock and the fishing jetty; sandbar spots can only be foraged while TideCycleService says that sandbar is exposed.",
+      "criteria": [
+        "shore spots at Y 1: (331, -33), (316, -120), (299, -215), (240, -293), (137, -304), (50, -306), (-32, -316), (-123, -325), (-221, -307), (-305, -249), (-324, -146), (-309, -50), (-309, 31), (-302, 114), (-299, 215), (-241, 294), (-150, 333), (-51, 315), (119, 315), (216, 300), (283, 231), (304, 137)",
+        "no foraging spot lies inside a settler plot's bounds",
+        "sandbar spots at (364, -3, 216), (-190, -3, 360), (-392, -3, -80) with the rare loot (sea glass, pearls, message in a bottle); foraging one while its sandbar is under water is refused with a reason",
+        "forest spots on the bluff: (-30, 24, -232), (25, 24, -237), (-20, 16, -192), (35, 16, -207)"
+      ]
+    },
+    "FishingService": {
+      "purpose": "REVISION for the Haven Bay world spec: fishing moves to the new dock and the east jetty, and a freshwater pool is added at the pond on the forest bluff.",
+      "criteria": [
+        "ocean spots (pool 'dock'): (0, -0.4, 322), (-24, -0.4, 290), (24, -0.4, 290)",
+        "ocean spots (pool 'shallows'), off the east jetty: (379, -0.4, 66), (379, -0.4, 78), (325, -0.4, 90)",
+        "a freshwater pool 'freshwater' at the bluff pond, surface (6, 23.6, -230), catching golden_trout, catfish and frog",
+        "every fish id a pool can return exists in ItemCatalog"
+      ]
+    },
+    "BotanyService": {
+      "purpose": "REVISION for the Haven Bay world spec: the farm terrace has six soil beds (from IslandService's botany_gardens zone) and a water pump where watering cans are refilled.",
+      "criteria": [
+        "soil locations come from IslandService's GardenSoilBed_1..6 parts",
+        "a watering can is refilled at the WaterPump marker (-116, 12, -110) within 10 studs"
+      ]
+    },
+    "DialogueService": {
+      "purpose": "REVISION for the Haven Bay world spec (doubled layout): the NPC cast and where each stands.",
+      "criteria": [
+        "curator Barnaby at the Sanctuary front desk (139, 16, -20)",
+        "dockside merchant Captain Finn at the barter stall (-10, 1, 262)",
+        "botany tender Flora in the farm (-130, 12, -90)",
+        "village guardian Elder Rowan on the bench beside the totem (6, 8, 4)",
+        "nomadic trader Captain Cleo's berth at the end of the pier (-6, 3, 316)",
+        "resident villagers at the Town Square (-10, 8, -8), the beach (220, 2, 240) and the dock (6, 3, 270)",
+        "the old ids curator, harbormaster and gardener still resolve, to Barnaby, Captain Finn and Flora, so existing callers keep working"
+      ]
+    },
+    "CraftingService": {
+      "purpose": "REVISION for the Haven Bay world spec: the pavilion floor is gone; the crafting bench stands on the Town Square.",
+      "criteria": [
+        "BENCH_POSITION is (14, 8, -6)"
+      ]
+    }
+  }
+}

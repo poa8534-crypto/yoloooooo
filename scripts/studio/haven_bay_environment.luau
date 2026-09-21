@@ -33,7 +33,14 @@ Terrain.WaterWaveSize = 0.1
 Terrain.WaterWaveSpeed = 8
 
 -- Warm tropical afternoon light with crisp shadows.
-Lighting.Technology = Enum.Technology.Future
+-- Technology cannot be written by any script, the command bar included
+-- ("lacking capability RobloxScript"): set it by hand in Lighting's
+-- Properties. Trying anyway, so a future Studio that allows it just works.
+if not pcall(function()
+	Lighting.Technology = Enum.Technology.Future
+end) then
+	warn("Set Lighting > Technology to Future by hand in the Properties window")
+end
 Lighting.Brightness = 2.8
 Lighting.ClockTime = 14.5
 Lighting.GeographicLatitude = 25

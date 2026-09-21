@@ -224,7 +224,8 @@ class BuildFailed(RuntimeError):
 
 
 async def run_build(blueprint_id: str, *, settings, factory, token: str,
-                    play: bool = True, build_id: str | None = None) -> dict:
+                    play: bool = True, build_id: str | None = None,
+                    revise: set[str] | frozenset[str] = frozenset()) -> dict:
     """Generate the specification's systems, then put them into Studio.
 
     Long-running on purpose -- the Engineer takes minutes per system -- so the
@@ -243,7 +244,7 @@ async def run_build(blueprint_id: str, *, settings, factory, token: str,
     owner = {**whoami(), "lock": str(lock.path)}
     try:
         return await _build(blueprint_id, build_id, settings=settings, factory=factory,
-                            token=token, play=play, owner=owner)
+                            token=token, play=play, owner=owner, revise=revise)
     except BaseException as exc:
         _record_stop(factory, build_id, owner, exc)
         raise
@@ -289,7 +290,7 @@ def _record_stop(factory, build_id: str, owner: dict, exc: BaseException) -> Non
 
 
 async def _build(blueprint_id: str, build_id: str, *, settings, factory, token: str,
-                 play: bool, owner: dict) -> dict:
+                 play: bool, owner: dict, revise: set[str] | frozenset[str] = frozenset()) -> dict:
     import httpx
 
     from .api import BRIDGE_URL
@@ -312,6 +313,20 @@ async def _build(blueprint_id: str, build_id: str, *, settings, factory, token: 
         record.move(BuildStatus.FAILED, reason)
         raise BuildFailed(reason)
     existing = systems_in_project(repo)
+    # Systems named for revision are built again even though the project has
+    # them: their specification changed (the world they live in moved), and
+    # "it already exists" would otherwise keep the old version forever. The
+    # Engineer sees the current file among its sources and the gate holds the
+    # new one to the same checks.
+    wanted = {name.lower() for name in revise}
+    unknown = sorted(name for name in revise if name.lower() not in {s.name.lower() for s in spec.systems})
+    if unknown:
+        reason = f"asked to revise systems the specification does not have: {', '.join(unknown)}"
+        record.move(BuildStatus.FAILED, reason)
+        raise BuildFailed(reason)
+    if wanted:
+        existing = {name for name in existing if name.lower() not in wanted}
+        record.event("planning", f"revising: {', '.join(sorted(revise))}")
 
     record.move(BuildStatus.PLANNING, "working out what still has to be built")
     try:

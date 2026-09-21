@@ -2,14 +2,15 @@
 # the peak, a stream and two falls down to the sea, and the woods.
 import math
 
-kit.stairs("Stairs_Forest_Lower", (0, 34), (0, 56), width=9)
+kit.stairs("Stairs_Forest_Lower", (0, 30), (0, 56), width=9)
 kit.stairs("Stairs_Forest_Upper", (-14, 62), (-14, 86), width=9)
 
 kit.pond("Forest_Pond", 6, 118, radius=9)
 kit.stream("Forest_Stream", [(6, 127), (4, 140), (0, 146)], width=4)
 kit.waterfall("Forest_Waterfall_Upper", (0, 146, 24), 16, width=5, heading=math.pi / 2)
 kit.stream("Forest_Stream_Lower", [(0, 150), (0, 158)], width=5)
-kit.waterfall("Forest_Waterfall_Lower", (0, 160, 16), 0, width=6, heading=math.pi / 2)
+kit.waterfall("Forest_Waterfall_Lower", (0, 160, 16), 6, width=6, heading=math.pi / 2)
+kit.stream("Forest_Stream_ToSea", [(0, 166), (0, 172), (0, 180)], width=6)
 
 keep = [(6, 118, 13), (-20, 125, 10), (0, 148, 8), (0, 45, 7), (-14, 74, 7), (0, 158, 6)]
 kit.scatter([kit.pine_mesh(0), kit.pine_mesh(1), kit.pine_mesh(2)], "Tree_Pine", (0, 110), 58, 40,

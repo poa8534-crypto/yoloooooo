@@ -35,7 +35,7 @@ for name, (x, y) in PLOTS.items():
     bend = 8 if x < -100 else -8
     kit.path(f"Path_Square_{name}", [(ex, ey), (mx + bend * 0.4, my + bend), (gx, gy)], width=8)
 kit.path("Path_Square_Farm", [(-26, 21), (-44, 30), (-56, 38)], width=8, colour="dirt")
-kit.path("Path_Square_Forest", [(0, 34), (0, 56), (-10, 60), (-14, 64), (-14, 86), (-10, 100)], width=8,
+kit.path("Path_Square_Forest", [(0, 30), (0, 56), (-10, 60), (-14, 64), (-14, 86), (-10, 100)], width=8,
          colour="dirt")
 kit.path("Path_Square_Sanctuary", [(34, 10), (40, 13)], width=9)
 kit.path("Path_Square_Beach", [(30, -20), (70, -32), (110, -40), (146, -42)], width=8)

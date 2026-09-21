@@ -58,3 +58,15 @@ for k in range(24):
 kit.place(bench, "Bench_ElderRowan", 7, -7, "09_PROPS", rz=math.atan2(7, -7) + math.pi)
 kit.npc_spot("NPC_ElderRowan", 6, -4)
 kit.npc_spot("NPC_Villager_Square", -10, 8)
+
+# The crafting bench, where CraftingService expects it: Roblox (14, 8, -6),
+# which is Blender (14, 6).
+bench_top = kit.Part()
+bench_top.box(0, 0, 3.0, 6, 3, 0.6, "wood_light")
+for lx in (-2.6, 2.6):
+    for ly in (-1.2, 1.2):
+        bench_top.box(lx, ly, 1.35, 0.5, 0.5, 2.7, "wood_dark")
+bench_top.box(0, 0, 1.0, 5.6, 2.6, 0.3, "wood")
+bench_top.box(-1.5, 0.6, 3.6, 1.2, 0.8, 0.6, "metal")
+bench_top.box(1.4, -0.4, 3.45, 1.6, 0.9, 0.3, "wood_dark")
+kit.obj("Crafting_Bench", bench_top.finish("Crafting_Bench"), "09_PROPS", 14, 6, kit.ground(14, 6), 0.3)
