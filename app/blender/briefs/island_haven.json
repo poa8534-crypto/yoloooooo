@@ -1,0 +1,90 @@
+{
+  "_": [
+    "Island Haven, first pass: the numbers the game's code already places things at,",
+    "written as ranges so they can be checked against the file rather than trusted.",
+    "Blender coordinates: X east, Y north-south, Z height. Every range is in studs.",
+    "A tolerance is a stated tolerance, not a rounding accident: where the brief gave",
+    "an exact number the range is tight, and where it gave a shape the range is the",
+    "room that shape needs.",
+    "",
+    "The plots carry no top_z. Their pads are flat at 6.5 but each also wears a lip",
+    "and four fence posts a side, so the highest point of the OBJECT is the top of a",
+    "post, not the surface furniture stands on. A bounding box cannot tell those",
+    "apart, so claiming to check it here would be a check that proves nothing."
+  ],
+  "Island_Terrain": {
+    "size_x": [252, 266],
+    "size_y": [232, 248],
+    "centre_x": [-6, 6],
+    "centre_y": [-6, 6],
+    "top_z": [5.0, 6.5],
+    "bottom_z": [-12.5, -11.5],
+    "coast_wobble": [0.06, 0.4],
+    "skirt_taper": [0.18, 0.7],
+    "top_roll": [0.8, 2.0],
+    "max_triangles": 8000
+  },
+  "Island_Beach": {
+    "size_x": [240, 290],
+    "size_y": [220, 275],
+    "bottom_z": [-0.5, 0.5],
+    "top_z": [1.5, 2.5],
+    "max_triangles": 8000
+  },
+  "Plot_NW": {
+    "size_x": [31, 34],
+    "size_y": [31, 34],
+    "centre_x": [-91, -89],
+    "centre_y": [-101, -99],
+    "max_triangles": 8000
+  },
+  "Plot_NE": {
+    "size_x": [31, 34],
+    "size_y": [31, 34],
+    "centre_x": [89, 91],
+    "centre_y": [-101, -99],
+    "max_triangles": 8000
+  },
+  "Plot_SW": {
+    "size_x": [31, 34],
+    "size_y": [31, 34],
+    "centre_x": [-91, -89],
+    "centre_y": [89, 91],
+    "max_triangles": 8000
+  },
+  "Plot_SE": {
+    "size_x": [31, 34],
+    "size_y": [31, 34],
+    "centre_x": [89, 91],
+    "centre_y": [89, 91],
+    "max_triangles": 8000
+  },
+  "Tower_Plaza": {
+    "size_x": [58, 62],
+    "size_y": [58, 62],
+    "centre_x": [-1, 1],
+    "centre_y": [-1, 1],
+    "top_z": [5.9, 6.1],
+    "max_triangles": 8000
+  },
+  "Tower_Body": {
+    "size_x": [13, 15],
+    "size_y": [13, 15],
+    "centre_x": [-1, 1],
+    "centre_y": [-1, 1],
+    "bottom_z": [5.5, 6.5],
+    "top_z": [45.5, 46.5],
+    "max_triangles": 8000
+  },
+  "Dock_Deck": {
+    "size_x": [19, 21],
+    "centre_x": [-1, 1],
+    "top_z": [4.4, 4.6],
+    "max_triangles": 8000
+  },
+  "Dock_Pilings": {
+    "centre_x": [-1, 1],
+    "bottom_z": [-8.5, -7.5],
+    "max_triangles": 8000
+  }
+}

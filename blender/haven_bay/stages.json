@@ -1,0 +1,728 @@
+{
+  "_about": "Haven Bay from the owner's master world specification (blender/haven_bay/brief.md). Roblox (x, z) becomes Blender (x, -z): Blender +Y is north. The foundation (ground, water, light) is hand-written on app/blender/lowpoly_kit.py; the zone passes are asked of a model, which places things with the same kit, and each pass is held to the spec's coordinates by its `expect` block. Angles in the island spec are maths angles: 0 = east, 90 = north. Where the spec gives a zone an exact spot it is used as written; where it names only a region (the plots' west meadows, the fishing jetty, the sandbars) the spot is chosen here and listed in `layout` so every pass agrees.",
+  "blend": "data/blender/haven_bay.blend",
+  "brief": "blender/haven_bay/brief.md",
+  "island": {
+    "radius_x": 165,
+    "radius_y": 165,
+    "shape_power": 4,
+    "beach_width": 22,
+    "beach_height": 2.5,
+    "bank_width": 8,
+    "roll": 0.1,
+    "land_height": 6,
+    "sea_level": 0,
+    "seabed": -14,
+    "skirt": 45,
+    "bevel": 0.5,
+    "coast": [
+      [
+        270,
+        -0.14,
+        8
+      ],
+      [
+        345,
+        -0.06,
+        10
+      ],
+      [
+        90,
+        -0.05,
+        8
+      ],
+      [
+        200,
+        -0.05,
+        9
+      ],
+      [
+        30,
+        -0.04,
+        10
+      ]
+    ],
+    "features": [
+      {
+        "type": "level",
+        "x": 0,
+        "y": 0,
+        "radius": 36,
+        "height": 8,
+        "edge": 4,
+        "hold": true
+      },
+      {
+        "type": "level",
+        "x": -70,
+        "y": 50,
+        "half": [
+          32,
+          32
+        ],
+        "height": 12,
+        "edge": 3,
+        "hold": true
+      },
+      {
+        "type": "level",
+        "x": 0,
+        "y": 105,
+        "radius": 55,
+        "height": 16,
+        "edge": 3,
+        "hold": true
+      },
+      {
+        "type": "level",
+        "x": 0,
+        "y": 112,
+        "radius": 34,
+        "height": 24,
+        "edge": 3,
+        "hold": true
+      },
+      {
+        "type": "level",
+        "x": 70,
+        "y": 20,
+        "radius": 30,
+        "height": 16,
+        "edge": 3,
+        "hold": true
+      },
+      {
+        "type": "level",
+        "x": -118,
+        "y": 92,
+        "half": [
+          20,
+          20
+        ],
+        "height": 6,
+        "edge": 3,
+        "hold": true
+      },
+      {
+        "type": "level",
+        "x": -130,
+        "y": 5,
+        "half": [
+          20,
+          20
+        ],
+        "height": 6,
+        "edge": 3,
+        "hold": true
+      },
+      {
+        "type": "level",
+        "x": -120,
+        "y": -75,
+        "half": [
+          20,
+          20
+        ],
+        "height": 6,
+        "edge": 3,
+        "hold": true
+      },
+      {
+        "type": "level",
+        "x": -60,
+        "y": -125,
+        "half": [
+          20,
+          20
+        ],
+        "height": 6,
+        "edge": 3,
+        "hold": true
+      },
+      {
+        "type": "level",
+        "x": 6,
+        "y": 118,
+        "radius": 8,
+        "height": 22.5,
+        "edge": 2,
+        "hold": true
+      },
+      {
+        "type": "ramp",
+        "x0": -28,
+        "y0": 22,
+        "x1": -44,
+        "y1": 30,
+        "width": 9,
+        "h0": 8,
+        "h1": 12
+      },
+      {
+        "type": "ramp",
+        "x0": 28,
+        "y0": 20,
+        "x1": 44,
+        "y1": 20,
+        "width": 12,
+        "h0": 8,
+        "h1": 16
+      },
+      {
+        "type": "ramp",
+        "x0": 0,
+        "y0": 34,
+        "x1": 0,
+        "y1": 56,
+        "width": 9,
+        "h0": 8,
+        "h1": 16
+      },
+      {
+        "type": "ramp",
+        "x0": -14,
+        "y0": 62,
+        "x1": -14,
+        "y1": 86,
+        "width": 9,
+        "h0": 16,
+        "h1": 24
+      },
+      {
+        "type": "ramp",
+        "x0": 0,
+        "y0": -78,
+        "x1": 0,
+        "y1": -104,
+        "width": 18,
+        "h0": 6,
+        "h1": 3
+      }
+    ],
+    "islets": [],
+    "sandbars": [
+      [
+        182,
+        -108,
+        14,
+        6,
+        -35,
+        -3
+      ],
+      [
+        -196,
+        40,
+        14,
+        6,
+        80,
+        -3
+      ],
+      [
+        -95,
+        -180,
+        13,
+        6,
+        15,
+        -3
+      ]
+    ],
+    "palette": {
+      "ocean": "#50DCF0",
+      "shallows": "#A6F2EE",
+      "deep": "#1E9FCB",
+      "sand": "#F2D299",
+      "seabed": "#EBD9A6",
+      "grass": "#6CCB45",
+      "cliff": "#C99B6B",
+      "wood": "#C9A176",
+      "wood_light": "#E2C49B",
+      "wood_dark": "#8A6A4A",
+      "stone_path": "#D8C7A8",
+      "terracotta": "#D9825B",
+      "white_stone": "#F7F3EA",
+      "glass": "#7FE3F0",
+      "teal_roof": "#23B5B0",
+      "leaf": "#3FB54A",
+      "leaf_light": "#7AD64E",
+      "leaf_dark": "#2B8F45",
+      "palm_trunk": "#C49A62",
+      "pebble": "#D6C8AA"
+    }
+  },
+  "layout": [
+    "Scale, which Roblox imports literally: 1 Blender unit = 1 stud. A player is 5 tall; a doorway 7 tall and 4 wide; a bench seat 2 high; a lantern 8 to 10 tall.",
+    "",
+    "Already built by the foundation pass (do NOT rebuild or move these): Terrain_MainIsland_* tiles, Ocean_Main (water surface at z 0), Ocean_Deep, Ocean_Shallows, Ocean_Foam, the lights and Camera_SpawnView.",
+    "",
+    "The ground (kit.ground) already has the spec's terraces. In Blender coordinates (+Y north):",
+    "- Meadow land z 6; beaches slope gently down to the water about 145 to 185 from the centre.",
+    "- Town Square: round, radius 36, z 8, centred (0, 0).",
+    "- Farm and Botany Gardens: terrace x -102..-38, y 18..82, z 12. Ramp up from the town: (-28, 22) to (-44, 30).",
+    "- Sanctuary: east cliff plateau, radius 30 at (70, 20), z 16. A grand stone staircase runs straight from the square to the front doors: (28, 20) to (44, 20), z 8 to 16.",
+    "- Forest and Foraging Bluff: lower tier radius 55 at (0, 105), z 16; peak radius 34 at (0, 112), z 24. Ramps: (0, 34) to (0, 56), z 8 to 16; (-14, 62) to (-14, 86), z 16 to 24.",
+    "- Player plots, west meadows, z 6, 40 x 40 levelled with 32 x 32 plots on them: Plot_1 (-118, 92) north-west, Plot_2 (-130, 5) west, Plot_3 (-120, -75) south-west, Plot_4 (-60, -125) south-south-west.",
+    "- Arrival Dock: south shore; the land slopes down to the dock along (0, -78) to (0, -104), z 6 to 3. Pier deck z 3 from y -100 out to y -180. Spawn on the dock.",
+    "- Fishing jetty: east coast, from (148, -42) out to (200, -42).",
+    "- Sandbars (low-tide mystery), crests at z -3 under the water: off the south-east beach by the fishing jetty (182, -108), off the west beach (-196, 40), and off the south-west (-95, -180).",
+    "",
+    "NPC stands (kit.npc_spot): NPC_Barnaby at the Sanctuary front desk; NPC_CaptainFinn at the Barter Stall; NPC_Flora in the gardens; NPC_ElderRowan on a bench beside the Totem Bell; NPC_CaptainCleo_Berth at the end of the pier; NPC_Villager_Square, NPC_Villager_Beach, NPC_Villager_Dock.",
+    "",
+    "NO railway, NO train. Put every object in the collection the brief names for it. Stand everything on kit.ground(x, y). `math` is not imported for you: import it."
+  ],
+  "stages": [
+    {
+      "name": "foundation",
+      "script": "blender/haven_bay/foundation.py",
+      "expect": {
+        "Ocean_Main": {
+          "size_x": [
+            1400,
+            1600
+          ],
+          "size_y": [
+            1400,
+            1600
+          ],
+          "centre_x": [
+            -20,
+            20
+          ],
+          "centre_y": [
+            -20,
+            20
+          ],
+          "top_z": [
+            -0.2,
+            0.2
+          ]
+        },
+        "Ocean_Shallows": {}
+      }
+    },
+    {
+      "name": "arrival dock",
+      "do": "The Arrival Dock on the south shore. kit.pier('Dock_Arrival', (0, -100), (0, -180), width=20, deck_z=3, railings=False). Spawn_ArrivalDock: a 12 x 12 pad, 0.6 thick, at (0, -150), top at z 3.6, warm painted wood with a white rim. Mooring posts Dock_MooringPost_01..06 (chunky 2 x 2 posts, z -10 to 5.5) along both edges with coiled rope rings on top (kit.Part cylinders, 'cloth_white'). A colourful wooden motorboat Boat_Motor docked at the end: kit.boat_mesh(16, 'train_red') placed at (14, -174), z 0.3, plus a small cabin box on it. The Dockside Barter Stall: kit.hut('Building_BarterStall', -18, -118, rz=math.pi/2, size=9, wall='wood_light', roof='cloth_red') on the shore beside the pier head, with a kit.stall('Barter_Stall_Counter', -10, -118, rz=math.pi/2, colour='cloth_blue') in front and crates. kit.npc_spot('NPC_CaptainFinn', -10, -122, z=3). NPC_CaptainCleo_Berth: kit.npc_spot at (-14, -178), z 3 (the houseboat berth). NPC_Villager_Dock at (6, -130), z 3. Lanterns along the pier edges, barrels. Dock parts 10_DOCKS, props 09_PROPS.",
+      "expect": {
+        "Dock_Arrival_Deck": {
+          "centre_x": [
+            -1,
+            1
+          ],
+          "centre_y": [
+            -142,
+            -138
+          ],
+          "size_y": [
+            76,
+            84
+          ],
+          "top_z": [
+            2.7,
+            3.3
+          ]
+        },
+        "Spawn_ArrivalDock": {
+          "centre_x": [
+            -1,
+            1
+          ],
+          "centre_y": [
+            -151,
+            -149
+          ],
+          "top_z": [
+            3.3,
+            3.9
+          ]
+        },
+        "Building_BarterStall": {},
+        "Boat_Motor": {},
+        "NPC_CaptainFinn": {}
+      }
+    },
+    {
+      "name": "town square",
+      "do": "The Central Town Square at (0, 0), z 8. kit.plaza('Plaza_TownSquare', 0, 0, 34) then a terracotta ring on it: a kit.Part ring of 16 'terracotta' tiles between radius 20 and 26, 0.2 thick, called Plaza_Terracotta. kit.totem_bell('Totem_IslandBell', 0, 0). 8 lanterns (kit.lantern_mesh) on a ring of radius 30, leaving the six path exits open (south to the dock, south-west and west to the plots, north-west up to the farm, north up to the forest, east up to the sanctuary). 6 wooden signposts (kit.sign_mesh) at those exits, named Sign_ToDock, Sign_ToPlots, Sign_ToFarm, Sign_ToForest, Sign_ToSanctuary, Sign_ToBeach. Benches (kit.bench_mesh) round the ring; Elder Rowan's bench right beside the totem at (6, -6) facing it, with kit.npc_spot('NPC_ElderRowan', 6, -4). NPC_Villager_Square at (-10, 8). Flower beds (kit.flowers_mesh). Buildings 06_BUILDINGS, props 09_PROPS.",
+      "expect": {
+        "Plaza_TownSquare": {
+          "centre_x": [
+            -1,
+            1
+          ],
+          "centre_y": [
+            -1,
+            1
+          ],
+          "size_x": [
+            66,
+            74
+          ]
+        },
+        "Totem_IslandBell": {
+          "centre_x": [
+            -1,
+            1
+          ],
+          "centre_y": [
+            -1,
+            1
+          ],
+          "bottom_z": [
+            7.3,
+            8.5
+          ]
+        },
+        "Sign_ToSanctuary": {},
+        "NPC_ElderRowan": {}
+      },
+      "fallback": "blender/haven_bay/hand/town_square.py"
+    },
+    {
+      "name": "sanctuary",
+      "do": "The Sanctuary on the east cliff plateau. kit.museum('Building_Sanctuary', 72, 20, rz=-math.pi/2, width=34, depth=24, dome_colour='glass', wings=True) -- rz = -pi/2 turns its grand entrance west, toward the town. The grand wooden staircase: kit.stairs('Stairs_Sanctuary', (32, 12), (46, 18), width=10, colour='wood'). Inside the hall, two display floors with a sign each: Sanctuary_Aquarium (a pad with glass wall tanks, 'glass' boxes, along the north wall) and Sanctuary_Terrarium (a pad with bushes under glass, along the south wall). Barnaby's front desk: a kit.Part desk 'Sanctuary_FrontDesk' just inside the entrance at (60, 20), z 16, and kit.npc_spot('NPC_Barnaby', 62, 20, z=16). Outside, on the plateau: a fountain (kit.fountain), two statues, flower beds, benches, round trees at the back. Everything in 11_SANCTUARY.",
+      "expect": {
+        "Building_Sanctuary": {
+          "centre_x": [
+            66,
+            78
+          ],
+          "centre_y": [
+            14,
+            26
+          ],
+          "bottom_z": [
+            14.5,
+            16.5
+          ]
+        },
+        "Building_Sanctuary_Dome": {},
+        "Building_Sanctuary_Conservatories": {},
+        "Stairs_Sanctuary": {
+          "top_z": [
+            15,
+            19
+          ]
+        },
+        "NPC_Barnaby": {}
+      }
+    },
+    {
+      "name": "plots and paths",
+      "do": "Four player plots, EMPTY for players to build on, 32 x 32: kit.plot('Plot_N', None, x, y, size=32, rz=rz, seed=N, fence_colour='cloth_white') at Plot_1 (-118, 92), Plot_2 (-130, 5), Plot_3 (-120, -75), Plot_4 (-60, -125); each gate faces the town square: rz = math.atan2(dx, -dy), where (dx, dy) is the direction from the plot to (0, 0). Beside each gate a plot sign Plot_N_Sign (kit.sign_mesh). kit.plot already adds the mailbox; make it read as stone by also adding Plot_N_MailboxBase, a 1.4 x 1.4 x 2.5 'white_stone' block under it. Then kit.path paths, 9 wide: Path_Square_Dock ('stone_path') from (0, -34) to (0, -98) along the dock slope; Path_Square_Plot_1..4 (a gentle 3 or 4 waypoint curve from the square's edge to each gate); Path_Square_Farm up the farm ramp to (-60, 40); Path_Square_Forest up both forest ramps to (-10, 100); Path_Square_Sanctuary to the foot of the staircase (32, 12); Path_Square_Beach east-south-east toward the fishing jetty (148, -42). 'dirt' for the forest and farm paths, 'stone_path' for the rest. Plots 07_HOUSING, paths 03_ROADS_PATHS.",
+      "expect": {
+        "Plot_1_Ground": {
+          "centre_x": [
+            -119.5,
+            -116.5
+          ],
+          "centre_y": [
+            90.5,
+            93.5
+          ],
+          "top_z": [
+            6.0,
+            7.2
+          ]
+        },
+        "Plot_2_Ground": {
+          "centre_x": [
+            -131.5,
+            -128.5
+          ],
+          "centre_y": [
+            3.5,
+            6.5
+          ]
+        },
+        "Plot_3_Ground": {
+          "centre_x": [
+            -121.5,
+            -118.5
+          ],
+          "centre_y": [
+            -76.5,
+            -73.5
+          ]
+        },
+        "Plot_4_Ground": {
+          "centre_x": [
+            -61.5,
+            -58.5
+          ],
+          "centre_y": [
+            -126.5,
+            -123.5
+          ]
+        },
+        "Plot_1_Sign": {},
+        "Path_Square_Dock": {}
+      },
+      "fallback": "blender/haven_bay/hand/plots_and_paths.py"
+    },
+    {
+      "name": "farm and gardens",
+      "do": "Farm and Botany Gardens (12_FARM) on the terrace x -102..-38, y 18..82, z 12. Six tilled beds with irrigation furrows: kit.crop_plot('Farm_Bed_01'..'06', x, y, sx=16, sy=12) in a 3 x 2 grid, crops on four (crop='leaf_light') and two left empty (crop=None) for players; irrigation channels between them (kit.stream, width 1.5, named Farm_Furrow_01..). Two flower-breeding plots Garden_Flowers_01..02: kit.crop_plot with crop='flower_pink' and crop='flower_yellow'. A potting shed kit.hut('Building_PottingShed', -92, 74, size=9, wall='pastel_green', roof='roof_red'), a well kit.well('Farm_Well', -48, 72), a low wooden fence kit.fence_run('Farm_Fence', ...) around the terrace edge with a gap at the ramp top (-44, 30), watering cans and crates. kit.npc_spot('NPC_Flora', -60, 40).",
+      "expect": {
+        "Farm_Bed_06": {
+          "bottom_z": [
+            11,
+            13.5
+          ]
+        },
+        "Building_PottingShed": {},
+        "NPC_Flora": {}
+      },
+      "fallback": "blender/haven_bay/hand/farm_and_gardens.py"
+    },
+    {
+      "name": "forest bluff",
+      "do": "Forest and Foraging Bluff (13_FOREST) on the north tiers (lower z 16 radius 55 at (0, 105); peak z 24 radius 34 at (0, 112)). Stone stairs over both ramps: kit.stairs('Stairs_Forest_Lower', (0, 34), (0, 56), width=9) and kit.stairs('Stairs_Forest_Upper', (-14, 62), (-14, 86), width=9). A freshwater mountain pond kit.pond('Forest_Pond', 6, 118, radius=9) on the peak. From the pond a stream kit.stream('Forest_Stream', [(6, 127), (4, 140), (0, 146)], width=4) to the peak's north edge, then kit.waterfall('Forest_Waterfall_Upper', (0, 146, 24), 16, width=5, heading=math.pi/2) down to the lower tier, a short stream on, and kit.waterfall('Forest_Waterfall_Lower', (0, 160, 16), 0, width=6, heading=math.pi/2) into the sea. Dense trees with kit.scatter: Tree_Pine (kit.pine_mesh 0..2) and Tree_Fruit (kit.round_tree_mesh 0..2) around (0, 110) radius 58, min_height 15, spacing 7, about 70, keeping keep_out circles clear at the pond (6, 118, 13), the stairs and a clearing (-20, 125, 10); mossy boulders (kit.rock_mesh sizes 3 to 6), fallen logs (kit.log_mesh), mushrooms (kit.mushroom_mesh) and ferns (kit.fern_mesh) through it.",
+      "expect": {
+        "Forest_Pond": {
+          "bottom_z": [
+            20,
+            25
+          ]
+        },
+        "Forest_Waterfall_Lower": {},
+        "Stairs_Forest_Upper": {
+          "top_z": [
+            22,
+            27
+          ]
+        },
+        "Tree_Pine_001": {}
+      },
+      "fallback": "blender/haven_bay/hand/forest_bluff.py"
+    },
+    {
+      "name": "coast and fishing",
+      "do": "Shoreline and Fishing Coast. The secondary jetty: kit.pier('Dock_FishingJetty', (148, -42), (200, -42), width=8, deck_z=2.5). Three fishing spots on it and the rocks: Fishing_Spot_01..03 (kit.platform 4 x 4, top z 2.5). Coastal boulders along the east and south-east beaches (kit.rock_mesh sizes 3 to 7). Coconut palms: kit.scatter([kit.palm_mesh(0), kit.palm_mesh(1), kit.palm_mesh(2)], 'Tree_Palm', (0, 0), 200, 16, min_inland=3, max_inland=20, spacing=20, keep_out=[(-25, -185, 25, -95)]). Beach dressing on the sand: driftwood Driftwood_01..08 (kit.log_mesh), 16 shells, 2 umbrellas with chairs on the south-east beach, and NPC_Villager_Beach (kit.npc_spot) under a palm at (110, -120). Jetty in 14_FISHING, the rest 09_PROPS and 08_VEGETATION.",
+      "expect": {
+        "Dock_FishingJetty_Deck": {
+          "centre_x": [
+            170,
+            178
+          ]
+        },
+        "Fishing_Spot_03": {},
+        "Tree_Palm_001": {},
+        "NPC_Villager_Beach": {}
+      },
+      "fallback": "blender/haven_bay/hand/coast_and_fishing.py"
+    },
+    {
+      "name": "sandbars and reef",
+      "do": "The low-tide mystery, 02_OCEAN. On each sandbar crest (z -3, under the water at high tide) at (-95, -180), (100, -176) and (196, 40): washed-up finds that a low tide will uncover -- sea glass (small 'glass' blobs), pearls (tiny 'cloth_white' blobs), a message in a bottle (a small 'glass' cylinder with a 'wood' cork), each group one object named Sandbar_Finds_01..03 placed on the sandbar with kit.ground. Reef off the east coast by the fishing jetty: coral clumps Coral_01..12 (kit.coral_mesh 0..2) and seaweed (kit.seaweed_mesh) at the seabed where kit.island().inland(x, y) is between -30 and -6.",
+      "expect": {
+        "Sandbar_Finds_01": {
+          "top_z": [
+            -3.5,
+            0
+          ]
+        },
+        "Sandbar_Finds_03": {},
+        "Sandbar_Palm_01": {},
+        "Coral_01": {}
+      },
+      "fallback": "blender/haven_bay/hand/sandbars_and_reef.py"
+    },
+    {
+      "name": "greenery",
+      "do": "Final planting, 08_VEGETATION, with kit.scatter (it keeps off paths, plots and buildings): Tree_Round with kit.round_tree_mesh(0..2), 18 on the meadows, min_inland 25, spacing 16, max_height 9, keep_out circles of radius 28 round each plot centre and radius 40 round the town square; Bush with kit.bush_mesh(0..3), 50 over the island, min_inland 15; Flowers with kit.flowers_mesh(0..2), 30 near the square, the plots and the sanctuary. Soft framing only: leave every path, plot and the square open.",
+      "expect": {
+        "Tree_Round_001": {},
+        "Bush_001": {}
+      },
+      "fallback": "blender/haven_bay/hand/greenery.py"
+    },
+    {
+      "name": "sanctuary approach",
+      "script": "blender/haven_bay/hand/sanctuary_approach.py",
+      "expect": {
+        "Stairs_Sanctuary": {
+          "centre_y": [
+            18,
+            22
+          ],
+          "top_z": [
+            15,
+            19
+          ]
+        },
+        "Path_Sanctuary_Doors": {}
+      }
+    },
+    {
+      "name": "south lawn",
+      "script": "blender/haven_bay/hand/south_lawn.py",
+      "expect": {
+        "Noticeboard_Island": {},
+        "Lawn_Fountain": {},
+        "Lawn_WishingWell": {},
+        "Lawn_Picnic_01": {},
+        "Path_Square_Dock": {}
+      }
+    },
+    {
+      "name": "plot details",
+      "script": "blender/haven_bay/hand/plot_details.py",
+      "expect": {
+        "Plot_1_Sign": {},
+        "Plot_4_Mailbox": {},
+        "Plot_3_Tent": {}
+      }
+    },
+    {
+      "name": "beach and dock details",
+      "script": "blender/haven_bay/hand/beach_and_dock_details.py",
+      "expect": {
+        "Dock_FishCrate_01": {},
+        "Dock_LifeRing_01": {},
+        "Dock_RopeCoils": {},
+        "Beach_SeaGlass_001": {}
+      }
+    },
+    {
+      "name": "final touches",
+      "script": "blender/haven_bay/hand/final_touches.py",
+      "expect": {
+        "Forest_Pond_LilyPads": {
+          "bottom_z": [
+            20,
+            25
+          ]
+        },
+        "Jetty_TackleBox": {},
+        "Jetty_HangingLantern": {},
+        "Farm_WaterPump": {},
+        "Path_Square_Dock_Edge": {}
+      }
+    }
+  ],
+  "export": {
+    "_about": "How the island leaves Blender for Roblox. Worked on a COPY of the .blend, so the editable file keeps its separate named pieces. Anything named in keep_prefixes stays its own MeshPart, because the game's code finds it by name.",
+    "copy": "data/blender/haven_bay_export.blend",
+    "fbx": "data/blender/export/HavenBay_Island.fbx",
+    "delete_prefixes": [
+      "Ocean_"
+    ],
+    "keep_prefixes": [
+      "Terrain_",
+      "Building_",
+      "Dock_Arrival_",
+      "Dock_FishingJetty_",
+      "Spawn_",
+      "Barter_",
+      "NPC_",
+      "Fishing_Spot_",
+      "Sandbar_Finds_",
+      "Plot_",
+      "Totem_",
+      "Plaza_",
+      "Stairs_",
+      "Forest_Pond",
+      "Forest_Waterfall",
+      "Farm_WaterPump",
+      "Garden_",
+      "Grove_",
+      "Sanctuary_Front",
+      "Noticeboard_"
+    ],
+    "join": {
+      "Foliage_PineTrees": [
+        "Tree_Pine_"
+      ],
+      "Foliage_PalmTrees": [
+        "Tree_Palm_",
+        "Sandbar_Palm_"
+      ],
+      "Foliage_Trees": [
+        "Tree_Round_",
+        "Tree_Fruit_",
+        "Lawn_ShadeTree_",
+        "Tree_Sanctuary"
+      ],
+      "Foliage_Bushes": [
+        "Bush_",
+        "Lawn_Bed_",
+        "Flowers_",
+        "Square_Flowers_",
+        "Sanctuary_Flowers"
+      ],
+      "Foliage_Forest": [
+        "Forest_Fern_",
+        "Forest_Mushrooms_",
+        "Forest_Log_",
+        "Forest_Boulder_"
+      ],
+      "Props_TownSquare": [
+        "Square_Lantern_",
+        "Square_Bench_",
+        "Bench_ElderRowan",
+        "Sign_To"
+      ],
+      "Props_Beach": [
+        "Beach_",
+        "Driftwood_",
+        "Coast_Boulder_",
+        "Sandbar_Rock_"
+      ],
+      "Props_Reef": [
+        "Coral_",
+        "Seaweed_"
+      ],
+      "Props_Paths": [
+        "Path_"
+      ],
+      "Props_Farm": [
+        "Farm_Bed_",
+        "Farm_Furrow_",
+        "Farm_Crate_",
+        "Farm_Fence",
+        "Farm_WateringCans",
+        "Garden_Flowers_"
+      ],
+      "Props_Dock": [
+        "Dock_MooringPost_",
+        "Dock_RopeCoils",
+        "Dock_FishCrate_",
+        "Dock_LifeRing_",
+        "Dock_HangingLantern_",
+        "Dock_Lantern",
+        "Dock_Barrel",
+        "Dock_Crate",
+        "Jetty_"
+      ],
+      "Props_Sanctuary": [
+        "Sanctuary_Lantern_",
+        "Sanctuary_Statue",
+        "Sanctuary_Bench",
+        "Sanctuary_Garden"
+      ],
+      "Props_Lawn": [
+        "Lawn_"
+      ]
+    },
+    "join_others_as": "Props_Misc",
+    "smooth_prefixes": [
+      "Foliage_",
+      "Props_Beach",
+      "Props_Reef"
+    ],
+    "smooth_angle": 35,
+    "bevel_prefixes": [
+      "Building_Sanctuary",
+      "Dock_Arrival_",
+      "Props_TownSquare",
+      "Building_BarterStall"
+    ],
+    "bevel_width": 0.18,
+    "bevel_segments": 2,
+    "triangle_budget": 7500,
+    "organic_angle": 75,
+    "weld_prefixes": [
+      "Terrain_"
+    ]
+  }
+}
