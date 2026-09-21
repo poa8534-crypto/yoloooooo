@@ -316,10 +316,25 @@ function harness.services(): any
 		-- client to find, and the list of what carries a tag.
 		CollectionService = (function()
 			local tagged: { [string]: { [any]: boolean } } = {}
+			local added: { [string]: any } = {}
+			local function addedSignal(tag: string): any
+				added[tag] = added[tag] or signal()
+				return added[tag]
+			end
 			return {
 				AddTag = function(_self: any, object: any, tag: string)
 					tagged[tag] = tagged[tag] or {}
+					local fresh = not tagged[tag][object]
 					tagged[tag][object] = true
+					-- As in Roblox: a system listening for a tag hears about an
+					-- object tagged after it started, which is how objects a
+					-- team places later are found.
+					if fresh and added[tag] then
+						added[tag].fire(object)
+					end
+				end,
+				GetInstanceAddedSignal = function(_self: any, tag: string): any
+					return addedSignal(tag)
 				end,
 				RemoveTag = function(_self: any, object: any, tag: string)
 					if tagged[tag] then
