@@ -281,29 +281,108 @@ playable before breadth; do not build features nobody asked for.
   - Place files `.gitignore`: `templates/game/.gitignore` and neuromine now
     ignore `*.rbxl` and `*.rbxlx`.
   - Section 9 lists what these systems record that nothing reads yet.
-- `C:\RobloxGames\island-haven` is the newest game, Island Haven: Life
-  Unlocked (blueprint `a839363103c9bb92`). All **33 of 33 systems are on
-  master**.
-  - Antigravity wrote 11 of them on 2026-09-19. The build then cut its
-    worktrees from the wrong repository (section 7), so none of them landed.
-    They were landed afterwards from their branches, which still sit in the
-    neuromine repository. Each went through the same `land()` and whole-project
-    verify, and all 11 passed.
-  - The other 22 were written by hand through `scripts/handbuild.py`, at the
-    owner's request, on 2026-09-20, after Antigravity's quota ran out again.
-  - Measured on master at that date: `verify.ps1` exits 0, with all six checks
-    passing, 0 selene warnings and 159 behaviour checks.
-  - Synced to Studio and started in Play with `handbuild.py sync` on
-    2026-09-20. From Studio's own log: the server bootstrap loaded and
-    started all 30 server modules, and the client bootstrap started both
-    client modules. 0 errors and 0 warnings came from the place's scripts in
-    the first minute. Nobody played it: nothing was picked up, fished,
-    placed or bought, so this shows the systems start, not that they play
-    well together.
-  - `GAME_PROJECT_DIR` in `.env` still names neuromine. Builds and
-    `handbuild.py` find island-haven from the blueprint, but anything that
-    reads the setting directly does not.
-  - Section 9 lists what does not fit together yet.
+- `C:\RobloxGames\island-haven` is the newest game. On 2026-09-21 the owner
+  redesigned it as **"Fish a House"** (fish for blueprints, chop wood, build
+  a free house, earn Shells), and it has been hand-built by Claude at the
+  owner's request since then. The original Island Haven systems are kept in
+  `archive/`. It pushes to the private GitHub repo `poa8534-crypto/fish-a-house`.
+  - Since 2026-09-24 the owner wants Claude to hand coding work to Antigravity
+    itself (never to relay briefs through the owner) and report only when a
+    plan is done and play-tested. `scripts/agy_edit.py` does that the
+    pipeline's safe way: `agy` gets the files in the prompt with no tools,
+    answers with exact search/replace edits, the script applies them, and
+    Claude runs `verify.ps1` in a worktree and feeds failures back. Headless
+    `agy` with tools is refused file reads without permission rules, so this is
+    the working route. Each change is play-tested in Studio before merging.
+  - Shipped 2026-09-24: the Battle Pass and Tool Masteries (after fixing five
+    gaps in Antigravity's first version), and the Bottle Run
+    (`docs/plans/bottle-run.md`): fished blueprints are carried home as timed
+    bottles, knocked loose by night sharks, day seagulls and, in the Danger
+    Deep only, other players' tackles; a plank run (`tools/world/BuildPlankRun.luau`)
+    crosses the channel to Volcano Island. `ServerStorage.DevTools` gained
+    `Fire` (any GameEvents signal) and `GiveBottle` for Studio tests.
+    Not yet tested: tackles, which need two or more players.
+  - Shipped 2026-09-25, the Living World (`docs/plans/living-world.md`):
+    8 plots (two new neighbourhoods grown onto the island by
+    `tools/world/BuildNeighbourhoods.luau`, land only ever added), optional
+    roommates, a waiting list when plots are full, the mystery bottle reveal,
+    a volcano scaled up for 8 players (`BuildVolcanoIsland.luau`), crabs,
+    seagull flocks, fireflies, jellyfish and night lamps, thunderstorms and
+    tsunamis (`DevTools.StartStorm` / `StartTsunami` test them), hidden
+    treasure chests and whirlpools (`BuildSeaLife.luau`). World scripts are
+    run in Studio by syncing them through Rojo as a temporary untracked
+    ModuleScript and requiring it in Edit mode. Backups of the island,
+    volcano, Danger Deep and terrain from before are in
+    ServerStorage.Backups/*_2026-09-25.
+  - Built 2026-09-26, on branch `feat/polish-expansion` (stacked on
+    `feat/fishing-v2`; 20 commits past `master`, which still holds `ccd8fef`
+    and is not pushed). Neither branch is merged: merging fishing-v2, then
+    polish-expansion, and pushing is the owner's call. Gate: 142 behaviour
+    checks, all passing. Everything below was play-tested in Studio, with the
+    owner's save kept safe by `DevTools.Snapshot` / `Restore`:
+    - Fishing v2: charge, cast, bite, catch bar, catch card; Base/Shop buttons.
+      Fixed on review: the `Bite` remote was made lazily, which deadlocked
+      the client, and TackleService was started twice.
+      `tests/Startup.spec.luau` now catches both.
+    - Chopping: all 273 Home Island trees are tagged `ChopTree`
+      (`tools/world/MakeTreesChoppable.luau`). The swing is whole-body; the
+      tree falls away from the player; logs fly to them. Three swings give +3 Wood.
+    - The guide pillar shows only during the first-house guide.
+    - The plan (`docs/plans/polish-and-expansion.md` section 6):
+      - The spawn is in the Town Square, and new players get an intro sweep.
+      - The Volcano Heist (`VolcanoHeistService`, altars from
+        `BuildHeistAltars.luau`) has a guardian chase and bombs.
+      - NpcLife: NPCs breathe, turn their heads, wave, float an icon, and
+        chatter with a speech bubble and a camera zoom.
+      - `BuildTown.luau` dresses and places 4 new NPCs.
+      - The forest understory comes from `BuildForestDetail.luau`, and the
+        Blue Mansion grounds and furnishings from `BuildMansion.luau`.
+      - Lighting uses the plan's values. Juice: button springs, the catch
+        pop, the delivery shake, 7 soundscapes.
+    - NPCs in a StreamingEnabled place need `ModelStreamingMode = Atomic`, or
+      a client can see a model before its Head arrives and NpcLife skips it.
+    - Not done:
+      - The new seagull mesh needs the owner to turn on EditableMesh in
+        Game Settings > Security.
+      - Material footsteps: no licensed audio was found.
+      - The trophy case has no leaderboard names.
+      - The four new NPCs only talk and sell nothing; that is a design call.
+      - The plank run does not set the `Island` attribute.
+  - The Studio place is "Team Power rangers" (placeId 105486459429267), a
+    Team Create place. Rojo serves the repo on localhost:34872. Run only
+    **one** Rojo server: two at once put every new script in twice.
+  - Shipped phases:
+    - 1–4: the core loop, per-player trees, the mailbox, Sail Away,
+      Adopt-Me-style furnishing, the tide and clams, the Celestial Crystal
+      and Cataclysm, and house mutations with gems.
+    - 5: a first-house guide, sounds, leaderboards, phone scaling and
+      session-locked saves.
+    - D: a daily login streak and daily quests.
+    - B: Volcano Island (commit `83ed434`), reached by ferry after one Sail
+      Away. It has lava fishing with the Lava Rod, the only place the
+      Obsidian Citadel blueprint bites, and villager shops run by Pip,
+      Marigold and Bramble.
+    - C: the Gem shop, opened from a HUD button. It sells rod skins, house
+      paint and name tags for Gems, plus four gem packs for Robux.
+  - The gem packs are Developer Products. They stay "Coming soon" until the
+    owner creates them on the Creator Dashboard and puts each product id
+    into `GEM_PACKS` in `src/shared/GameConfig.luau`.
+  - The pieces that live only in the Studio place, not in the repo:
+    - the terrain, trees and sky;
+    - Workspace.VolcanoIsland;
+    - ServerStorage.Ferry, the ferry boat;
+    - ServerStorage.TreeKit;
+    - the villager models, in ServerStorage.LaterIslands.
+  - Measured on master at `83ed434`: `scripts/verify.ps1` exits 0, with 69
+    behaviour checks. Phase B was play-tested in Studio:
+    - the ferry refused a player with no voyages, and both crossings worked;
+    - lava fishing refused the Twig Rod and caught lava fish with the Lava
+      Rod;
+    - all three shops answered.
+    The owner's save was put back afterwards through
+    `ServerStorage.DevTools.SetData`, a Studio-only hook.
+  - Not yet done: a 4-player Clients-and-Servers test.
+  - `GAME_PROJECT_DIR` in `.env` still names neuromine.
 - The owner drives sessions from a Mac as well as this PC: Claude Code Remote
   Control links the running session to claude.ai, and the dashboard is on the
   tailnet. Both need this PC awake with the Claude app open; Studio itself is
