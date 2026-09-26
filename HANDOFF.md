@@ -342,8 +342,16 @@ playable before breadth; do not build features nobody asked for.
     - NPCs in a StreamingEnabled place need `ModelStreamingMode = Atomic`, or
       a client can see a model before its Head arrives and NpcLife skips it.
     - Owner bug round, same day (`b714b5e`), each fix play-tested:
-      - The white line by the dock was the guide's straight `GuideBeam`; it
-        is gone.
+      - The white line by the dock had two causes:
+        - The guide's straight `GuideBeam`. It is gone.
+        - Barnaby's own fishing line. Its `RodShaft.RodTip` attachment
+          held a world position in its local Position, so the line ran
+          about 300 studs into the sky. It was fixed in the place, in Edit
+          mode, to the top of the rod. That attachment is place-only, not
+          in the repo.
+      - The heist altar labels were a fixed-pixel banner, drawn on top of
+        everything and visible from the whole map. They now show only
+        within `HEIST_LABEL_DISTANCE` (45) (`16f6969`).
       - A heist bottle knocked loose now waits 5 s on the ground. Anyone
         with a plot and free hands can pick it up. If it is untouched, it
         rolls back to its altar. This is `BottleService`'s general
