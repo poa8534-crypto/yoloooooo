@@ -341,6 +341,19 @@ playable before breadth; do not build features nobody asked for.
         pop, the delivery shake, 7 soundscapes.
     - NPCs in a StreamingEnabled place need `ModelStreamingMode = Atomic`, or
       a client can see a model before its Head arrives and NpcLife skips it.
+    - Owner bug round, same day (`b714b5e`), each fix play-tested:
+      - The white line by the dock was the guide's straight `GuideBeam`; it
+        is gone.
+      - A heist bottle knocked loose now waits 5 s on the ground. Anyone
+        with a plot and free hands can pick it up. If it is untouched, it
+        rolls back to its altar. This is `BottleService`'s general
+        `BottleOrigin` hook.
+      - The volcano's bare rock (Terrain, between y=30 and the rim) slides
+        players downhill (`VolcanoSlide.client`, `GameConfig.VOLCANO_SLIDE`),
+        so the obby is the only way up.
+      - Chopping reaches a tree from anywhere under its canopy
+        (`CHOP_REACH_EDGE`). Canopies are up to 67 studs wide, and the old
+        16-stud trunk reach said "Get closer".
     - Not done:
       - The new seagull mesh needs the owner to turn on EditableMesh in
         Game Settings > Security.
