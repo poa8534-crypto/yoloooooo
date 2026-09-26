@@ -362,6 +362,28 @@ playable before breadth; do not build features nobody asked for.
       - Chopping reaches a tree from anywhere under its canopy
         (`CHOP_REACH_EDGE`). Canopies are up to 67 studs wide, and the old
         16-stud trunk reach said "Get closer".
+    - Owner round 3 (2026-09-26): commits `a8be062` and `3d60f96`, gate at
+      165 checks.
+      - 24 rods, owned as a set. They are sold only at rod shops:
+        MarketStall_3 in town, and Pip's stall for the 4 fire rods.
+      - Barnaby now sells bait and hands out the daily quests
+        (BaitService, Barnaby.client).
+      - Sail Away shows from a Castle; the Star Storm comes every 10 min.
+      - The world changes are in BuildTown and BuildPlaza: the fish
+        fountain, the sell stall, the Rod Shop sign, the Crystal board,
+        Flora, Finn and Barnaby's facing.
+      - Rod and koi meshes: `blender/rods/out/Roblox_Import_Rods_and_Fountain.fbx`
+        and its .json sidecar, which holds the colours, the glow, and the
+        mouth position for the jet. After the owner imports the FBX in
+        Studio, still to do:
+        - move the rods into ReplicatedStorage.RodModels/<id>, with the
+          pivot at the handle's bottom and scaled to about 10 studs, and
+          colour them from the sidecar;
+        - swap the part-built fish in the fountain for the FishStatue.
+      - Not yet play-tested: Barnaby's window after the daily-reward popup
+        is closed, bait buy/use, quest take/claim, and the hidden boat.
+        The last Play session got a DataStore "AccessForbidden" error and
+        ran unsaved; check Game Settings > Security > Studio API access.
     - Not done:
       - The new seagull mesh needs the owner to turn on EditableMesh in
         Game Settings > Security.

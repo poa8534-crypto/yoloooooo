@@ -52,7 +52,9 @@ def parse(text: str) -> dict:
     if fence:
         text = fence.group(1)
     start, end = text.find("{"), text.rfind("}")
-    return json.loads(text[start:end + 1])
+    # strict=False: models sometimes put a raw tab or newline inside a string
+    # (Luau source is full of tabs); the edit is still exactly what they meant.
+    return json.loads(text[start:end + 1], strict=False)
 
 
 def apply(repo: Path, edits: list[dict]) -> tuple[list[str], list[str]]:
@@ -119,6 +121,10 @@ async def main() -> None:
     except (json.JSONDecodeError, ValueError) as exc:
         result["parse_error"] = str(exc)
         result["raw"] = reply.text[:4000]
+        # The whole reply, so a long answer that fails to parse is not lost.
+        raw_path = Path(args.out).with_suffix(".raw.txt")
+        raw_path.write_text(reply.text, encoding="utf-8")
+        result["raw_file"] = str(raw_path)
         Path(args.out).write_text(json.dumps(result, indent=2), encoding="utf-8")
         print(json.dumps(result, indent=2)[:3000])
         return
