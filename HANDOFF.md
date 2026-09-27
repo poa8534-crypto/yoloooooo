@@ -427,6 +427,36 @@ playable before breadth; do not build features nobody asked for.
       MCP (`multi_edit`, or `ScriptEditorService:UpdateSourceAsync` when
       the script is open in an editor tab, or the tab writes the old text
       back). The Studio `screen_capture` tool does not draw BillboardGuis.
+    - Island design round (`bc4916a`, fixes `3bc2239`): the owner's island
+      brief turned each island into zones, built by one module per island
+      under `tools/world/Archipelago/` (shared helpers in `Kit.luau`; run
+      `BuildArchipelago` with its `Only` attribute set to, say, "Frost" to
+      rebuild one island).
+      - The zones: Ember's Blackshore Dock, Lava Village and Magma Caverns;
+        Frostfall's harbour, ice-fishing plains, frozen falls, ice cave and
+        Glacier Cavern; Wildtide's mangroves, Giant Tree, ruins and Rootback
+        Basin; Tempest's Shipwreck Bay, rope bridges, floating rocks and
+        Storm Tower; Starfall's Moonshore, cosmic pools, Floating Sanctuary,
+        Meteor Valley and aurora.
+      - Every boss has an empty arena part tagged `BossArena` (attributes
+        `Boss`, `Island`). The fights, eruptions, wind gusts, low gravity,
+        the Star Storm and island-only fish are not built.
+      - Sea mist: `Archipelago.SeaMist`, 88 fog banks with gaps the islands
+        show through. `MistPrewarm.client` fills every emitter tagged
+        `PrewarmMist` as it streams in; otherwise the banks start empty.
+      - Every special water (ice holes, the cavern lakes, the root pools,
+        the sky pond, the star pools) was cast into in Play and reached
+        WaitingForBite.
+    - More Studio facts:
+      - A raycast straight after a terrain write can still see the old
+        ground. Read the voxels instead (`kit.terrainTop`).
+      - `CanQuery = false` only takes effect when `CanCollide` is false too.
+      - A Play-mode character anchored from the client stops replicating
+        its position, so the server rejects its casts as too far away.
+      - In Play, Studio's automatic graphics quality cuts view distance, so
+        far islands look missing in screenshots. Judge far views in Edit.
+      - The right-click camera worked in a fresh session. It broke only in
+        a session where camera tests had been run over MCP.
   - The Studio place is "Team Power rangers" (placeId 105486459429267), a
     Team Create place. Rojo serves the repo on localhost:34872. Run only
     **one** Rojo server: two at once put every new script in twice.
