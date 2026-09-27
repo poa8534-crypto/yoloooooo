@@ -391,6 +391,42 @@ playable before breadth; do not build features nobody asked for.
       - The trophy case has no leaderboard names.
       - The four new NPCs only talk and sell nothing; that is a design call.
       - The plank run does not set the `Island` attribute.
+  - 2026-09-27, branch `feat/codex-pass-and-ui` (not merged, not pushed):
+    - UI: one big window at a time (`Windows.luau`, and Popups' queue waits
+      for it), a bottom-left player card (level, XP, health), Free Gifts
+      rebuilt as a top-right card, Base/Shop lifted into Roblox's top bar.
+    - Fishing: the cast line leaves the real rod tip (measured from the
+      rods' vertices in `Fishing rods.blend`; Roblox X is Blender X
+      mirrored), the reel game hides the fish until it is landed, a new
+      power gauge with a drawn rod badge, a hologram "!" with a "toing!"
+      (rbxassetid://2772396665). The bite reaction window is 1.6-2.2 s:
+      Codex's 0.75-1.25 s was too short to click, so the reel game "never
+      came". Codex's own restore of the authored rod and reel game is
+      commit `8cbd28e`, committed as found.
+    - World 1 "The Five Tides" (`00b6ddd`): `tools/world/BuildArchipelago.luau`
+      removed the plank run, moved Volcano Island (Ember Isle) from z 960
+      to z 2400 with its terrain, and built Frostfall, Wildtide Jungle,
+      Tempest Peaks and Starfall Sanctuary on a 2400-stud ring, each with
+      a ferry dock, story NPC anchors and quest markers. The place streams,
+      so far terrain never reaches a client: each island has a Persistent
+      low-poly `Landmark` (and mist) that is what you see from afar.
+      Backups: `ServerStorage.Backups.Archipelago_20260927`.
+    - The story is data (`StoryConfig`), pure rules (`StoryRules`,
+      `tests/Story.spec.luau`), `StoryService`/`StoryNpcs` on the server
+      and `Story.client` on screen. It replaced FinnStoryService. 8 main
+      and 8 side quests; the new islands open for the ferry as main quests
+      finish. The boss battles (Magmajaw etc.), the Worldline Rod, the
+      Tide Beacon and the Worldfin are not built: the main story ends,
+      for now, with Astra naming the five guardians.
+    - With the plank run gone, the Bottle Run and the Volcano Heist have
+      no walking route home from the volcano; the owner's team is making
+      boats. The heist and the danger zones still work by position.
+    - Studio facts learned: deleting a Rojo-synced instance by hand in
+      Studio disconnects the Rojo plugin (the owner has to press Connect
+      again), and while it is off, changes can be pushed with the Studio
+      MCP (`multi_edit`, or `ScriptEditorService:UpdateSourceAsync` when
+      the script is open in an editor tab, or the tab writes the old text
+      back). The Studio `screen_capture` tool does not draw BillboardGuis.
   - The Studio place is "Team Power rangers" (placeId 105486459429267), a
     Team Create place. Rojo serves the repo on localhost:34872. Run only
     **one** Rojo server: two at once put every new script in twice.
