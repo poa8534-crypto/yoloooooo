@@ -447,7 +447,43 @@ playable before breadth; do not build features nobody asked for.
       - Every special water (ice holes, the cavern lakes, the root pools,
         the sky pond, the star pools) was cast into in Play and reached
         WaitingForBite.
+    - Boss fights, the Five Guardians (`docs/plans/boss-fights.md`, merge
+      `9a13ef5`): written by Antigravity through `scripts/agy_edit.py`.
+      There were three parts, dispatched in parallel, with 2-3 review rounds
+      each. Claude reviewed and gated them, and built the world side
+      (`ee09bad`).
+      - A cast hooked in a `BossArena` becomes a fight when the story's
+        current step is `{ kind = "boss" }`, or when a won boss's cooldown
+        has passed.
+      - `BossRules` is pure and seeded. `tests/Boss.spec.luau` replays
+        fights with a scripted player.
+      - `BossService` refuses wins faster than `BossRules.minSeconds`.
+      - The first win gives the island's Guardian Rod, a Tide Compass
+        fragment (the compass shows on the story board) and moves the
+        tide quest on.
+      - `DevTools.BossReady:Invoke(player, bossId)` sets the story up for
+        a test.
+      - Play-tested:
+        - Magmajaw: the cast, the hook and the fight screen; holding Space
+          snaps the line; a win in 3 s is refused; a win after the minimum
+          pays 2500 shells and 25 gems, gives the Inferno Rod (the model
+          with its aura) and the 🔥 fragment, and moves EmberTide on.
+        - The Stormray fight starts from the new cliff ledge.
+        - The owner's save was restored after (Snapshot/Restore).
+      - Not yet play-tested:
+        - the Glacier Serpent, Rootback and Astral Whale fights in Studio
+          (the spec plays all five);
+        - touch and gamepad controls;
+        - two players at one arena.
+      - Review found, and Antigravity fixed: the fight never reported its
+        end (BossRules sets the outcome itself), and a thumbstick bound
+        twice. Claude fixed `type(x) == "CFrame"` (always false; `typeof`).
+      - Also: steering the wrong way costs tension only while reeling, so
+        letting go is always safe apart from a warned spike.
     - More Studio facts:
+      - A folder deleted from disk that Rojo synced while connected may
+        still stay in Studio (`ReplicatedStorage.Shared._Tools5`); delete
+        it by hand only if the owner can reconnect Rojo afterwards.
       - A raycast straight after a terrain write can still see the old
         ground. Read the voxels instead (`kit.terrainTop`).
       - `CanQuery = false` only takes effect when `CanCollide` is false too.
