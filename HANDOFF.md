@@ -480,7 +480,76 @@ playable before breadth; do not build features nobody asked for.
         twice. Claude fixed `type(x) == "CFrame"` (always false; `typeof`).
       - Also: steering the wrong way costs tension only while reeling, so
         letting go is always safe apart from a warned spike.
+    - The expansion round (branch `feat/expansion`, merged into
+      `feat/codex-pass-and-ui` up to `ca64835`). Antigravity wrote the
+      systems through `scripts/agy_edit.py`; Claude reviewed, gated and
+      play-tested them and made the small fixes.
+      - Islands have a level (`GameConfig.ISLANDS[].level`: Home 1,
+        Volcano 4, Frost 8, Wild 11, Tempest 14, Star 17). The ferry
+        prompts show "(Lv N)" and refuse a player below it.
+      - The minimap uses painted tiles of the current map. An island shows
+        only once it is found, and shows a lock until it is open.
+      - A 360° compass strip sits under the top bar.
+      - Story NPCs are real R15 avatars dressed from catalog items
+        (`StoryConfig` outfits, IDs checked with MarketplaceService).
+      - The fish list has 134 species with islands, deep-water fish,
+        weights, trophies and a Blox Fruits-style held catch
+        (`HeldCatch`). The fish bodies are built by
+        `tools/world/BuildFishArchetypes.luau` into
+        `ServerStorage.FishArchetypes`.
+      - Night ferries are escorted by sharks and piranhas
+        (`PredatorService`). The player gets a Harpoon for the ride, can
+        throw chum (Q) once, and the Slapper swats piranhas within 7 studs.
+      - Party luck: +2.5% per other angler holding a rod within 40 studs,
+        at most +15%, shown above the hotbar.
+      - Sunken chests in the reel game: 5% (times the event's
+        `chestMultiplier`), three a day, Silver 150 shells, Gold 15 gems,
+        Diamond 50 gems. A grabbed chest pays even if the fish escapes.
+      - A mythic bite shows a warning for 1.8 s before the reel game.
+      - World events: six events with their own music and sounds (all 12
+        audio IDs were checked to load). `Workspace.ForceEvent = "<id>"`
+        starts one in Studio.
+      - The Rooftop Roulette on a player's house spins every 30 minutes.
+        The last spin is saved as `data.rouletteAt`, so rejoining does
+        not reset it.
+      - Rods cut into five sections (`blender/rods/export_rods.py`) bend
+        under tension. `tools/world/SetupRodModels.luau` turns the
+        imported FBX into `ReplicatedStorage.RodModels`, backing up what
+        it replaces. The owner's Lava and Void skins are in the same FBX
+        and show as whole models in the rod's place.
+      - Play-tested:
+        - the chest (Silver, +150 shells, also on an escaped fish), the
+          mythic warning with a forced Magmajaw Wyrm, and the chest icon
+          in the reel bar;
+        - the night ferry: harpoon kill, chum, swat, a 0.35 rad boat jolt
+          and bite damage;
+        - the roulette: a spin, the jackpot lights, and the cooldown
+          after it;
+        - event music playing during a forced Rare Fish Run;
+        - `SetupRodModels` on a fake import, then the rod built from it
+          bending 7° at the handle to 28° at the tip while reeling.
+      - Not yet play-tested:
+        - party luck with two real players (it needs a two-player test);
+        - the real rod FBX, which waits on the owner's import.
+      - Fixed on the way:
+        - The Backpack sync destroyed the Harpoon; it now leaves foreign
+          tool kinds alone.
+        - The chest message was built after its tier had been cleared.
+        - A mythic warning no longer starts a reel game for a player who
+          left or unequipped during it.
+        - The GemShop preview shows a model skin's own model.
+        - Tag lookups skip objects outside Workspace. Before this, the
+          map backups in ServerStorage (which keep their tags) could
+          stand in for a live ferry dock or shop spawn.
     - More Studio facts:
+      - `execute_luau` runs in its own Lua VM with its own `require`
+        cache, so changing a module table from it does not reach the
+        game. Use `ServerStorage.DevTools.Tune:Invoke(key, value)` to set
+        a GameConfig tunable for a play test (it returns the old value).
+        Remote and bindable instances are shared, so firing them works.
+      - Backups in ServerStorage keep their CollectionService tags. New
+        code that looks up tags must check `IsDescendantOf(Workspace)`,
+        as `Placed.each` does.
       - A folder deleted from disk that Rojo synced while connected may
         still stay in Studio (`ReplicatedStorage.Shared._Tools5`); delete
         it by hand only if the owner can reconnect Rojo afterwards.
