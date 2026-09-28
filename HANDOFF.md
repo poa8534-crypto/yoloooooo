@@ -541,6 +541,23 @@ playable before breadth; do not build features nobody asked for.
         - Tag lookups skip objects outside Workspace. Before this, the
           map backups in ServerStorage (which keep their tags) could
           stand in for a live ferry dock or shop spawn.
+    - The cast mini game (2026-09-28, after the owner reported fishing
+      "not working at all" from a beach). Fishing worked in the logs, but
+      the player could not see it, and beach casts landed on sand. Now:
+      - Cast: a big "PERFECT/GREAT CAST!" flash. The throw goes towards
+        the cursor, and the server walks that line to the first water.
+      - Wait: a 1.4-stud outlined bobber, a thicker line, 1-2 nibbles, and
+        "Waiting for a bite..." above the hotbar.
+      - Hook: a centre-screen ring closes on a target in 0.9 s.
+        `GameRules.hookQuality` judges the hook on the server; a Perfect
+        hook starts the reel at 0.55 instead of `CATCH_START`.
+      - Tested in Play from the owner's beach spot and camera, judged by
+        screenshots: casting with the cursor on the sea, the waiting
+        label, the ring, and a Perfect hook that the server confirmed.
+      - The place's own hotbar (`StarterGui."Custom Inventory"`, not in
+        the repo) kept a slot for a tool that was added and removed in
+        the same frame (a rod swap). Its `SETTINGS.newTool` now skips a
+        tool that is no longer in the Backpack or on the character.
     - More Studio facts:
       - `execute_luau` runs in its own Lua VM with its own `require`
         cache, so changing a module table from it does not reach the
