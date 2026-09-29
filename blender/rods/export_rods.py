@@ -202,12 +202,21 @@ SKIN_TRIS = 18000
 project = Path(bpy.data.filepath).parent
 sidecar["skins"] = {}
 for skin_index, (skin_id, folder, rotation) in enumerate(SKINS):
-    obj_path = project / folder / "output.obj"
+    # The repaired skin (repair_skins.py: welded, cleaned, stood up straight,
+    # handle down, cleaned texture) when there is one; the raw one otherwise.
+    repaired = project / "blender" / "rods" / "out" / "repaired" / folder / "output.obj"
+    obj_path = repaired if repaired.exists() else project / folder / "output.obj"
+    print("SKIN SOURCE", skin_id, obj_path)
     if not obj_path.exists():
         print("SKIN MISSING", obj_path)
         continue
     before = set(bpy.data.objects)
-    bpy.ops.wm.obj_import(filepath=str(obj_path))
+    if obj_path == repaired:
+        # Written Z-up by repair_skins.py; read it back the same way, already standing.
+        bpy.ops.wm.obj_import(filepath=str(obj_path), forward_axis="Y", up_axis="Z")
+        rotation = Matrix.Identity(4)
+    else:
+        bpy.ops.wm.obj_import(filepath=str(obj_path))
     imported = [o for o in bpy.data.objects if o not in before and o.type == "MESH"]
     if not imported:
         continue
