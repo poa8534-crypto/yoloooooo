@@ -558,6 +558,43 @@ playable before breadth; do not build features nobody asked for.
         the repo) kept a slot for a tool that was added and removed in
         the same frame (a rod swap). Its `SETTINGS.newTool` now skips a
         tool that is no longer in the Backpack or on the character.
+    - 2026-09-29/30 rounds (same branch; commits `aa68a59`, `80645cc`,
+      `7685191`, gate at 249 checks):
+      - Balance: axes have damage and swing speed against tree HP (a thin
+        green HP bar in the chopper's own PlayerGui); XP curve
+        30 + 20·level with more fish/tree XP; an easier reel; island levels
+        5/10/15/20/25; every island's stall sells its own rods (tables in
+        `scratchpad/economy.py` of that session, now in GameConfig); gems
+        made rare.
+      - Rod stalls on Frost (Yuki), Wild (Mossa), Tempest (Gale) and Star
+        (Nova) are clones of Pip's stall, placed in Studio only (not in the
+        repo), each clear of its dock. Buying works only within
+        `ROD_SHOP_REACH` of the stall, and the window closes when you walk off.
+      - Premium rods (Arena, Void, Royal, Frost, Inferno) sell for Robux in
+        the "Rod Skins" menu button (`RobuxRodShop.client`). Each needs a
+        Developer Product id in its cosmetic's `robuxProduct` (0 = Coming
+        soon). The HUD scale now fits the measured left column, so extra
+        menu buttons no longer hide under the player card.
+      - Sharks: one per island, night only, bite only where the sea is at
+        least `SHARK_BITE_DEPTH` deep (the dock-end shallows are safe; open
+        sea about 75 studs out is not). Piranhas come in schools of 3-5.
+        Both use `ServerStorage.CreatureModels.Shark` / `.Piranha` when
+        present. The models are built by `blender/creatures/build_creatures.py`
+        (FBX in `blender/creatures/out/`); the owner imports them in Studio,
+        then the parts are renamed Body, DorsalFin, Fins, ... inside those
+        two Models.
+      - NPCs were black because `ApplyDescription` with
+        `GetAppliedDescription()` as the base paints undescribed rigs black;
+        `StoryNpcs` now copies each rig's own colours first. The place's
+        day ambient was near zero; `DAY_AMBIENT_FLOOR` lifts it.
+      - The 8-minute "world event incoming" warning plays a chime, not the
+        horn (the owner kept hearing a horn with nothing to see).
+      - Studio saves in Play go to the real DataStore (`FishAHouse_v1`,
+        key `player_<UserId>`). Always `DevTools.Snapshot` before and
+        `Restore` before stopping. If that is missed, restore a pre-test
+        version with `ListVersionsAsync` / `GetVersionAsync` and `SetAsync`.
+      - Studio screen captures do not show AlwaysOnTop BillboardGuis, and the
+        game's camera script overrides a scripted camera within seconds.
     - More Studio facts:
       - `execute_luau` runs in its own Lua VM with its own `require`
         cache, so changing a module table from it does not reach the
