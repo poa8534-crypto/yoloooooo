@@ -345,12 +345,12 @@ def bloom():
         out = tree.nodes.new("CompositorNodeComposite")
     rl = tree.nodes.new("CompositorNodeRLayers")
     glare = tree.nodes.new("CompositorNodeGlare")
-    for key, value in (("glare_type", "BLOOM"), ("quality", "HIGH"), ("threshold", 3.0), ("size", 7)):
+    for key, value in (("glare_type", "FOG_GLOW"), ("quality", "HIGH"), ("threshold", 3.0), ("size", 7)):
         try:
             setattr(glare, key, value)
         except Exception:
             pass
-    for name, value in (("Type", "Bloom"), ("Threshold", 3.0), ("Strength", 0.7), ("Size", 0.6)):
+    for name, value in (("Type", "Fog Glow"), ("Threshold", 1.5), ("Strength", 1.0), ("Size", 0.5)):
         sock = glare.inputs.get(name)
         if sock is not None:
             try:
