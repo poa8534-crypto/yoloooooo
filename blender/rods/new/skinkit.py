@@ -123,7 +123,7 @@ def rim_glow(mat, color, power):
     b.inputs["Emission Color"].default_value = (*color, 1)
 
 
-def textured(mat_or_name, image, tile=0.6, metallic=0.0, rough=0.4, emission=0.0):
+def textured(mat_or_name, image, tile=0.6, metallic=0.0, rough=0.4, emission=0.0, glow_image=None):
     """Put a tileable pattern on a material (base colour; `emission` makes it
     shine a little by itself) and project UVs on every part that uses it, so
     the pattern repeats every `tile` units."""
@@ -136,7 +136,13 @@ def textured(mat_or_name, image, tile=0.6, metallic=0.0, rough=0.4, emission=0.0
     b.inputs["Metallic"].default_value = metallic
     b.inputs["Roughness"].default_value = rough
     if emission > 0:
-        nt.links.new(tex.outputs["Color"], b.inputs["Emission Color"])
+        source = tex
+        if glow_image:
+            # A separate glow mask: only what is bright in it shines.
+            source = nt.nodes.new("ShaderNodeTexImage")
+            source.image = bpy.data.images.load(str(TEXTURES / glow_image), check_existing=True)
+            m["glow_texture"] = glow_image
+        nt.links.new(source.outputs["Color"], b.inputs["Emission Color"])
         b.inputs["Emission Strength"].default_value = emission
     m["texture"] = image
     for o in [o for o in bpy.data.objects if o.type == "MESH" and o.data.materials and o.data.materials[0] == m]:

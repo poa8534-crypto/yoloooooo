@@ -190,6 +190,63 @@ def frost_bone():
     save(img, "frost_bone.png")
 
 
+# ------------------------------------------------------------------ inferno honeycomb
+
+def inferno_hex():
+    """Red-chrome armour plates in a honeycomb: every cell is a recessed hex
+    with a bevelled rim; about a third of them are glowing cells (white-pink),
+    in clusters. Writes the colour and a matching glow mask (only the lit
+    cells), so the plates stay red and only the cells shine."""
+    import random
+
+    rnd = random.Random(5)
+    col_w, row_h, cols, rows = S / 8, S / 10, 8, 10
+    r = col_w * 0.46
+    img = canvas((150, 14, 14))
+    glow = Image.new("RGB", (S, S), (0, 0, 0))
+    # Chrome banding: soft light/dark stripes across the plate, tiled.
+    band = Image.new("L", (S, S), 0)
+    bd = ImageDraw.Draw(band)
+    for y in range(S):
+        v = int(60 + 60 * math.sin(2 * math.pi * y / S * 2) + 30 * math.sin(2 * math.pi * y / S * 5))
+        bd.line((0, y, S, y), fill=max(0, v))
+    img = Image.composite(Image.new("RGB", (S, S), (230, 70, 60)), img, band)
+    d = ImageDraw.Draw(img)
+    g = ImageDraw.Draw(glow)
+    lit = set()
+    for _ in range(6):
+        c0, r0 = rnd.randrange(cols), rnd.randrange(rows)
+        for dc, dr in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1 if r0 % 2 else -1)):
+            if rnd.random() < 0.8:
+                lit.add(((c0 + dc) % cols, (r0 + dr) % rows))
+
+    def hexagon(cx, cy, rr):
+        return [(cx + rr * math.cos(math.pi / 6 + k * math.pi / 3), cy + rr * math.sin(math.pi / 6 + k * math.pi / 3))
+                for k in range(6)]
+
+    for row in range(rows):
+        for col in range(cols):
+            cx = col * col_w + (col_w / 2 if row % 2 else 0)
+            cy = row * row_h
+            on = (col, row) in lit
+
+            def draw_cell(dx, dy):
+                x, y = cx + dx, cy + dy
+                d.polygon(hexagon(x, y, r), fill=(90, 6, 10))
+                d.polygon(hexagon(x, y, r * 0.86), fill=(255, 205, 215) if on else (175, 22, 26))
+                if on:
+                    d.polygon(hexagon(x, y, r * 0.55), fill=(255, 245, 250))
+                    g.polygon(hexagon(x, y, r * 0.86), fill=(255, 120, 130))
+                    g.polygon(hexagon(x, y, r * 0.55), fill=(255, 235, 240))
+                else:
+                    d.line(hexagon(x, y, r * 0.86)[:4], fill=(240, 110, 100), width=4)
+
+            wrapped(draw_cell)
+    save(img, "inferno_hex.png")
+    save(glow, "inferno_hex_glow.png")
+
+
+inferno_hex()
 royal_filigree()
 royal_panel()
 frost_knot()
