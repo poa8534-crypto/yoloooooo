@@ -179,12 +179,35 @@ def shard(name, base, direction, length, width, mat, vfx="float", sides=5, lean=
     return adopt(o, mat, vfx, smooth=5)
 
 
-def torus(name, centre, major, minor, normal, mat, vfx, segs=48):
-    bpy.ops.mesh.primitive_torus_add(major_radius=major, minor_radius=minor, major_segments=segs,
-                                     minor_segments=8, location=centre)
-    o = bpy.context.active_object
-    o.name = name
-    o.rotation_euler = Vector(normal).normalized().to_track_quat("Z", "Y").to_euler()
+def torus(name, centre, major, minor, normal, mat, vfx, dashes=3, gap=0.45):
+    """A dashed ring (arcs with gaps), so its spin can be seen. `vfx` says
+    which way the game spins it: "orbit_axial" about the rod's direction,
+    "orbit_side" about the line from the rod's axis out to the ring."""
+    n = Vector(normal).normalized()
+    u = n.orthogonal().normalized()
+    w = n.cross(u)
+    cu = bpy.data.curves.new(name, "CURVE")
+    cu.dimensions = "3D"
+    cu.bevel_depth = minor
+    cu.bevel_resolution = 2
+    cu.use_fill_caps = True
+    span = 2 * math.pi / dashes
+    for k in range(dashes):
+        a0 = k * span
+        a1 = a0 + span * (1 - gap)
+        sp = cu.splines.new("POLY")
+        pts = [Vector(centre) + (u * math.cos(a) + w * math.sin(a)) * major
+               for a in (a0 + (a1 - a0) * i / 16 for i in range(17))]
+        sp.points.add(len(pts) - 1)
+        for pt, co in zip(sp.points, pts):
+            pt.co = (*co, 1)
+    cobj = bpy.data.objects.new(name + "_c", cu)
+    scene.collection.objects.link(cobj)
+    deps = bpy.context.evaluated_depsgraph_get()
+    mesh = bpy.data.meshes.new_from_object(cobj.evaluated_get(deps))
+    bpy.data.objects.remove(cobj, do_unlink=True)
+    o = bpy.data.objects.new(name, mesh)
+    scene.collection.objects.link(o)
     return adopt(o, mat, vfx, smooth=80)
 
 
@@ -236,12 +259,12 @@ shard("TipCrystal", (0, 0, 9.92), (0, 0, 1), 0.38, 0.045, CRYSTAL_HOT, vfx="stat
 for side in (1, -1):
     c = Vector((0.0, 0.215 * side, 2.55))
     sphere(f"VoidOrb{side}", c, 0.11, ORB)
-    torus(f"OrbRingIn{side}", c, 0.14, 0.009, (0, side, 0), GLOW, "orbit")
-    torus(f"OrbRingOut{side}", c + Vector((0, 0.01 * side, 0)), 0.19, 0.006, (0, side, 0.25), GLOW, "orbit")
-torus("OrbitReel", (-0.58, 0, 2.52), 0.3, 0.008, (0.15, 0, 1), GLOW, "orbit")
-torus("OrbitBlankA", (0, 0, 5.6), 0.36, 0.01, (0.25, 0.1, 1), GLOW, "orbit")
-torus("OrbitBlankB", (0, 0, 7.6), 0.26, 0.008, (-0.2, 0.15, 1), GLOW, "orbit")
-torus("TipHalo", (0, 0, 10.05), 0.12, 0.006, (0, 0, 1), GLOW, "orbit")
+    torus(f"OrbRingIn{side}", c, 0.14, 0.009, (0, side, 0), GLOW, "orbit_side", dashes=4, gap=0.3)
+    torus(f"OrbRingOut{side}", c + Vector((0, 0.01 * side, 0)), 0.19, 0.007, (0, side, 0), GLOW, "orbit_side")
+torus("OrbitReel", (-0.58, 0, 2.52), 0.3, 0.009, (0, 0, 1), GLOW, "orbit_axial")
+torus("OrbitBlankA", (0, 0, 5.6), 0.36, 0.011, (0, 0, 1), GLOW, "orbit_axial", dashes=2, gap=0.35)
+torus("OrbitBlankB", (0, 0, 7.6), 0.26, 0.009, (0, 0, 1), GLOW, "orbit_axial")
+torus("TipHalo", (0, 0, 10.05), 0.12, 0.007, (0, 0, 1), GLOW, "orbit_axial", dashes=4, gap=0.3)
 
 # ------------------------------------------------------------------ particles (render stand-ins)
 

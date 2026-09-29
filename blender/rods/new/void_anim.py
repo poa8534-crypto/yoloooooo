@@ -53,8 +53,13 @@ for f in range(N):
     for i, o in enumerate(kids):
         m0 = base[o.name]
         kind = o["vfx"]
-        if kind == "orbit":
-            o.matrix_local = m0 @ Matrix.Rotation(2 * math.pi * t * (1 if i % 2 else -1), 4, "Z")
+        if kind.startswith("orbit"):
+            # About its own centre: the rod's direction, or out from the rod's axis.
+            bb = [Vector(c) for c in o.bound_box]
+            c = m0 @ (sum(bb, Vector()) / 8)
+            axis = Vector((0, 0, 1)) if kind == "orbit_axial" else Vector((c.x, c.y, 0)).normalized()
+            turn = Matrix.Rotation(2 * math.pi * t * (1 if i % 2 else -1) / 3, 4, axis)
+            o.matrix_local = Matrix.Translation(c) @ turn @ Matrix.Translation(-c) @ m0
         elif kind == "float":
             phase = i * 0.7
             lift = Matrix.Translation((0, 0, 0.05 * math.sin(2 * math.pi * t + phase)))
