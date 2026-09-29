@@ -24,3 +24,5 @@ frontend/playwright-report/
 # Vitest/npx leave a cache here when a command runs from the repo root.
 node_modules/
 blender/rods/new/renders/void_anim/
+blender/rods/new/renders/*_anim/
+blender/rods/new/textures/_*.png

@@ -9,17 +9,19 @@ renders/void_anim/####.png.
 """
 
 import math
+import sys
 from pathlib import Path
 
 import bpy
 from mathutils import Matrix, Vector
 
 HERE = Path(__file__).resolve().parent
-FRAMES = HERE / "renders" / "void_anim"
+TAG = sys.argv[sys.argv.index("--") + 1] if "--" in sys.argv else "void"
+FRAMES = HERE / "renders" / f"{TAG}_anim"
 FRAMES.mkdir(parents=True, exist_ok=True)
 N = 36
 
-bpy.ops.wm.open_mainfile(filepath=str(HERE / "void_rod.blend"))
+bpy.ops.wm.open_mainfile(filepath=str(HERE / f"{TAG}_rod.blend"))
 scene = bpy.context.scene
 rod = bpy.data.objects["Rod"]
 cam = scene.camera
