@@ -711,6 +711,45 @@ playable before breadth; do not build features nobody asked for.
       the guide leads.
     - `DevTools.FreshStart` plays from a brand-new save. Always Snapshot
       first and Restore after.
+  - Owner round, 2026-10-01 (all merged on `feat/codex-pass-and-ui`, gate
+    at 289 checks, each play-tested; Antigravity wrote the code through
+    `scripts/agy_edit.py`):
+    - An outside audit's punch list was checked first, against the live
+      place. It said the garden beds, the rod stall and the expanded world
+      were missing, but it had scanned the stale `.rbxl` files on disk, not
+      the Team Create place, so those findings were wrong. Never publish
+      from `island-haven.rbxl`.
+    - Bosses (`afc8f30`): more stamina, and every guardian needs tension of
+      at least 0.2. Simulated with the island's own rod, a fight now takes
+      52-79 s (it was 34-58 s), and a good player still wins 38-40 of 40.
+      Telegraphed attacks take 15-25% of health from a player who is still
+      reeling when the attack lands; letting go dodges them. The server
+      applies the damage (`BossHit`, at most one hit per `HIT_MIN_GAP`),
+      and a knock-out ends the fight.
+    - The Volcano Heist is back on (`8d0295c`). The altars were restored to
+      `VolcanoIsland.HeistAltars` from the backup.
+    - The 7,000-stud ring (`0b9b90f`): every island position lives in
+      `src/shared/WorldLayout.luau`. `tools/world/MoveToRing.luau` moved
+      each island in the place, in 55 s: its terrain, its models and their
+      Vector3 attributes. It also grew the sea to ±9,000 studs and turned
+      the old spots into open sea. Afterwards no parts were left at the old
+      centres, and the tree counts matched exactly. `workspace.RingRadius`
+      = 7000 stops a second run.
+    - Sea mist (`4a71b00`, `cc0e43a`): `SeaMistConfig` / `SeaMist` /
+      `SeaMist.client`.
+      - Within 150 studs of a shore the air is clear.
+      - Each island has its own tinted waters: the Ash Sea, the Frozen
+        Reach, the Green Shallows, the Storm Line, the Starlit Deep.
+      - Far from every shore is "The Shrouded Veil", at density 0.8.
+      - The Abyss (0.9) and the Danger Deep are darker still.
+      - The screen darkens and desaturates, fog drifts around the player,
+        and the minimap header names the zone.
+      - `Lighting.AtmosphereOwner` lets a Cataclysm take over the sky.
+      - The 498 sea fog banks were rebuilt for the new ring.
+    - The world changes live in the Team Create place. Publish from Studio.
+    - Not tested: a real boss hit seen on screen (the server's damage and
+      its refusals were tested by firing `BossHit`; the rule is covered by
+      `tests/Boss.spec.luau`), and a full boat voyage on the new ring.
   - Phase 11 (launch) needs the owner:
     - Robux products and badges created on the Creator Dashboard.
     - The Discord invite link.
