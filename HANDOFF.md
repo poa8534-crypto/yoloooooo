@@ -755,11 +755,12 @@ playable before breadth; do not build features nobody asked for.
         part faces inland, so no boat could be launched at Home.
         `spawnClear` now tries straight out from the island first, then
         the dock's four sides.
-      - Open question for the owner: piranhas attack every boat more than
-        120 studs from a dock, day or night. A school keeps biting the
-        rider for 5 every 4-7 s. A solo driver died about 30 s out, and
-        the Slapper that swatted them is switched off. The trip was
-        finished with a ForceField on the test character.
+      - Piranhas (`916d3ff`, the owner's call): they now bite the boat's
+        hull, never the rider. Each bite takes `PIRANHA_HULL_DAMAGE` (2).
+        Before this, a solo driver was eaten about 30 s out. A boat's hull
+        is its `BoatConfig.maxHealth`, and the owner will add bigger boats
+        later. Tested: after 45 s at sea with 5 piranhas, the player was
+        at 100 health and the Rowboat's hull had gone from 350 to 294.
     - Not tested: a real boss hit seen on screen (the server's damage and
       its refusals were tested by firing `BossHit`; the rule is covered by
       `tests/Boss.spec.luau`), and a full boat voyage on the new ring.
