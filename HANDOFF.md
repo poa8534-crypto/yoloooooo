@@ -761,6 +761,22 @@ playable before breadth; do not build features nobody asked for.
         is its `BoatConfig.maxHealth`, and the owner will add bigger boats
         later. Tested: after 45 s at sea with 5 piranhas, the player was
         at 100 health and the Rowboat's hull had gone from 350 to 294.
+    - Home Island decor (`7b8ab96`), after the owner asked why East Town
+      was empty land. `tools/world/DecorateHome.luau` fills the open grass
+      into `Island.HomeDecor`, rebuilt on every run, with a 6,000-part
+      budget:
+      - choppable tree groves (130 trees), boulder clusters, bushes and
+        flower meadows;
+      - fenced gardens with benches, barrels and crates by the East Town
+        huts, and benches along its streets.
+      - Plot build areas plus 25 studs, prompts, NPCs, paths and water stay
+        clear. A check after the run found no decor within 20 studs of a
+        plot build area.
+      - Its tuning is the `CONFIG` table at the top.
+      - To run a tool like this: copy it into `src/shared` as an untracked
+        file, let Rojo sync it, and in Edit require a Clone of the synced
+        module (a second require of the same instance returns the cached
+        first result). Then delete the file.
     - Not tested: a real boss hit seen on screen (the server's damage and
       its refusals were tested by firing `BossHit`; the rule is covered by
       `tests/Boss.spec.luau`), and a full boat voyage on the new ring.
