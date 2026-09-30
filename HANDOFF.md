@@ -747,6 +747,19 @@ playable before breadth; do not build features nobody asked for.
       - `Lighting.AtmosphereOwner` lets a Cataclysm take over the sky.
       - The 498 sea fog banks were rebuilt for the new ring.
     - The world changes live in the Team Create place. Publish from Studio.
+    - Boat trip, Home to Frostfall, in a Caravel at 55 studs/s: 125 s,
+      going round the north of Home first. On the way the zone read Home
+      Waters, then the Shrouded Veil from 47 s, then the Frozen Reach from
+      108 s.
+      - Two fixes came from it (`8549c3e`, `4c11448`). Home's ferry dock
+        part faces inland, so no boat could be launched at Home.
+        `spawnClear` now tries straight out from the island first, then
+        the dock's four sides.
+      - Open question for the owner: piranhas attack every boat more than
+        120 studs from a dock, day or night. A school keeps biting the
+        rider for 5 every 4-7 s. A solo driver died about 30 s out, and
+        the Slapper that swatted them is switched off. The trip was
+        finished with a ForceField on the test character.
     - Not tested: a real boss hit seen on screen (the server's damage and
       its refusals were tested by firing `BossHit`; the rule is covered by
       `tests/Boss.spec.luau`), and a full boat voyage on the new ring.
