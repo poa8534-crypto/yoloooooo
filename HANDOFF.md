@@ -651,6 +651,37 @@ playable before breadth; do not build features nobody asked for.
     `ServerStorage.DevTools.SetData`, a Studio-only hook.
   - Not yet done: a 4-player Clients-and-Servers test.
   - `GAME_PROJECT_DIR` in `.env` still names neuromine.
+- **Fish a House overhaul (approved 2026-09-30)**, on branch
+  `feat/codex-pass-and-ui` in `C:\RobloxGames\island-haven`. Nothing is
+  pushed. Progress by phase:
+  - Phases 1–4 are done and play-tested: fixes, balance, Lucky Wheel,
+    mailbox, Flora's Garden and the seed shop menu. Commits `dbd6af8` to
+    `b2f0d41`.
+  - Phases 5–6 are in `c9bdf7c`:
+    - The islands are three times wider on a 4,800-stud ring, and the
+      volcano moved to (0, 0, 4800) with outer ash lands.
+    - Home has outer districts, and every island has fish sellers, rod
+      stalls, choppable trees, shark rings and new minimap scans.
+    - Six new side-quest givers were added. All 14 side quests now unlock
+      an earned-only title, rod skin or house paint (`reward.cosmetic`).
+    - OpenAI Codex did most of Phase 5's finish and the Phase 6 quests,
+      until its credit ran out. Claude added the unique rewards.
+    - The rebuild steps are in `docs/phase5-world.md`. The world lives in
+      the Studio place and must be saved there.
+  - Phase 7 is in `c48164a`. A main menu opens on every join: Play,
+    Settings, Codes, Discord and Feedback.
+    - The ⚙ Settings button beside the map covers music, sound effects,
+      effects detail and graphics. Choices save with the player.
+    - Codes are in `GameConfig.CODES`. The Discord link is
+      `GameConfig.DISCORD_INVITE`, still empty until the owner gives one.
+    - Feedback goes to the `Feedback_v1` DataStore plus a
+      `[Feedback]` line in the server log. One test message from
+      2026-09-30 is in there.
+  - Next are Phases 8–11: events (Blood Moon, leaping fish, server goal),
+    Chapter 3 (Worldline Rod, Kraken), simplify, then launch.
+  - On 2026-09-30, right-click stopped working everywhere in Studio.
+    Nothing was held down at the Windows level, and quitting Codex did not
+    fix it. A Studio restart after saving the place is the fix to try.
 - The owner drives sessions from a Mac as well as this PC: Claude Code Remote
   Control links the running session to claude.ai, and the dashboard is on the
   tailnet. Both need this PC awake with the Claude app open; Studio itself is
