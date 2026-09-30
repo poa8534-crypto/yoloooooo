@@ -689,8 +689,39 @@ playable before breadth; do not build features nobody asked for.
       together pays 300 🐚 and 10 💎.
     - Tested in Play: the goal paid, and the sharks went from 8 to 14 in a
       Blood Moon.
-  - Next are Phases 9–11: Chapter 3 (Worldline Rod, Kraken), simplify,
-    then launch.
+  - Phase 9 is in `51df642`:
+    - "The Worldline": Barnaby forges the five guardian rods into the
+      Worldline Rod. Story rewards can give a rod (`reward.rod`).
+    - "The Kraken": Old Pete sends the player to the Abyss at
+      (0, 0, −2600). The Kraken is a sixth guardian in `BossConfig`.
+    - The Abyss is built by `tools/world/Archipelago/Abyss.luau`.
+    - The Kraken's body is a mesh made with Studio's generator and kept in
+      `ServerStorage.CreatureModels.Kraken`. BossService places it when
+      the server starts: a copy saved in the world was dropped when a
+      playtest began.
+    - Tested in Play: the Chapter 3 offer, the rod forge, the Kraken quest
+      and its objective pin, and a cast routing to the Kraken. A full
+      fight could not be driven through the tools, because the hook
+      window is shorter than the tool round-trip.
+  - Phase 10 is in `859e336`:
+    - `GameConfig.FEATURES` switches off the Battle Pass, the Volcano
+      Heist and the Slapper. The heist altars were moved to
+      `ServerStorage.Backups.HeistAltars_hidden_2026-09-30`.
+    - While a new player is on the first steps (`FirstSteps.luau`), only
+      the guide leads.
+    - `DevTools.FreshStart` plays from a brand-new save. Always Snapshot
+      first and Restore after.
+  - Phase 11 (launch) needs the owner:
+    - Robux products and badges created on the Creator Dashboard.
+    - The Discord invite link.
+    - When to turn off `DEV_TELEPORT`, `DEV_BOSSES_AWAKE` and
+      `PREMIUM_RODS_FREE`.
+    - A 4-player test from Studio's Test tab (Clients and Servers). MCP
+      can only start solo Play.
+  - On 2026-09-30 the owner's save was changed by a test that was not
+    restored. It was put back with `SetAsync` from the version at 15:57
+    UTC, taken from the data store's version history. Always Restore
+    before stopping Play.
   - After every Play stop, the editor camera read as "Scriptable" even
     when the game's camera was normal. Its CameraType change signal never
     fired, so it is not game code. Reset it with
