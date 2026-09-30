@@ -677,8 +677,24 @@ playable before breadth; do not build features nobody asked for.
     - Feedback goes to the `Feedback_v1` DataStore plus a
       `[Feedback]` line in the server log. One test message from
       2026-09-30 is in there.
-  - Next are Phases 8–11: events (Blood Moon, leaping fish, server goal),
-    Chapter 3 (Worldline Rod, Kraken), simplify, then launch.
+  - The Phase 7 follow-up is in `8dee93f`. The menu now draws before the
+    island shows. Graphics levels come from `GameConfig.GRAPHICS_PRESETS`.
+  - Phase 8 is in `cec6918`:
+    - Event pickups can be claimed by every player, once each.
+    - Blood Moon doubles the night sharks and rare fish. Its banner no
+      longer promises teeth or income that no code paid.
+    - In the Rare Fish Run, golden fish leap from the rings, and a cast
+      into a ring gets 3x luck.
+    - Every event has a server goal: max(10, 6 × players) fish caught
+      together pays 300 🐚 and 10 💎.
+    - Tested in Play: the goal paid, and the sharks went from 8 to 14 in a
+      Blood Moon.
+  - Next are Phases 9–11: Chapter 3 (Worldline Rod, Kraken), simplify,
+    then launch.
+  - After every Play stop, the editor camera read as "Scriptable" even
+    when the game's camera was normal. Its CameraType change signal never
+    fired, so it is not game code. Reset it with
+    `workspace.CurrentCamera.CameraType = Enum.CameraType.Fixed` in Edit.
   - On 2026-09-30, right-click stopped working everywhere in Studio.
     Nothing was held down at the Windows level, and quitting Codex did not
     fix it. A Studio restart after saving the place is the fix to try.
