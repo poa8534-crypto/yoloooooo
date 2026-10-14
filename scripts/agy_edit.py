@@ -93,7 +93,7 @@ async def main() -> None:
     parser.add_argument("--files", nargs="+", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--feedback")
-    parser.add_argument("--models", default="gemini-3.1-pro-high,gemini-3.8-flash-high,gemini-3.7-flash-high")
+    parser.add_argument("--models", default="gemini-3.8-flash-high,gemini-3.8-flash-medium")
     args = parser.parse_args()
 
     repo = Path(args.repo)
