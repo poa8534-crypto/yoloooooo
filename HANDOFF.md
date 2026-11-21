@@ -204,6 +204,10 @@ playable before breadth; do not build features nobody asked for.
 - **The watchdog asks the dashboard first.** If anything answers on the
   dashboard's address, whichever launcher started it, the watchdog does
   nothing and logs nothing. Every line in `data/watchdog.log` is an outage.
+- **The watchdog runs with no window (2026-11-21).** The task starts
+  `wscript.exe scripts\watchdog_hidden.vbs`, which runs `watchdog.ps1` hidden.
+  Started as `powershell.exe` directly, it flashed a console every five
+  minutes. `scripts\install_watchdog.ps1` registers it this way.
 - **Systems are written several at once.** `ENGINEER_PARALLEL_SYSTEMS`
   (default 3) is how many; a system still starts only after every dependency
   it has in the build has finished AND landed, because its worktree is cut

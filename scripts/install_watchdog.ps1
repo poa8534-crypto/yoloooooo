@@ -12,13 +12,20 @@ $Watchdog = Join-Path $PSScriptRoot 'watchdog.ps1'
 $TaskName = 'Roblox Venture Agents Watchdog'
 $UserId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
-if (-not (Test-Path -LiteralPath $Watchdog)) {
-    throw "The watchdog script is missing: $Watchdog"
+$Launcher = Join-Path $PSScriptRoot 'watchdog_hidden.vbs'
+
+foreach ($Required in @($Watchdog, $Launcher)) {
+    if (-not (Test-Path -LiteralPath $Required)) {
+        throw "A watchdog script is missing: $Required"
+    }
 }
 
+# Started through wscript, not powershell.exe directly: a console program
+# launched by the scheduler flashes a window every run even with
+# -WindowStyle Hidden. watchdog_hidden.vbs explains the details.
 $Action = New-ScheduledTaskAction `
-    -Execute 'powershell.exe' `
-    -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Watchdog`"" `
+    -Execute 'wscript.exe' `
+    -Argument "//B //NoLogo `"$Launcher`"" `
     -WorkingDirectory $ProjectRoot
 
 # At logon, then every five minutes for as long as the session lasts. The
