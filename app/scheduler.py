@@ -13,7 +13,7 @@ from .connectors import ConnectorError, Connectors
 from .db import SessionLocal
 from .evidence import add_json_observation, create_fact, record_artifact
 from .models import Candidate, SystemState, TrackedVideo
-from .market_pulse import sample_market
+from .market_pulse import sample_market, snapshot_all_games
 
 
 async def snapshot_all(connectors: Connectors | None = None) -> dict[str, int]:
@@ -117,6 +117,16 @@ async def snapshot_all(connectors: Connectors | None = None) -> dict[str, int]:
             await connectors.close()
 
 
+async def refresh_success_backtests() -> None:
+    from . import success_model
+
+    try:
+        await asyncio.to_thread(success_model.refresh, SessionLocal)
+    except Exception as exc:  # a failed refresh keeps the previous result
+        import logging
+        logging.getLogger("venture-agents").warning("success backtest refresh failed: %s", exc)
+
+
 def start_scheduler() -> AsyncIOScheduler:
     settings = get_settings()
     scheduler = AsyncIOScheduler(timezone=settings.tz)
@@ -131,6 +141,20 @@ def start_scheduler() -> AsyncIOScheduler:
         misfire_grace_time=86_400,
     )
     if settings.roblox_charts_enabled:
+        # Creation date, visits and favourites for every game the census has
+        # seen. Daily is enough: `created` never changes and visits move
+        # slowly, and the census already measures player counts every half hour.
+        scheduler.add_job(
+            snapshot_all_games,
+            trigger="cron",
+            hour=settings.snapshot_hour,
+            minute=(settings.snapshot_minute + 15) % 60,
+            id="daily_game_metadata",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=86_400,
+        )
         # Far more often than the daily snapshot: a shelf called Up-and-Coming
         # turns over within a day, so sampling it daily would record the
         # survivors and miss the rise that made them interesting.
@@ -145,6 +169,19 @@ def start_scheduler() -> AsyncIOScheduler:
             # somebody is most likely to be looking at it.
             next_run_time=datetime.now(settings.tz),
             id="market_pulse_sample",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=settings.market_sample_minutes * 60,
+        )
+        # Recompute the held-out backtests a few minutes after each census, in
+        # a worker thread, so no dashboard request ever waits for one.
+        scheduler.add_job(
+            refresh_success_backtests,
+            trigger="interval",
+            minutes=settings.market_sample_minutes,
+            next_run_time=datetime.now(settings.tz) + timedelta(minutes=3),
+            id="success_backtest_refresh",
             replace_existing=True,
             coalesce=True,
             max_instances=1,

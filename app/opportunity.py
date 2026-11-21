@@ -12,7 +12,7 @@ What it does and does not claim:
 * It does **not** state a probability. `COMPONENTS` are normalised to 0..1 and
   weighted, which produces a comparable index, and an index is not a chance of
   anything. Turning this into P(CCU >= target) requires outcomes to calibrate
-  against, which is `app.calibration_outcomes`, and until that has enough data
+  against, which is `app.success_model` (held-out backtest), and until that shows skill
   every score here is marked `uncalibrated`.
 * It **refuses rather than guesses**. A component whose pillar abstained
   contributes nothing and is named in `missing`. A candidate with too few

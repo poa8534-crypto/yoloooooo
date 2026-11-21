@@ -225,25 +225,36 @@ Roblox experience, and tying it wrongly poisons everything above it.
 
 ---
 
-## 6. Phase 4 — P(CCU >= target) from outcomes actually watched
+## 6. Phase 4 — backtested probabilities (replaced the in-sample band table, 21 Nov 2026)
 
 ```
+  config/success_definitions.json   what "success" means, as data
+        |
+        v
   +--------------------------------------------------------------+
-  | app/calibration_outcomes.py                       [DET][GATE] |
-  |                                                               |
-  |  A game becomes an OUTCOME once watched for 24 hours.         |
-  |  The score is computed from the history BEFORE the window,    |
-  |  and the window is asked one question: did it reach target.   |
-  |  The future cannot leak into its own prediction.              |
-  |                                                               |
-  |  Under 30 completed windows it reports `insufficient_outcomes`|
-  |  and no number. A base rate over three games presented as a   |
-  |  probability is worse than nothing: a reader can discount an  |
-  |  absence, not a figure that looks computed.                   |
-  |                                                               |
-  |  The sampler produces outcomes on its own. This becomes       |
-  |  measurable by WAITING, not by changing anything here.        |
+  | app/success_model.py                              [DET][GATE] |
+  |  existing games: cutoffs every 24 h; features from rows at or |
+  |  before the cutoff, labels from the horizon after it. Windows |
+  |  the census did not watch are skipped, not counted as misses. |
+  |  Chronological split. Full model vs player-count-only model   |
+  |  vs base rate, held-out Brier, day-block bootstrap (95 %).    |
+  |  A probability is shown only for a model that won.            |
   +--------------------------------------------------------------+
+  | app/idea_rates.py                                 [DET][GATE] |
+  |  ideas: young games (first seen <= 30 days after creation),   |
+  |  rate per Roblox genre shrunk to the all-genre rate, Beta     |
+  |  interval, judged on games created after the split.           |
+  +--------------------------------------------------------------+
+  | app/coverage.py   names every census gap (PC asleep)          |
+  +--------------------------------------------------------------+
+
+  GET /api/success/definitions | /api/success/backtest
+      /api/success/game/{id}   | /api/success/idea?genre=..
+      /api/census/coverage
+  Backtests are recomputed in a worker thread after each census.
+  app/calibration_outcomes.py was retired: its score was mostly today's
+  player count and its outcome "still big tomorrow" (89.7 % for the rule
+  "already above target"). See docs/success-model-audit-2026-11-21.md.
 
   Separate, older: app/calibration.py  version calibration-v1
     logistic regression + isotonic calibration (scikit-learn) over

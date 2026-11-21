@@ -22,6 +22,7 @@ at the artifact it was read from.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 
@@ -30,7 +31,7 @@ from .db import SessionLocal
 from .evidence import record_artifact
 from sqlalchemy import select
 
-from .models import MarketSample, SystemState
+from .models import GameSnapshot, MarketSample, SystemState
 
 log = logging.getLogger("venture-agents")
 
@@ -88,14 +89,20 @@ def _rows(payload: dict) -> list[dict]:
     return rows
 
 
-async def _tracked_rows(connectors, universes: list[str]) -> list[dict]:
+async def _tracked_rows(connectors, universes: list[str]) -> tuple[list[dict], list[dict]]:
     """One row per researched game, shaped exactly like a census row.
 
     Two first-party calls per batch: the games endpoint for the live player
     count and genre, the votes endpoint for reception. A batch that fails is
     skipped rather than defaulted -- a missing count is not a count of zero.
+
+    Returns the rows and the payloads they were read from. The payloads are
+    stored as their own artifact: these rows used to cite the explore-sorts
+    payload, which never contained them, so nearly half the census could not
+    be traced back to the bytes it came from.
     """
     rows: list[dict] = []
+    payloads: list[dict] = []
     for start in range(0, len(universes), 50):
         batch = universes[start:start + 50]
         try:
@@ -103,13 +110,17 @@ async def _tracked_rows(connectors, universes: list[str]) -> list[dict]:
         except Exception:
             continue
         votes: dict[str, tuple[int, int]] = {}
+        votes_payload = None
         try:
             answer = await connectors.roblox_votes(batch)
+            votes_payload = answer.payload
             for entry in answer.payload.get("data") or []:
                 votes[str(entry.get("id"))] = (int(entry.get("upVotes") or 0),
                                                int(entry.get("downVotes") or 0))
         except Exception:
             votes = {}  # reception abstains; the player count is still worth having
+        payloads.append({"games_url": games.url, "games": games.payload,
+                         "votes": votes_payload})
         for item in games.payload.get("data") or []:
             universe = str(item.get("id") or "")
             if not universe or item.get("playing") is None:
@@ -123,7 +134,115 @@ async def _tracked_rows(connectors, universes: list[str]) -> list[dict]:
                              "genre": str(item.get("genre_l1") or ""), "sponsored": False})
             except (TypeError, ValueError):
                 continue
+    return rows, payloads
+
+
+def _parse_time(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return None if value is None else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def snapshot_rows(payload: dict) -> list[dict]:
+    """GameSnapshot fields from one `games/v1/games` payload.
+
+    A field Roblox did not send stays None. A game without an ID is dropped.
+    """
+    rows = []
+    for item in payload.get("data") or []:
+        universe = str(item.get("id") or "")
+        if not universe:
+            continue
+        rows.append({
+            "universe_id": universe, "name": str(item.get("name") or ""),
+            "created": _parse_time(item.get("created")),
+            "updated": _parse_time(item.get("updated")),
+            "playing": _int_or_none(item.get("playing")),
+            "visits": _int_or_none(item.get("visits")),
+            "favorites": _int_or_none(item.get("favoritedCount")),
+            "genre_l1": str(item.get("genre_l1") or ""),
+            "genre_l2": str(item.get("genre_l2") or ""),
+        })
     return rows
+
+
+async def snapshot_games(universes: list[str], connectors: Connectors | None = None,
+                         retrieval_method: str = "scheduled_game_snapshot",
+                         pause_seconds: float = 1.5,
+                         retry_delays: tuple[float, ...] = (15.0, 45.0)) -> dict:
+    """Record what the games endpoint says about each universe, batched by 50.
+
+    Each batch is stored as its own artifact and its rows point at it. A
+    failed batch is retried after `retry_delays`, then counted and skipped;
+    it never writes defaults. Batches are paced by `pause_seconds` because
+    Roblox answers 429 to a burst of 30 back-to-back requests.
+    """
+    own = connectors is None
+    if own:
+        from .quotas import QuotaMeter
+        connectors = Connectors(quota_meter=QuotaMeter(SessionLocal))
+    outcome = {"games": 0, "batches": 0, "failed_batches": 0}
+    try:
+        for start in range(0, len(universes), 50):
+            batch = list(dict.fromkeys(universes[start:start + 50]))
+            if start and pause_seconds:
+                await asyncio.sleep(pause_seconds)
+            result = None
+            for attempt, delay in enumerate((0.0, *retry_delays)):
+                if delay:
+                    await asyncio.sleep(delay)
+                try:
+                    result = await connectors.roblox_games(batch)
+                    break
+                except Exception as exc:
+                    log.warning("game snapshot batch failed (attempt %d): %s", attempt + 1, exc)
+            if result is None:
+                outcome["failed_batches"] += 1
+                continue
+            rows = snapshot_rows(result.payload)
+            with SessionLocal() as db:
+                artifact = record_artifact(
+                    db, url=result.url, retrieval_method=retrieval_method,
+                    content_type=result.content_type, payload=result.payload,
+                    source_tier="primary", owner="roblox.com")
+                captured = datetime.now(UTC)
+                for row in rows:
+                    db.add(GameSnapshot(artifact_id=artifact.id, captured_at=captured, **row))
+                db.commit()
+            outcome["games"] += len(rows)
+            outcome["batches"] += 1
+    finally:
+        if own:
+            await connectors.close()
+    return outcome
+
+
+def known_universes(db) -> list[str]:
+    """Every universe the census has ever recorded."""
+    return sorted(set(db.scalars(select(MarketSample.universe_id).distinct())))
+
+
+def universes_without_snapshot(db, universes) -> list[str]:
+    have = set(db.scalars(select(GameSnapshot.universe_id).distinct()))
+    return [universe for universe in dict.fromkeys(universes) if universe not in have]
+
+
+async def snapshot_all_games() -> dict:
+    """Daily: metadata for every universe the census knows. Scheduled job."""
+    with SessionLocal() as db:
+        universes = known_universes(db)
+    return await snapshot_games(universes)
 
 
 def _tracked_universes(db) -> list[str]:
@@ -148,7 +267,9 @@ async def sample_market(connectors: Connectors | None = None) -> dict:
         rows = _rows(result.payload)
         with SessionLocal() as db:
             tracked = _tracked_universes(db)
-        rows += await _tracked_rows(connectors, tracked)
+        tracked_rows, tracked_payloads = await _tracked_rows(connectors, tracked)
+        shelf_rows = rows
+        rows = shelf_rows + tracked_rows
         if not rows:
             outcome["error"] = "the sample contained no readable shelves"
         with SessionLocal() as db:
@@ -157,9 +278,21 @@ async def sample_market(connectors: Connectors | None = None) -> dict:
                 content_type=result.content_type, payload=result.payload,
                 source_tier="primary", owner="roblox.com",
             )
+            tracked_artifact = None
+            if tracked_rows:
+                tracked_artifact = record_artifact(
+                    db, url="https://games.roblox.com/v1/games",
+                    retrieval_method="scheduled_tracked_sample",
+                    content_type="application/json",
+                    payload={"batches": tracked_payloads},
+                    source_tier="primary", owner="roblox.com",
+                )
             captured = datetime.now(UTC)
-            for row in rows:
+            for row in shelf_rows:
                 db.add(MarketSample(artifact_id=artifact.id, captured_at=captured, **row))
+            for row in tracked_rows:
+                db.add(MarketSample(artifact_id=tracked_artifact.id, captured_at=captured,
+                                    **row))
             state = db.get(SystemState, STATE_KEY)
             value = {"captured_at": captured.isoformat(), "rows": len(rows),
                      "shelves": len({row["sort_id"] for row in rows}),
@@ -169,6 +302,18 @@ async def sample_market(connectors: Connectors | None = None) -> dict:
             else:
                 state.value_json, state.updated_at = value, captured
             db.commit()
+            # A game seen for the first time is dated now, not at the next
+            # daily snapshot: a breakout that lasts a day would otherwise never
+            # get a creation date.
+            fresh = universes_without_snapshot(db, [row["universe_id"] for row in rows])
+        if fresh:
+            try:
+                # No retries here: the daily job catches anything missed, and the
+                # census must not wait on metadata.
+                dated = await snapshot_games(fresh, connectors, retry_delays=())
+                outcome["new_game_snapshots"] = dated["games"]
+            except Exception as exc:  # metadata must never cost the census
+                log.warning("new-game snapshot failed: %s", exc)
         outcome |= {"rows": len(rows), "shelves": len({row["sort_id"] for row in rows}),
                     "universes": len({row["universe_id"] for row in rows})}
     except ConnectorError as exc:

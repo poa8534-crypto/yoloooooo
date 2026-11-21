@@ -1,0 +1,59 @@
+{
+  "version": "success-definitions-v1",
+  "about": "What counts as success, as data. Add an entry to add a question; the backtest and the dashboard pick it up without code changes. Change an entry's key whenever you change its meaning, so old results are never compared with new ones.",
+  "game": [
+    {
+      "key": "reach_5k_in_24h_from_below",
+      "label": "A game below 5,000 players now reaches 5,000 within 24 hours",
+      "kind": "threshold",
+      "threshold_ccu": 5000,
+      "horizon_hours": 24,
+      "require_below_at_cutoff": true
+    },
+    {
+      "key": "double_in_72h",
+      "label": "A game with at least 200 players now doubles its player count within 72 hours",
+      "kind": "ratio",
+      "ratio": 2.0,
+      "min_ccu_at_cutoff": 200,
+      "horizon_hours": 72,
+      "require_below_at_cutoff": false
+    },
+    {
+      "key": "hold_5k_after_7d",
+      "label": "A game at 5,000+ players now is still at 5,000+ seven days later",
+      "kind": "persist",
+      "threshold_ccu": 5000,
+      "horizon_hours": 168,
+      "require_below_at_cutoff": false
+    }
+  ],
+  "idea": [
+    {
+      "key": "young_reach_5k_in_30d",
+      "label": "A game first seen within 30 days of its creation reaches 5,000 players within 30 days of creation",
+      "threshold_ccu": 5000,
+      "horizon_days": 30,
+      "young_days": 30
+    },
+    {
+      "key": "young_reach_20k_in_30d",
+      "label": "A game first seen within 30 days of its creation reaches 20,000 players within 30 days of creation",
+      "threshold_ccu": 20000,
+      "horizon_days": 30,
+      "young_days": 30
+    }
+  ],
+  "evaluation": {
+    "cutoff_step_hours": 24,
+    "fresh_observation_hours": 1.0,
+    "min_window_coverage": 0.5,
+    "test_fraction": 0.3,
+    "min_train": 200,
+    "min_test": 100,
+    "min_test_positives": 10,
+    "reliability_bins": 10,
+    "idea_min_cohort": 30,
+    "idea_interval": 0.9
+  }
+}

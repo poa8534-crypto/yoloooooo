@@ -63,6 +63,7 @@ TABLES = (
     # Ahead of source_artifacts: every census row points at the artifact the
     # sample was read from.
     "market_samples",
+    "game_snapshots",
     "tracked_videos",
     "candidates",
     "research_runs",

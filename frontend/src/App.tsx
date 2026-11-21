@@ -941,8 +941,9 @@ type OppComponent = {
 }
 type OppCalibration = {
   universe_id: string; score: number | null; probability: number | null
-  state: string; reason: string; target_ccu?: number
-  band?: { from: number; to: number; games: number; reached: number; rate: number | null } | null
+  state?: string; reason: string; target_ccu?: number; label?: string
+  model?: string; held_out_brier?: number; held_out_auc?: number | null
+  band?: { from: number; to: number; games: number; reached: number } | null
 }
 type Opportunity = {
   version: string; universe_id: string; score: number | null; state: string
@@ -994,14 +995,16 @@ function OpportunityPanel({ universeId }: { universeId: string }) {
     </div>
 
     <div className="opportunity-probability">
-      <span>Probability of reaching {(probability?.target_ccu ?? 5000).toLocaleString()} CCU</span>
+      <span>{probability?.label ?? `Probability of reaching ${(probability?.target_ccu ?? 5000).toLocaleString()} CCU`}</span>
       {probability?.probability === null || probability?.probability === undefined
-        ? <><strong>not measured yet</strong>
+        ? <><strong>no backtested probability</strong>
             <small>{probability?.reason || reading.reason}</small></>
         : <><strong>{(probability.probability * 100).toFixed(0)}%</strong>
-            <small>{probability.band?.reached} of {probability.band?.games} observed games
-              scoring {probability.band?.from}–{probability.band?.to} reached it.
-              A base rate for games already on the platform, not a forecast.</small></>}
+            <small>Held-out check: of {probability.band?.games} later examples given
+              {' '}{Math.round((probability.band?.from ?? 0) * 100)}–{Math.round((probability.band?.to ?? 0) * 100)}%,
+              {' '}{probability.band?.reached} succeeded. Model: {probability.model}; held-out
+              Brier {probability.held_out_brier}. Conditional on the game being noticed;
+              not a forecast for a new game.</small></>}
     </div>
     <small className="opportunity-note">{reading.note}</small>
   </section>

@@ -33,11 +33,19 @@ from sqlalchemy import select
 from .market_pulse import TRACKED_SORT
 from .models import MarketSample
 
-PILLARS_VERSION = "pillars-v1"
+# v2: momentum and acceleration use only the latest unbroken stretch of
+# observations (see `recent_segment`), not the first row ever to the last.
+PILLARS_VERSION = "pillars-v2"
 
 # Below this, the interval is too short for a difference to be signal rather
 # than the market breathing. Two samples half an hour apart is the design.
 MIN_SPAN_SECONDS = 15 * 60
+# A gap longer than this between two observations breaks a rate. The sampler
+# runs every 30 minutes, so three hours is several missed samples in a row.
+MAX_GAP_SECONDS = 3 * 3600
+# Rates look back at most this far, so a long-watched game's momentum is about
+# now, not an average over its whole history.
+RATE_WINDOW_HOURS = 24
 
 MEASURED = "measured"
 INSUFFICIENT = "insufficient_evidence"
@@ -97,8 +105,39 @@ def demand(points: list[MarketSample]) -> Pillar:
                   observations=len(points), basis=[latest.id])
 
 
+def recent_segment(points: list[MarketSample]) -> list[MarketSample]:
+    """The latest unbroken stretch of observations, at most `RATE_WINDOW_HOURS` long.
+
+    The ledger has holes: the PC sleeps for 8 to 20 hours most nights. A rate
+    taken across a hole compares two different times of day and calls the
+    difference growth, and a rate from the first row ever to the last one
+    averages weeks into one number. So rates use only the most recent run of
+    observations with no gap longer than `MAX_GAP_SECONDS`.
+    """
+    if not points:
+        return []
+    segment = [points[-1]]
+    end = _utc(points[-1].captured_at)
+    for point in reversed(points[:-1]):
+        moment = _utc(point.captured_at)
+        if (_utc(segment[0].captured_at) - moment).total_seconds() > MAX_GAP_SECONDS:
+            break
+        if (end - moment).total_seconds() > RATE_WINDOW_HOURS * 3600:
+            break
+        segment.insert(0, point)
+    return segment
+
+
 def momentum(points: list[MarketSample]) -> Pillar:
-    """Players gained per hour between the first and last observation."""
+    """Players gained per hour across the latest unbroken stretch of observations."""
+    if len(points) >= 2:
+        segment = recent_segment(points)
+        if len(segment) < 2:
+            return _unmeasured("momentum", "Momentum", "players/hour",
+                               "the last observation follows a gap in the ledger; a "
+                               "rate across a gap compares different times of day",
+                               observations=len(points))
+        points = segment
     if len(points) < 2:
         return _unmeasured("momentum", "Momentum", "players/hour",
                            f"a rate needs two observations of this game; there "
@@ -120,6 +159,8 @@ def momentum(points: list[MarketSample]) -> Pillar:
 
 def acceleration(points: list[MarketSample]) -> Pillar:
     """Change in the rate itself: is the rise steepening or flattening?"""
+    if len(points) >= 3:
+        points = recent_segment(points)
     if len(points) < 3:
         return _unmeasured("acceleration", "Acceleration", "players/hour²",
                            f"a change in rate needs three observations; there are "

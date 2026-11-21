@@ -33,7 +33,7 @@ from .matching import DEFAULT_EMBEDDING_MODEL
 from . import pillars as pillars_module
 from . import scout_queue
 from . import opportunity as opportunity_module
-from . import calibration_outcomes
+from . import coverage, idea_rates, success_model
 from .research_budget import utc as budget_utc
 from .models import (
     AssociationRecord,
@@ -1167,8 +1167,80 @@ def opportunity_for(universe_id: str, db: Session = Depends(get_db)):
     outcomes to measure against.
     """
     ranked = opportunity_module.score(db, universe_id).as_dict()
-    ranked["calibration"] = calibration_outcomes.probability_for(db, universe_id)
+    # The probability now comes from the held-out backtest, not from the
+    # in-sample band table, whose score mostly restated today's player count.
+    ranked["calibration"] = _success_for_game(db, universe_id, None)
     return ranked
+
+
+def _success_for_game(db, universe_id: str, definition_key: str | None) -> dict:
+    try:
+        definition = success_model.game_definition(definition_key)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    census, results, models, stale = success_model.cached(db, SessionLocal)
+    evaluation = results.get(definition["key"])
+    if census is None or evaluation is None:
+        return {"universe_id": str(universe_id), "definition": definition["key"],
+                "label": definition["label"], "probability": None,
+                "target_ccu": definition.get("threshold_ccu"),
+                "state": "computing",
+                "reason": "the held-out backtest is being computed; try again in a minute"}
+    answer = success_model.predict(census, definition, success_model.evaluation_settings(),
+                                   universe_id, evaluation, models.get(definition["key"]))
+    answer["stale"] = stale
+    return answer
+
+
+@app.get("/api/success/definitions")
+def success_definitions():
+    """What counts as success, as configured in config/success_definitions.json."""
+    return success_model.definitions()
+
+
+@app.get("/api/success/backtest")
+def success_backtest(definition: str | None = None, db: Session = Depends(get_db)):
+    """Held-out accuracy of every game success definition, or of one."""
+    census, results, _models, stale = success_model.cached(db, SessionLocal)
+    if census is None:
+        return {"state": "computing", "computing": True,
+                "reason": "the first backtest is being computed; try again in a minute"}
+    if definition is not None:
+        if definition not in results:
+            raise HTTPException(status_code=404, detail=f"unknown definition: {definition}")
+        return results[definition] | {"stale": stale}
+    return {"version": success_model.MODEL_VERSION, "stale": stale,
+            "computing": success_model.computing(), "definitions": results}
+
+
+@app.get("/api/success/game/{universe_id}")
+def success_for_game(universe_id: str, definition: str | None = None,
+                     db: Session = Depends(get_db)):
+    """A backtested probability for one existing game, or the reason there is none."""
+    return _success_for_game(db, universe_id, definition)
+
+
+@app.get("/api/success/idea")
+def success_for_idea(genre: str, subgenre: str = "", definition: str | None = None,
+                     comparables: str = "", db: Session = Depends(get_db)):
+    """The observed, backtested base rate for games like an idea (by Roblox genre)."""
+    census, _results, _models, stale = success_model.cached(db, SessionLocal)
+    if census is None:
+        return {"state": "computing", "probability": None,
+                "reason": "the census is being loaded; try again in a minute"}
+    try:
+        answer = idea_rates.for_idea(
+            census, genre, subgenre, definition,
+            [item.strip() for item in comparables.split(",") if item.strip()])
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return answer | {"stale": stale}
+
+
+@app.get("/api/census/coverage")
+def census_coverage(days: int = 14, db: Session = Depends(get_db)):
+    """Where the census has holes, so nothing downstream mistakes one for a quiet market."""
+    return coverage.report(db, get_settings().market_sample_minutes, max(1, min(days, 90)))
 
 
 @app.get("/api/opportunity")
@@ -1184,10 +1256,14 @@ def opportunity_ranking(limit: int = 25, db: Session = Depends(get_db)):
 
 
 @app.get("/api/calibration/outcomes")
-def calibration_outcomes_view(target_ccu: int = calibration_outcomes.DEFAULT_TARGET_CCU,
-                              db: Session = Depends(get_db)):
-    """The observed rate of reaching a CCU target, per score band."""
-    return calibration_outcomes.calibrate(db, target_ccu).as_dict()
+def calibration_outcomes_view(db: Session = Depends(get_db)):
+    """Retired. The in-sample band table it served mostly restated today's
+    player count (a rule "already above target" scored 89.7 % on it). The
+    held-out backtest replaces it."""
+    return {"state": "retired", "replaced_by": "/api/success/backtest",
+            "reason": "in-sample and dominated by current player count; see "
+                      "docs/success-model-audit-2026-11-21.md",
+            "backtest": success_backtest(None, db)}
 
 
 @app.get("/api/market/game/{universe_id}")

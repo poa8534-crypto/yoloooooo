@@ -474,8 +474,35 @@ class MarketSample(Base):
     sponsored: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class GameSnapshot(Base):
+    """What Roblox's games endpoint said about one game at one moment.
+
+    The census carries a player count and votes but no creation date, so on
+    its own it cannot tell a two-week-old breakout from a five-year-old
+    incumbent -- which is the whole question when judging a new idea. These
+    rows carry `created`, `updated`, visits and favourites, first-party, each
+    pointing at the stored payload it was read from.
+
+    Fields Roblox did not report are None, never zero.
+    """
+
+    __tablename__ = "game_snapshots"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    artifact_id: Mapped[str] = mapped_column(ForeignKey("source_artifacts.id"), index=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    universe_id: Mapped[str] = mapped_column(String(40), index=True)
+    name: Mapped[str] = mapped_column(Text, default="")
+    created: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    playing: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    visits: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    favorites: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    genre_l1: Mapped[str] = mapped_column(String(80), default="", index=True)
+    genre_l2: Mapped[str] = mapped_column(String(80), default="")
+
+
 APPEND_ONLY = (
-    ResearchReport, AuditRecord, AuditActivityEvent, MarketSample,
+    ResearchReport, AuditRecord, AuditActivityEvent, MarketSample, GameSnapshot,
     SourceArtifact, Observation, Fact, Proposal, Inference,
     ScoreRecord, ConfidenceRecord, DecisionRecord, DecisionOverride,
     AssociationRecord, AssociationReview, AssociationOverride, MatcherVersion,
