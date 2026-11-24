@@ -55,7 +55,7 @@
   table('tbl2', ['Property', 'Value'], P.table2.map((r) => ({ cells: r })), ['', 'n']);
   table('tbl3', ['ID', 'Detector', 'DMGT concept', 'Flag rule (default)', 'Time'], P.table3.map((r) => ({ cells: [`<b>${r.id}</b>`, r.name, r.concept, r.rule, r.time] })));
 
-  table('tblFiles', ['Folder', 'What it is', 'Paper'], [['representative_N1000_f5_seed0/', 'N = 1,000 · 5% suspicious · seed 0', 'Table 2'], ['illustration_N220_f15_seed4/', 'N = 220 · 15% suspicious (the “you vs the algorithm” game)', 'Fig. 3'], ['exp0_baseline_30_instances/', 'N = 1,000 · 5% · seeds 0–29 (one combined nodes/edges file + instances.csv)', 'Experiment 0 · Table 4'], ['exp2_sizes/', 'N ∈ {300, 600, 1000, 2000, 4000} · 5% (1 each, 15 with --full)', 'Experiment 2 · Tables 6–7'], ['exp3_shares/', 'N = 1,000 · f ∈ {1, 2.5, 5, 10, 15}% (1 each, 15 with --full)', 'Experiment 3 · Table 8']].map((r) => ({ cells: ['<code>' + r[0] + '</code>', r[1], r[2]] })), ['', 'w', '']);
+  table('tblFiles', ['Folder', 'What it is', 'Paper', 'Files'], [['representative_N1000_f5_seed0', 'N = 1,000 · 5% suspicious · seed 0', 'Table 2', ['nodes.csv', 'edges.csv', 'meta.json']], ['illustration_N220_f15_seed4', 'N = 220 · 15% suspicious (the “you vs the algorithm” game)', 'Fig. 3', ['nodes.csv', 'edges.csv', 'meta.json']], ['exp0_baseline_30_instances', 'N = 1,000 · 5% · seeds 0–29 (combined files with an instance column)', 'Experiment 0 · Table 4', ['nodes.csv', 'edges.csv', 'instances.csv']], ['exp2_sizes', 'N ∈ {300, 600, 1000, 2000, 4000} · 5% (1 each; 15 with --full)', 'Experiment 2 · Tables 6–7', ['nodes.csv', 'edges.csv', 'instances.csv']], ['exp3_shares', 'N = 1,000 · f ∈ {1, 2.5, 5, 10, 15}% (1 each; 15 with --full)', 'Experiment 3 · Table 8', ['nodes.csv', 'edges.csv', 'instances.csv']]].map((r) => ({ cells: ['<code>' + r[0] + '/</code>', r[1], r[2], r[3].map((f) => '<a href="data/synthetic/' + r[0] + '/' + f + '" download>' + f + '</a>').join(' · ')] })), ['', 'w', '', 'w']);
   table('tblCardN', ['Column', 'Meaning'], [['instance', 'instance id (combined files hold many)'], ['account_id', 'integer vertex id'], ['type', 'truth: benign · fan_out_hub · fan_in_hub · cyclic_ring · isolated_cluster'], ['is_suspicious', '1 for the four fraud types'], ['group_id', 'H# hub · R# ring · C# cluster (blank if benign)'], ['out_degree · in_degree · degree', 'after collapsing parallel edges'], ['weak_component_size', 'size of its weakly connected component']].map((r) => ({ cells: ['<code>' + r[0] + '</code>', r[1]] })), ['', 'w']);
   table('tblCardE', ['Column', 'Meaning'], [['instance', 'instance id'], ['source', 'account that sends'], ['target', 'account that receives']].map((r) => ({ cells: ['<code>' + r[0] + '</code>', r[1]] })), ['', 'w']);
   (function t4() {
@@ -128,7 +128,7 @@
     let kind = 'fanout'; $('#archeTabs').innerHTML = kinds.map(([k, l]) => `<button data-k="${k}" class="${k === kind ? 'on' : ''}">${l}</button>`).join(''); const cv = $('#archeCanvas'), ctx = cv.getContext('2d'); let parts = [], L = null, t0 = 0;
     function setK(k) { kind = k; $$('#archeTabs button').forEach((b) => b.classList.toggle('on', b.dataset.k === k)); $('#archeText').textContent = text[k]; L = archeLayout(k); if (k === 'cluster') L.edges = L.edges.concat(L.edges.map(([a, b]) => [b, a]).filter((_, i) => i % 3 === 0)); parts = L.edges.map((e, i) => ({ e, t: (i * 0.37) % 1 })); }
     $$('#archeTabs button').forEach((b) => b.addEventListener('click', () => setK(b.dataset.k))); setK('fanout');
-    function frame(ts) { if (!document.body.contains(cv)) return; const r = cv.getBoundingClientRect(); if (r.bottom > 0 && r.top < innerHeight) { const dpr = Math.min(2, devicePixelRatio || 1), W = r.width, H = 240; if (cv.width !== W * dpr) { cv.width = W * dpr; cv.height = H * dpr; } ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H); const s = Math.min(W, H) / 100, ox = (W - 100 * s) / 2, oy = (H - 100 * s) / 2; const X = (p) => [ox + p[0] * s, oy + p[1] * s];
+    function frame(ts) { if (!document.body.contains(cv)) return; const r = cv.getBoundingClientRect(); if (r.bottom > 0 && r.top < innerHeight) { const dpr = Math.min(2, devicePixelRatio || 1), W = r.width, H = 240; if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); } ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H); const s = Math.min(W, H) / 100, ox = (W - 100 * s) / 2, oy = (H - 100 * s) / 2; const X = (p) => [ox + p[0] * s, oy + p[1] * s];
         const ink = css('--ink3'); ctx.lineWidth = 1.4; ctx.strokeStyle = ink; L.edges.forEach(([a, b]) => { const A = X(L.nodes[a]), B = X(L.nodes[b]); ctx.globalAlpha = 0.5; ctx.beginPath(); ctx.moveTo(...A); ctx.lineTo(...B); ctx.stroke(); }); ctx.globalAlpha = 1;
         const col = { fanout: css('--fanout'), fanin: css('--fanin'), ring: css('--ring'), cluster: css('--cluster') }[kind];
         parts.forEach((p) => { p.t = (p.t + 0.006) % 1; const A = X(L.nodes[p.e[0]]), B = X(L.nodes[p.e[1]]); const x = A[0] + (B[0] - A[0]) * p.t, y = A[1] + (B[1] - A[1]) * p.t; ctx.beginPath(); ctx.arc(x, y, 3.2, 0, 6.3); ctx.fillStyle = css('--accent'); ctx.fill(); });
@@ -142,7 +142,7 @@
     const cv = $('#heroCanvas'); const w = UI.getWorld({ N: 260, f: 0.12, seed: 3 }, true); window.__views = window.__views || [];
     let parts = [], rng = GE.makeRng(9); const edges = w.g.edges(); for (let i = 0; i < 90; i++) parts.push({ e: edges[Math.floor(rng() * edges.length)], t: rng(), v: 0.004 + rng() * 0.008 });
     const view = new GV.GraphView(cv, { static: true, onDraw: (ctx, vw) => { parts.forEach((p) => { const a = vw.toScreen(vw.pos[p.e[0]]), b = vw.toScreen(vw.pos[p.e[1]]); p.t += p.v; if (p.t > 1) { p.t = 0; p.e = edges[Math.floor(rng() * edges.length)]; } ctx.beginPath(); ctx.arc(a[0] + (b[0] - a[0]) * p.t, a[1] + (b[1] - a[1]) * p.t, 2.2, 0, 6.3); ctx.fillStyle = css('--accent'); ctx.fill(); }); } });
-    view.setGraph(w.g, w.pos); view.mode = 'truth'; window.__views.push(view); let last = 0, visible = true;
+    view.setGraph(w.g, w.pos); view.mode = 'truth'; let last = 0, visible = true;
     new IntersectionObserver((es) => (visible = es[0].isIntersecting)).observe(cv);
     const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
     (function loop(ts) { if (visible && !reduce && ts - last > 33) { view.draw(); last = ts; } requestAnimationFrame(loop); })(0);
@@ -152,10 +152,22 @@
   /* ---------- lazily mount the simulations ---------- */
   const S1 = window.SIMS1, S2 = window.SIMS2, S3 = window.SIMS3;
   const MOUNTS = { 'sim-toolkit': [S1.toolkit], 'sim-world': [S1.world, 'world'], 'sim-heavy': [S1.heavy], 'sim-cycles': [S2.cycles], 'sim-net': [S2.net], 'sim-bench': [S2.bench], 'sim-game': [S3.game], 'sim-data': [window.SIMDATA], 'sim-repro': [S3.repro], 'sim-tuning': [S3.tuning, 'tuning'], 'sim-scale': [S3.scale], 'sim-crowd': [S3.crowd], 'sim-whatif': [S3.whatif, 'whatif'] };
+  const MINH = { 'sim-toolkit': 560, 'sim-world': 720, 'sim-data': 1100, 'sim-heavy': 760, 'sim-cycles': 640, 'sim-net': 470, 'sim-bench': 980, 'sim-repro': 220, 'sim-game': 720, 'sim-tuning': 540, 'sim-scale': 640, 'sim-crowd': 470, 'sim-whatif': 600 };
   const queue = []; let mounting = false;
-  function pump() { if (mounting || !queue.length) return; mounting = true; const el = queue.shift(), id = el.id, [fn, lazy] = MOUNTS[id];
-    setTimeout(() => { try { fn(el); if (lazy && window.__lazy && window.__lazy[lazy]) window.__lazy[lazy](); el.style.minHeight = ''; } catch (err) { console.error('sim ' + id, err); el.innerHTML = '<div class="note warn">This simulation failed to start: ' + err.message + '</div>'; } mounting = false; setTimeout(pump, 60); }, 0); }
-  const mio = new IntersectionObserver((es) => es.forEach((e) => { if (!e.isIntersecting) return; mio.unobserve(e.target); queue.push(e.target); pump(); }), { rootMargin: '300px 0px' });
-  Object.keys(MOUNTS).forEach((id) => { const el = document.getElementById(id); if (el) { el.style.minHeight = '420px'; mio.observe(el); } });
+  function pump() {
+    if (mounting || !queue.length) return;
+    queue.sort((x, y) => Math.abs(x.getBoundingClientRect().top) - Math.abs(y.getBoundingClientRect().top));
+    const el = queue.shift(), id = el.id, [fn, lazy] = MOUNTS[id]; mounting = true; mio.unobserve(el);
+    setTimeout(async () => {
+      try { fn(el); if (lazy && window.__lazy && window.__lazy[lazy]) await window.__lazy[lazy](); el.style.minHeight = ''; }
+      catch (err) { console.error('sim ' + id, err); el.innerHTML = '<div class="note warn">This simulation failed to start: ' + err.message + '</div>'; el.style.minHeight = ''; }
+      mounting = false; setTimeout(pump, 30);
+    }, 0);
+  }
+  const mio = new IntersectionObserver((es) => es.forEach((e) => {
+    if (e.isIntersecting) { if (queue.indexOf(e.target) < 0) queue.push(e.target); pump(); }
+    else { const k = queue.indexOf(e.target); if (k >= 0) queue.splice(k, 1); }
+  }), { rootMargin: '300px 0px' });
+  Object.keys(MOUNTS).forEach((id) => { const el = document.getElementById(id); if (el) { el.style.minHeight = (MINH[id] || 420) + 'px'; mio.observe(el); } });
   window.addEventListener('themechange', () => setTimeout(() => window.dispatchEvent(new Event('resize')), 20));
 })();

@@ -26,7 +26,11 @@
   function legendHTML() { return `<div class="legend"><span><i style="background:var(--honest)"></i>Honest</span><span><i style="background:var(--fanout)"></i>Fan-out hub</span><span><i style="background:var(--fanin)"></i>Fan-in hub</span><span><i style="background:var(--ring)"></i>Ring</span><span><i style="background:var(--cluster)"></i>Cluster</span></div>`; }
   function liveBadge(txt) { return `<div><span class="pill live">● live · your browser</span> <span class="small">${txt || ''}</span></div>`; }
   function tipFor(view, e, html) { CH.showTip(html, e); }
-  root.UI = { $, f2, f3, css, getWorld, later, mean, sd, slider, legendHTML, liveBadge, TC };
+  // re-entrancy-safe async runner: the latest request always runs after the current one; errors never freeze the controls
+  function serial(fn, onError) { let busy = false, again = false; return async function () { if (busy) { again = true; return; } busy = true; try { do { again = false; await fn(); } while (again); } catch (e) { console.error(e); if (onError) onError(e); } finally { busy = false; } }; }
+  function errBox(mount) { return (e) => { const host = mount.querySelector('.sim') || mount; const n = document.createElement('div'); n.className = 'note warn'; n.textContent = 'Something went wrong: ' + (e && e.message ? e.message : e) + '. Try again, or reload the page.'; host.appendChild(n); }; }
+  function onTheme(fn) { window.addEventListener('themechange', () => { try { fn(); } catch (e) { /* ignore */ } }); }
+  root.UI = { serial, errBox, onTheme, $, f2, f3, css, getWorld, later, mean, sd, slider, legendHTML, liveBadge, TC };
 
   /* ======================================================================
      SIM 1 : Toolkit playground
@@ -45,7 +49,8 @@
         </div></div></div>`;
     const cv = $('#tkCanvas', mount), ctx = cv.getContext('2d'); let W = 600, H = 430, dpr = 1;
     let nodes = [], edges = [], mode = 'add', sel = -1, hov = -1, drag = null, subset = new Set(), hiCycle = null, linkFrom = -1, mouse = [0, 0];
-    function resize() { const r = cv.parentElement.getBoundingClientRect(); dpr = Math.min(2, devicePixelRatio || 1); W = r.width; H = 430; cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px'; draw(); }
+    function resize() { const oldW = W; dpr = Math.min(2, devicePixelRatio || 1); W = Math.max(200, cv.parentElement.clientWidth); H = 430; if (nodes.length && oldW && Math.abs(oldW - W) > 1) nodes = nodes.map((n) => [n[0] * W / oldW, n[1]]); cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.width = W + 'px'; cv.style.height = H + 'px'; draw(); }
+    cv.style.touchAction = 'none'; cv.parentElement.style.touchAction = 'none';
     new ResizeObserver(resize).observe(cv.parentElement);
     const hints = { add: 'Click empty space to add an account.', link: 'Press on one account and drag to another to add a transfer (an arrow).', move: 'Drag accounts to rearrange them.', subset: 'Click accounts to pick a set S — the induced subgraph G[S] is highlighted.', del: 'Click an account to remove it.' };
     const setMode = (m) => { mode = m; linkFrom = -1; mount.querySelectorAll('#tkMode button').forEach((b) => b.classList.toggle('on', b.dataset.m === m)); $('#tkHint', mount).textContent = hints[m]; };
@@ -60,7 +65,7 @@
         const h = P(.16, .25); for (let i = 0; i < 5; i++) { const l = P(.04 + i * .065, .08 + (i % 2) * .08); edges.push([h, l]); } // fan-out
         const k = P(.84, .22); for (let i = 0; i < 5; i++) { const l = P(.7 + i * .06, .06 + (i % 2) * .09); edges.push([l, k]); } // fan-in
         const r = [P(.12, .62), P(.26, .62), P(.26, .86), P(.12, .86)]; for (let i = 0; i < 4; i++) edges.push([r[i], r[(i + 1) % 4]]); edges.push([r[0], r[2]]); // ring + chord
-        const c = [P(.62, .62), P(.76, .58), P(.84, .72), P(.74, .88), P(.6, .8)]; for (let i = 0; i < 5; i++) for (let j = i + 1; j < 5; j++) edges.push(Math.random() < 2 ? [c[i], c[j]] : [c[j], c[i]]);
+        const c = [P(.62, .62), P(.76, .58), P(.84, .72), P(.74, .88), P(.6, .8)]; for (let i = 0; i < 5; i++) for (let j = i + 1; j < 5; j++) edges.push([c[i], c[j]]);
         const o = P(.46, .5), p = P(.52, .4); edges.push([o, p]); edges.push([r[1], o]);
       }
       update();
@@ -80,6 +85,7 @@
       if (mode === 'link' && linkFrom >= 0 && i >= 0 && i !== linkFrom && !hasEdge(linkFrom, i)) { edges.push([linkFrom, i]); update(); }
       linkFrom = -1; drag = null; draw(); });
     cv.addEventListener('pointerleave', () => { hov = -1; showSel(); draw(); });
+    cv.addEventListener('pointercancel', () => { drag = null; linkFrom = -1; draw(); });
     function arrow(a, b, col, w) {
       const ang = Math.atan2(b[1] - a[1], b[0] - a[0]), r = 11; const sx = a[0] + Math.cos(ang) * r, sy = a[1] + Math.sin(ang) * r, tx = b[0] - Math.cos(ang) * (r + 1), ty = b[1] - Math.sin(ang) * (r + 1);
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = w || 1.6; ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(tx, ty); ctx.stroke();
@@ -118,7 +124,7 @@
       draw(); showSel();
     }
     $('#tkTau', mount).addEventListener('input', update);
-    resize(); preset('demo');
+    UI.onTheme(draw); resize(); preset('demo');
   }
 
   /* ======================================================================
@@ -131,16 +137,16 @@
         ${slider('wN', 'Accounts N', 300, 2000, 100, 1000, (v) => (+v).toLocaleString())}${slider('wF', 'Fraud share f', 0.01, 0.15, 0.005, 0.05, (v) => (v * 100).toFixed(1) + '%')}${slider('wSeed', 'Random seed', 0, 99, 1, 0)}
         <div class="btns"><button class="btn primary" id="wGen">Generate</button><button class="btn" id="wRnd">🎲 New seed</button><button class="btn" id="wP0">Paper setup (N=1000, 5%, seed 0)</button></div>
         <div class="tablewrap"><table class="t" id="wStats"></table></div>
-        <div class="small" id="wHover">Hover an account for details.</div></div></div></div>`;
-    const view = new GV.GraphView($('#wCanvas', mount), { height: 520, onHover: (v, e) => { const d = $('#wHover', mount); if (v < 0) { d.textContent = 'Hover an account for details.'; CH.hideTip(); return; } const g = view.g; const o = g.out[v].size, i = g.inn[v].size; d.innerHTML = `<b>Account #${v}</b> — ${TYPE_NAMES[g.label[v]]}: sends to ${o}, receives from ${i}`; } });
+        <div class="small" id="wHover">Hover (or tap) an account for details.</div><div class="small" style="color:var(--ink3)">Same recipe as the paper, different random numbers: expect the same shape, not the same digits (e.g. the biggest hub and σ differ).</div></div></div></div>`;
+    const showAcct = (v) => { const d = $('#wHover', mount); if (v < 0) { d.textContent = 'Hover an account for details.'; CH.hideTip(); return; } const g = view.g; const o = g.out[v].size, i = g.inn[v].size; d.innerHTML = `<b>Account #${v}</b> — ${TYPE_NAMES[g.label[v]]}: sends to ${o}, receives from ${i}`; };
+    const view = new GV.GraphView($('#wCanvas', mount), { height: 520, onHover: showAcct, onSelect: showAcct });
     const wN = $('#wN', mount), wF = $('#wF', mount), wS = $('#wSeed', mount);
     [['wN', (v) => (+v).toLocaleString()], ['wF', (v) => (v * 100).toFixed(1) + '%'], ['wSeed', (v) => v]].forEach(([id, fm]) => $('#' + id, mount).addEventListener('input', (e) => { $('#' + id + 'V', mount).textContent = fm(+e.target.value); }));
-    let busy = false;
-    async function gen() {
-      if (busy) return; busy = true; $('#wBusy', mount).style.display = 'block'; await later(() => 0);
-      const opts = { N: +wN.value, f: +wF.value, seed: +wS.value }; const w = getWorld(opts, true); view.setGraph(w.g, w.pos); view.mode = 'truth'; view.draw();
-      stats(w.g); $('#wBusy', mount).style.display = 'none'; busy = false;
-    }
+    const gen = UI.serial(async () => {
+      const busyEl = $('#wBusy', mount); busyEl.style.display = 'block';
+      try { await later(() => 0); const opts = { N: +wN.value, f: +wF.value, seed: +wS.value }; const w = getWorld(opts, true); view.setGraph(w.g, w.pos); view.mode = 'truth'; view.draw(); stats(w.g); }
+      finally { busyEl.style.display = 'none'; }
+    }, UI.errBox(mount));
     function stats(g) {
       const st = GE.degreeStats(g), { comps } = GE.weakComponents(g), sc = GE.scc(g); let rec = 0; for (const [u, v] of g.edges()) if (g.hasEdge(v, u)) rec++;
       let cc = 0; for (let v = 0; v < g.n; v++) cc += GE.clustering(g, v).C; const m = g.meta; const giant = Math.max(...comps.map((c) => c.length)), big = Math.max(...sc.map((c) => c.length));
@@ -161,7 +167,7 @@
      ====================================================================== */
   function simHeavy(mount) {
     mount.innerHTML = `<div class="sim"><header><h3>Heavy tail vs the 3σ rule</h3><span class="tag">Sim 3 · Fig. 2 · finding (iv)</span></header>
-      <div class="grid3" style="align-items:end;margin-bottom:12px">${liveBadge('fresh graph every time you move a slider')}<span></span><span></span>
+      <div class="grid3" style="align-items:end;margin-bottom:12px">${liveBadge('a new network for each N (seed 3)')}<span></span><span></span>
         ${slider('hN', 'Accounts N', 300, 4000, 100, 1000, (v) => (+v).toLocaleString())}${slider('hTau', 'Threshold τ (σ above mean)', 1, 5, 0.5, 3, (v) => (+v).toFixed(1))}
         <div class="btns"><div class="seg" id="hRule"><button data-r="sigma" class="on">3σ rule (paper)</button><button data-r="rank">Top 3% by degree (beyond paper)</button></div><button class="btn primary" id="hDemo">▶ Guided demo: 300 → 4000</button></div></div>
       <div class="metrics" style="margin-bottom:12px"><div class="metric"><span>Cut-off μ+τσ</span><b id="hCut">–</b></div><div class="metric"><span>Biggest honest hub</span><b id="hMax">–</b></div><div class="metric"><span>Fraud hubs caught</span><b id="hRec">–</b></div><div class="metric"><span>F1 of D1</span><b id="hF1">–</b></div></div>
@@ -208,9 +214,16 @@
             CH.el('circle', { cx: X(o), cy: Y(ii), r: g.label[v] ? 3.4 : 2.2, fill: tc[g.label[v]], opacity: g.label[v] ? 1 : 0.55 }, svg); }
         } });
     }
-    mount.querySelectorAll('input').forEach((x) => x.addEventListener('input', run));
-    $('#hDemo', mount).addEventListener('click', async () => { const sl = $('#hN', mount); for (const n of [300, 600, 1000, 2000, 3000, 4000]) { sl.value = n; run(); await new Promise((r) => setTimeout(r, 1500)); } });
-    run();
+    let raf = 0; const soon = () => { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; run(); }); };
+    mount.querySelectorAll('input').forEach((x) => x.addEventListener('input', () => { $('#hNV', mount).textContent = (+$('#hN', mount).value).toLocaleString(); $('#hTauV', mount).textContent = (+$('#hTau', mount).value).toFixed(1); soon(); }));
+    let demoTok = 0; const demoBtn = $('#hDemo', mount);
+    demoBtn.addEventListener('click', async () => {
+      if (demoBtn.dataset.on === '1') { demoTok++; demoBtn.dataset.on = '0'; demoBtn.textContent = '▶ Guided demo: 300 → 4000'; return; }
+      const my = ++demoTok; demoBtn.dataset.on = '1'; demoBtn.textContent = '■ Stop demo'; const sl = $('#hN', mount);
+      for (const n of [300, 600, 1000, 2000, 3000, 4000]) { if (my !== demoTok) return; sl.value = n; run(); await new Promise((r) => setTimeout(r, 1600)); }
+      if (my === demoTok) { demoBtn.dataset.on = '0'; demoBtn.textContent = '▶ Guided demo: 300 → 4000'; }
+    });
+    UI.onTheme(run); run();
   }
 
   root.SIMS1 = { toolkit: simToolkit, world: simWorld, heavy: simHeavy };

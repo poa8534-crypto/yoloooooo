@@ -77,12 +77,18 @@
     this.g = null; this.pos = null; this.mode = 'truth'; this.flag = null; this.truth = null; this.hiNodes = new Set(); this.hiEdges = []; this.pathFocus = null;
     this.view = { s: 1, ox: 0, oy: 0 }; this.hover = -1; this.sel = -1; this.dimBenign = false; this.sizeByDeg = true; this.nodeColor = null; this.showEdges = true; this.badge = null; this.dimOthers = true; this.rs = 1;
     (root.__views = root.__views || []).push(this);
-    this._bind(); this._resize();
-    const ro = new ResizeObserver(() => { this._resize(); this.draw(); }); ro.observe(canvas.parentElement || canvas);
+    this._bind(); this._resize(); if (!this.opts.static) this._zoomButtons();
+    const ro = new ResizeObserver(() => {
+      const ow = this.W, oh = this.H; this._resize();
+      if (this.pos && ow && (Math.abs(ow - this.W) > 1 || Math.abs(oh - this.H) > 1)) {
+        if (this.base && Math.abs(this.view.s - this.base.s) < 1e-9) this.fit(); else { this.view.ox += (this.W - ow) / 2; this.view.oy += (this.H - oh) / 2; }
+      }
+      this.draw();
+    }); ro.observe(canvas.parentElement || canvas);
   }
   GraphView.prototype._resize = function () {
-    const dpr = Math.min(2, window.devicePixelRatio || 1); const r = (this.c.parentElement || this.c).getBoundingClientRect();
-    const w = Math.max(200, r.width), h = Math.max(200, this.opts.height || r.height);
+    const dpr = Math.min(2, window.devicePixelRatio || 1); const host = this.c.parentElement || this.c;
+    const w = Math.max(200, host.clientWidth), h = Math.max(200, this.opts.height || host.clientHeight);
     this.c.width = w * dpr; this.c.height = h * dpr; this.c.style.width = w + 'px'; this.c.style.height = h + 'px'; this.dpr = dpr; this.W = w; this.H = h;
   };
   GraphView.prototype.setGraph = function (g, pos) { this.g = g; this.pos = pos; this.truth = GE.truthSet(g); this.hover = -1; this.sel = -1; this.fit(); this.draw(); };
@@ -134,6 +140,8 @@
       if (this.hiNodes.has(v)) { ctx.lineWidth = 2.2; ctx.strokeStyle = light ? '#111' : '#fff'; ctx.stroke(); }
       ctx.globalAlpha = 1;
     }
+    if (this.opts.labels) { ctx.font = '700 10px ' + (getComputedStyle(document.documentElement).getPropertyValue('--mono') || 'monospace'); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#10141f';
+      for (let v = 0; v < g.n; v++) { const p = pos[v]; if (!p) continue; const sc = this.toScreen(p); if (this.radius(v) >= 7) ctx.fillText(v, sc[0], sc[1] + 0.5); } }
     if (this.sel >= 0) this._ring(this.sel, light ? '#111' : '#fff', 3); if (this.hover >= 0) this._ring(this.hover, '#facc15', 2);
     if (this.opts.onDraw) this.opts.onDraw(ctx, this);
   };
@@ -152,9 +160,15 @@
       else { const h = this.pick(p[0], p[1]); if (h !== this.hover) { this.hover = h; this.draw(); if (this.opts.onHover) this.opts.onHover(h, e, p); } } });
     c.addEventListener('pointerup', (e) => { if (drag && !moved) { const p = rel(e); const h = this.pick(p[0], p[1]); this.sel = h; this.draw(); if (this.opts.onSelect) this.opts.onSelect(h); } drag = null; });
     c.addEventListener('pointerleave', () => { if (this.hover >= 0) { this.hover = -1; this.draw(); if (this.opts.onHover) this.opts.onHover(-1); } });
-    c.addEventListener('wheel', (e) => { if (!(e.ctrlKey || e.metaKey)) { this._hint(); return; } /* plain scrolling must always reach the page */ e.preventDefault(); const p = rel(e); const f = Math.exp(-e.deltaY * 0.0015); const V = this.view; const ns = Math.max(0.2, Math.min(40, V.s * f)); const k = ns / V.s; V.ox = p[0] - (p[0] - V.ox) * k; V.oy = p[1] - (p[1] - V.oy) * k; V.s = ns; this.draw(); }, { passive: false });
+    c.addEventListener('wheel', (e) => { if (!(e.ctrlKey || e.metaKey)) { this._hint(); return; } /* plain scrolling must always reach the page */ e.preventDefault(); const p = rel(e); const f = Math.exp(-(e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY) * 0.0015); const V = this.view; const ns = Math.max(0.2, Math.min(40, V.s * f)); const k = ns / V.s; V.ox = p[0] - (p[0] - V.ox) * k; V.oy = p[1] - (p[1] - V.oy) * k; V.s = ns; this.draw(); }, { passive: false });
     c.addEventListener('dblclick', () => { this.fit(); this.draw(); });
     c.addEventListener('pointercancel', () => { drag = null; });
+  };
+  GraphView.prototype.zoomBy = function (k) { const V = this.view, cx = this.W / 2, cy = this.H / 2, ns = Math.max(0.2, Math.min(40, V.s * k)), r = ns / V.s; V.ox = cx - (cx - V.ox) * r; V.oy = cy - (cy - V.oy) * r; V.s = ns; this.draw(); };
+  GraphView.prototype._zoomButtons = function () {
+    const host = this.c.parentElement; if (!host) return; const box = document.createElement('div'); box.className = 'zoombtns';
+    [['+', 'Zoom in', () => this.zoomBy(1.4)], ['−', 'Zoom out', () => this.zoomBy(1 / 1.4)], ['⟲', 'Reset view', () => { this.fit(); this.draw(); }]].forEach(([t, label, fn]) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = t; b.title = label; b.setAttribute('aria-label', label); b.addEventListener('click', fn); box.appendChild(b); });
+    host.appendChild(box);
   };
   GraphView.prototype._hint = function () {
     const host = this.c.parentElement; if (!host) return; if (!this._hintEl) { const h = document.createElement('div'); h.className = 'zoomhint'; h.textContent = 'Ctrl/⌘ + scroll to zoom · double-click to reset'; host.appendChild(h); this._hintEl = h; }

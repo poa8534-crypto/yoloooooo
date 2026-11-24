@@ -73,6 +73,7 @@
     return svg;
   }
 
+  function heatBg(a) { const col = (getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#ffb454').trim(); let r = 255, g = 180, b = 84; const m = /^#([0-9a-f]{6})$/i.exec(col); if (m) { r = parseInt(m[1].slice(0, 2), 16); g = parseInt(m[1].slice(2, 4), 16); b = parseInt(m[1].slice(4), 16); } return `rgba(${r},${g},${b},${Math.max(0.1, Math.min(1, a)).toFixed(2)})`; }
   /* ---- heatmap. cfg: {el, rows:[], cols:[], v:[[]], fmt} (null cell = n/a) ---- */
   function heatmap(cfg) {
     const host = typeof cfg.el === 'string' ? document.querySelector(cfg.el) : cfg.el; host.innerHTML = '';
@@ -80,7 +81,7 @@
     const th = document.createElement('tr'); th.innerHTML = '<th></th>' + cfg.cols.map((c) => `<th>${c}</th>`).join(''); t.appendChild(th);
     cfg.rows.forEach((r, i) => { const tr = document.createElement('tr'); tr.innerHTML = `<th>${r}</th>` + cfg.v[i].map((v, j) => {
       if (v == null) return `<td class="na" title="not stated numerically in the paper">~0</td>`;
-      const a = Math.max(0.06, v); return `<td style="--a:${a}" data-t="${r} → ${cfg.cols[j]}: ${(v * 100).toFixed(0)}% of those accounts found">${v.toFixed(2)}</td>`; }).join(''); t.appendChild(tr); });
+      const a = Math.max(0.06, v); return `<td style="--a:${a};background:${heatBg(a)}" data-t="${r} → ${cfg.cols[j]}: ${(v * 100).toFixed(0)}% of those accounts found">${v.toFixed(2)}</td>`; }).join(''); t.appendChild(tr); });
     host.appendChild(t);
     t.querySelectorAll('td[data-t]').forEach((td) => { td.addEventListener('pointermove', (e) => showTip(td.dataset.t, e)); td.addEventListener('pointerleave', hideTip); });
   }
