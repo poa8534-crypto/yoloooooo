@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shapes of Suspicion — Graph Theory vs Blockchain Fraud</title>
+<meta name="description" content="Interactive companion to the DMGT paper: detecting suspicious blockchain accounts from the shape of the transaction graph alone.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="plain">
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top"><i></i>SHAPES OF SUSPICION</a>
+    <nav class="links" id="nav" aria-label="Sections"></nav>
+    <button class="tbtn" id="btnLevel" aria-pressed="false" title="Show equations, pseudocode, p-values (T)">Technical detail</button>
+    <button class="tbtn" id="btnTheme" title="Light / dark">Dark</button>
+    <button class="tbtn" id="btnPresent" aria-pressed="false" title="Presentation mode (P)">Present</button>
+  </div>
+  <div class="progress" id="progress"></div>
+</header>
+<div class="keyhint">← → sections · T detail · N notes · F fullscreen · P exit</div>
+<div id="notes" class="note paper" style="display:none;position:fixed;left:14px;right:14px;bottom:14px;z-index:60;font-size:1rem;margin:0"></div>
+
+<main id="top">
+
+<!-- ============ 0 HERO ============ -->
+<section class="hero" id="hero" data-title="Start" data-note="Opening: our project looks at how to spot suspicious accounts on a blockchain using only the shape of the transaction network, with no names, amounts or timestamps. We use ideas from Discrete Mathematics and Graph Theory: degree, subgraphs, cycles and connectivity.">
+  <div class="wrap">
+    <div class="reveal">
+      <div class="kicker"><b>DMGT</b> Experiential Learning Project · Topic 7 · Blockchain Technology (CSE-BCT)</div>
+      <h1>Spotting <em>suspicious accounts</em> in blockchain networks — by their shape alone.</h1>
+      <p class="lede">Every blockchain transfer is an arrow from one account to another. Fraud leaves a recognisable <b>shape</b> in that web of arrows. This site lets you build the web, hunt for the shapes, and test the paper's claims yourself.</p>
+      <div class="badges">
+        <span class="chip"><i style="background:var(--fanout)"></i>Fan-out hub</span>
+        <span class="chip"><i style="background:var(--fanin)"></i>Fan-in hub</span>
+        <span class="chip"><i style="background:var(--ring)"></i>Cyclic ring</span>
+        <span class="chip"><i style="background:var(--cluster)"></i>Isolated cluster</span>
+      </div>
+      <p style="margin-top:22px;display:flex;gap:10px;flex-wrap:wrap"><a class="cta" href="#problem">Start the story ↓</a><a class="cta ghost" href="#bench">Jump to the detective bench</a></p>
+      <p class="small" style="margin-top:18px"><b>Paper:</b> “Graph-Property-Based Detection of Suspicious Accounts in Blockchain Transaction Networks: Degree, Subgraph, Cycle and Connectivity Analysis”.<br>Team: [Team member 1–7 – USN] · [Department, Institution] · Course faculty: [Name] <span class="small">(fill in before presenting)</span></p>
+    </div>
+    <div class="stage reveal" id="heroStage"><canvas id="heroCanvas"></canvas>
+      <div style="position:absolute;left:14px;bottom:12px;right:14px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap" class="small"><span class="pill live">● live graph</span><span>Money moves along arrows · coloured dots are the planted fraud</span></div>
+    </div>
+  </div>
+  <div class="wrap" style="margin-top:36px"><div class="grid4 reveal">
+    <div class="card stat"><div class="big">0.619</div><span><b>F1</b> of the best single detector — short cycles (precision 0.915)</span></div>
+    <div class="card stat"><div class="big">0.938</div><span><b>Recall</b> of the Union rule: it finds 94% of planted fraud (best overall F1 = 0.655)</span></div>
+    <div class="card stat"><div class="big">0.285</div><span><b>F1</b> of the textbook “3σ” degree rule — it misses most hubs, and falls to 0 on big graphs</span></div>
+    <div class="card stat"><div class="big">0.3 s</div><span>for the whole five-detector pipeline on 4,000 accounts / 11,700 transfers</span></div>
+  </div></div>
+</section>
+
+<!-- ============ 1 PROBLEM ============ -->
+<section class="sec" id="problem" data-title="The problem" data-note="Think of every blockchain transfer as an arrow from sender to receiver. Four shapes look suspicious: a fan-out hub that scatters funds, a fan-in hub that collects funds, a ring where money goes round in a loop (wash trading), and a small tight group that is cut off from the rest. Each shape is caught by a different graph property, which is the main idea of the project.">
+<div class="wrap">
+  <div class="kicker"><b>01</b> Background · Slide 2</div>
+  <h2>Money flows form a graph</h2>
+  <div class="split">
+    <div>
+      <p class="lede">Public blockchains such as Bitcoin record every transfer between pseudonymous addresses. Treat each <b>account as a dot</b> and each <b>transfer as an arrow</b>, and the whole ledger becomes a directed graph.</p>
+      <p>Illicit activity tends to leave structural traces in that graph: a scam address collects small payments from many victims; a distributor scatters funds to many fresh addresses; groups pass funds round in closed loops to fake trading volume (<i>wash trading</i>). Spotting these matters to exchanges, auditors and regulators — and it is a compact, real problem for applying core DMGT ideas: vertex degree, subgraphs, paths, cycles and connectivity.</p>
+      <div class="note techonly">Formally: <b>vertices</b> = accounts, <b>edges</b> = transfers, G = (V, E), E ⊆ V×V, no self-loops. The task is <b>vertex classification from topology alone</b> — no amounts, timestamps or address metadata.</div>
+      <div class="note"><b>Why not a neural network?</b> Learned models (e.g. graph convolutional networks on the labelled Elliptic Bitcoin graph) are powerful but need labels and are hard to explain to an investigator. This project takes the complementary route: <b>simple detectors with a stated structural reason for every flag</b> — “sends to 47 accounts and receives from 1”.</div>
+    </div>
+    <div class="card"><h4>Try it: the four suspicious shapes</h4><p class="small">Click a shape to see it animate on a tiny network.</p><div class="seg" id="archeTabs"></div><canvas id="archeCanvas" style="width:100%;height:240px;margin-top:10px;border-radius:12px;background:var(--bg2);border:1px solid var(--line)"></canvas><p class="small" id="archeText" style="margin-top:8px"></p></div>
+  </div>
+  <div class="grid4" style="margin-top:22px">
+    <div class="card arche reveal" style="--c:var(--fanout)"><div class="mini" data-kind="fanout"></div><h4>T1 · Fan-out hub</h4><p class="small">One account scatters money to many fresh accounts. <br><b>Caught by:</b> degree imbalance.</p><p class="small techonly">Very large out-degree, 0–2 incoming; d ∈ {25…70}.</p></div>
+    <div class="card arche reveal" style="--c:var(--fanin)"><div class="mini" data-kind="fanin"></div><h4>T2 · Fan-in hub</h4><p class="small">Many accounts pour money into a single account. <br><b>Caught by:</b> degree imbalance.</p><p class="small techonly">Very large in-degree, 0–2 outgoing; mirror of T1.</p></div>
+    <div class="card arche reveal" style="--c:var(--ring)"><div class="mini" data-kind="ring"></div><h4>T3 · Cyclic ring</h4><p class="small">3 to 6 accounts pass money round a loop to fake activity. <br><b>Caught by:</b> short cycles.</p><p class="small techonly">Directed cycle + chords, only a few links to everyone else.</p></div>
+    <div class="card arche reveal" style="--c:var(--cluster)"><div class="mini" data-kind="cluster"></div><h4>T4 · Isolated dense cluster</h4><p class="small">5 to 8 tightly linked accounts cut off from everyone else. <br><b>Caught by:</b> clustering, small components, cycles.</p><p class="small techonly">Own weakly connected component, pair-link probability 0.8.</p></div>
+  </div>
+</div></section>
+
+<!-- ============ 2 TOOLKIT ============ -->
+<section class="sec" id="toolkit" data-title="Graph toolkit" data-note="Before the detectors, the vocabulary: degree, paths and cycles, subgraphs, components, clustering coefficient. Each detector is just one of these textbook quantities.">
+<div class="wrap">
+  <div class="kicker"><b>02</b> DMGT concepts · §2.1</div>
+  <h2>The graph-theory toolkit</h2>
+  <p class="lede">Every detector in this project is one textbook idea from Discrete Mathematics, turned into code. Play with them first — build a tiny network and watch the numbers update.</p>
+  <div class="grid3" style="margin:20px 0">
+    <div class="card"><h4>Degree</h4><p class="small">How many links an account has. <b>Out-degree</b> = money sent to others, <b>in-degree</b> = money received from others.</p><div class="eq techonly"><span>deg(v) = deg⁺(v) + deg⁻(v)</span></div><div class="eq techonly"><span>Σ deg⁺(v) = Σ deg⁻(v) = |E| &nbsp;⇒&nbsp; μ = 2|E| / |V|</span><span class="n">(1)</span></div><p class="small techonly">The <i>directed handshaking lemma</i>: every edge adds exactly one to one out-degree and one to one in-degree.</p></div>
+    <div class="card"><h4>Paths, cycles, components</h4><p class="small">A <b>cycle</b> is a loop of transfers that returns to its starting account. A <b>component</b> is a group of accounts connected to each other but cut off from everyone else.</p><p class="small techonly">A vertex lies on a directed cycle ⇔ its strongly connected component has ≥ 2 vertices. Weakly connected components = components of the underlying undirected graph Ĝ.</p></div>
+    <div class="card"><h4>Clustering &amp; subgraphs</h4><p class="small">How many of an account's neighbours are also linked to each other? 1 means “all my friends know each other”.</p><div class="eq techonly"><span>C(v) = 2 t(v) / [ k(v) (k(v) − 1) ]</span><span class="n">(2)</span></div><p class="small techonly">t(v) = edges among the neighbours of v (triangles through v), k(v) = degree in Ĝ. Induced subgraph G[S] keeps only the edges inside S.</p></div>
+  </div>
+  <div id="sim-toolkit"></div>
+  <div class="card techonly"><h4>z-score and the Cantelli guarantee</h4><div class="eq"><span>z(v) = ( deg(v) − μ ) / σ</span></div><p class="small">Cantelli's one-sided Chebyshev inequality says at most a fraction <b>1/(1+τ²)</b> of vertices can have z ≥ τ, <i>whatever the distribution</i>. At τ = 3 that is at most 10%. It is a ceiling, not a typical value — on heavy-tailed data far fewer accounts cross 3σ, which is exactly the problem we meet in §6.</p></div>
+</div></section>
+
+<!-- ============ 3 QUESTION ============ -->
+<section class="sec" id="question" data-title="Question & aims" data-note="The research problem: given only topology, which structural properties best identify suspicious accounts, and how do they behave as thresholds, graph size and fraud share change?">
+<div class="wrap">
+  <div class="kicker"><b>03</b> Research problem · §1.2–1.3, §2.2</div>
+  <h2>The question we asked</h2>
+  <div class="card" style="border-left:4px solid var(--accent);margin-bottom:18px"><p class="lede" style="margin:0"><b>Given only the shape of a directed transaction graph, which structural properties best identify suspicious accounts — and how do those properties behave as thresholds, graph size and the share of suspicious accounts change?</b></p></div>
+  <div class="grid3">
+    <div class="card"><h4>① Model</h4><p class="small">Model a transaction network as a directed graph and define four archetypes of suspicious behaviour.</p></div>
+    <div class="card"><h4>② Design</h4><p class="small">Design five topology-only detectors from degree, clustering, cycle and connectivity properties, plus two rules to combine them.</p></div>
+    <div class="card"><h4>③ Compare</h4><p class="small">Compare them with precision, recall, F1 and AUROC against ground truth.</p></div>
+    <div class="card"><h4>④ Experiment</h4><p class="small">Run three controlled experiments: sensitivity to parameters, effect of graph size, effect of the proportion of fraud.</p></div>
+    <div class="card"><h4>⑤ Explain</h4><p class="small">Find which structural signal catches which behaviour, and where each signal fails.</p></div>
+    <div class="card" style="border-style:dashed"><h4>Ground rules (assumptions)</h4><ul class="small" style="margin:0;padding-left:18px"><li>Only topology is used.</li><li>A static snapshot; repeated transfers collapse into one edge.</li><li>One account = one vertex.</li><li>Ground truth is exact because we plant it.</li><li>Default parameters fixed in advance.</li></ul></div>
+  </div>
+  <h3 style="margin-top:34px">Where this fits in related work</h3>
+  <div class="grid3">
+    <div class="card"><h4>Surveys</h4><p class="small">Anomaly detection is broad [5]; graph-based methods are organised by whether they score vertices, edges, subgraphs or whole graphs [6]. We score <b>vertices</b>.</p></div>
+    <div class="card"><h4>Learned models</h4><p class="small">Graph convolutional networks on the labelled Elliptic Bitcoin graph [7] work well but need labels and are opaque.</p></div>
+    <div class="card" style="border-color:var(--accent)"><h4>Our route</h4><p class="small">Simple, <b>explainable</b> detectors defined directly by DMGT properties — each flag comes with a stated structural reason, and each detector can be analysed mathematically.</p></div>
+  </div>
+</div></section>
+
+<!-- ============ 4 METHOD ============ -->
+<section class="sec" id="method" data-title="The method" data-note="The pipeline: build a directed graph from the transactions, compute structural properties, run five simple detectors, then combine them. Union flags an account if any detector fires, which maximises recall. Vote at least 2 needs two detectors to agree, which favours precision. Everything is scored against known ground truth. Every flag has a plain reason, such as 'sends to 47 accounts and receives from 1'.">
+<div class="wrap">
+  <div class="kicker"><b>04</b> Methodology · §2.4 · Slide 3</div>
+  <h2>How the method works</h2>
+  <div class="card" style="margin-bottom:20px"><div id="pipeline" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:center"></div><p class="small" style="text-align:center;margin:10px 0 0">Click a stage to jump to it. Every flag ends with a plain-language reason.</p></div>
+  <div class="grid3" id="detCards"></div>
+  <div class="grid2" style="margin-top:20px">
+    <div class="card"><h4>Two ways to combine the five detectors</h4><p><b>Union</b> — flag an account if <i>any</i> detector fires. Maximises recall: you catch almost everything, at the price of false alarms.</p><p style="margin:0"><b>Vote ≥ 2</b> — flag only if <i>two or more</i> detectors agree. Favours precision: fewer false alarms, but you miss more.</p><div class="eq techonly"><span>votes(v) = Σᵢ₌₁⁵ 𝟙[ v ∈ Sᵢ ]</span><span class="n">(5)</span></div></div>
+    <div class="card techonly"><h4>Parameters (defaults, fixed in advance)</h4><div class="small"><b>D1</b> τ = 3 · <b>D2</b> d<sub>min</sub> = 10, β* = 0.9 · <b>D3</b> k ≥ 3, c* = 0.5 · <b>D4</b> L = 5, q = 95 · <b>D5</b> 5 ≤ |C| ≤ 15.<br>Exception: q = 95 was chosen after a small pilot on seeds 1–3 (which overlap the evaluation seeds) because q = 100 was clearly worse — see §12.</div></div>
+  </div>
+  <div class="tablewrap techonly" style="margin-top:20px"><table class="t" id="tbl3"></table></div>
+  <p class="small techonly">Table 3 — detectors, default parameters and time complexity (Δq = maximum degree in G<sub>q</sub>).</p>
+  <h3 style="margin-top:34px">Look inside the cycle detector (D4)</h3>
+  <p class="lede">D4 is the best single detector. Here it is, step by step, on a real neighbourhood: a reverse breadth-first search measures how far every account is from the start, then a depth-first search walks forward and <b>abandons any path that can no longer loop back in time</b>.</p>
+  <div id="sim-cycles"></div>
+  <pre class="algo techonly" id="algoText"></pre>
+</div></section>
+
+<!-- ============ 5 WORLD ============ -->
+<section class="sec" id="world" data-title="Test data" data-note="Real blockchains do not come with exact labels, so we generate synthetic graphs where we plant the suspicious accounts ourselves. The honest accounts form a scale-free network, like real ones, with big exchange-like hubs. The main example has 1,000 accounts and 2,750 transactions; we also test sizes from 300 to 4,000 accounts. Remember this is synthetic data, so real-data testing is future work.">
+<div class="wrap">
+  <div class="kicker"><b>05</b> Dataset · §2.3 · Slide 4</div>
+  <h2>A test world with known answers</h2>
+  <p class="lede">Real blockchains don't come with exact fraud labels. So we <b>build the world ourselves</b>: an honest network with big exchange-like hubs, then we secretly plant the four kinds of fraud. Now every detector can be graded against the truth.</p>
+  <div class="grid4" style="margin:18px 0"><div class="card stat"><div class="big" style="font-size:2.4rem">1,000</div><span>accounts per graph</span></div><div class="card stat"><div class="big" style="font-size:2.4rem">2,750</div><span>transactions</span></div><div class="card stat"><div class="big" style="font-size:2.4rem">50 (5%)</div><span>suspicious accounts</span></div><div class="card stat"><div class="big" style="font-size:2.4rem">30</div><span>random graphs averaged</span></div></div>
+  <div id="sim-world"></div>
+  <div class="grid2" style="margin-top:20px">
+    <div class="card"><h4>How the world is built (Table 1)</h4><div class="tablewrap"><table class="t" id="tbl1"></table></div></div>
+    <div class="card"><h4>Paper's example graph (Table 2, seed 0)</h4><div class="tablewrap"><table class="t" id="tbl2"></table></div><p class="small" style="margin-top:10px">Compare with the live statistics in the builder above: same recipe, different random numbers, so the figures are close but not identical.</p></div>
+  </div>
+  <div class="note warn"><b>Generator details we had to choose ourselves.</b> Table 1 does not fix the direction of every edge. In this browser port: edges between a ring and honest accounts and inside benign small components get a random direction; planted hubs attach to uniformly random backbone accounts; mean-field preferential attachment follows NetworkX's <code>scale_free_graph</code>.</div>
+</div></section>
+
+<!-- ============ 6 DEGREE ============ -->
+<section class="sec" id="degree" data-title="Why degree fails" data-note="Left chart: how many accounts have at least a given number of links. Honest accounts are mostly small, but a few are huge. Those huge honest accounts inflate the standard deviation, so the 3-sigma line lands at about 60, above most of the planted hubs. Right chart: planted hubs sit along the axes because they only send or only receive, which is the signal the imbalance detector uses, but some honest hubs sit there too.">
+<div class="wrap">
+  <div class="kicker"><b>06</b> The hard part · Fig. 2 · Slide 5</div>
+  <h2>Why degree alone fails</h2>
+  <p class="lede">The obvious rule — “flag accounts with far more links than average” — sounds right. On real-looking data it fails, because <b>honest exchange-like hubs exist</b>. They are so big they stretch the “average”, and the fraud hubs hide beneath the cut-off.</p>
+  <div id="sim-heavy"></div>
+  <div class="grid3" style="margin-top:6px">
+    <div class="card"><h4>Heavy tail</h4><p class="small">Paper's example: busiest honest account has degree <b class="num">471</b>, median is <b class="num">3</b>, σ = 18.3 is five times the median.</p></div>
+    <div class="card"><h4>Cut-off lands too high</h4><p class="small">μ + 3σ ≈ <b class="num">60</b> sits above most planted hubs (degree 25–70). Mean cut-off: ≈ 45, 56, 85 at N = 300, 1000, 4000.</p></div>
+    <div class="card"><h4>Honest hubs look like fraud</h4><p class="small">Planted hubs sit on the axes (only send / only receive) — but so do some honest hubs. Degree alone can't tell them apart.</p></div>
+  </div>
+  <div class="grid2" style="margin-top:18px"><figure class="fig card"><img src="img/af9982a45fb8020368289c007f03115fad1a7bd8.png" alt="Paper Fig. 2" loading="lazy"><figcaption><span class="pill paper">▣ paper</span> Fig. 2 — degree structure of the representative instance. (a) complementary cumulative degree distribution, dashed line μ + 3σ ≈ 60; (b) in- vs out-degree on log axes.</figcaption></figure>
+  <figure class="fig card"><img src="img/6ad601392d37db12895eec6638412137f024a255.png" alt="Paper Fig. 1" loading="lazy"><figcaption><span class="pill paper">▣ paper</span> Fig. 1 — overall workflow of the detection framework.</figcaption></figure></div>
+</div></section>
+
+<!-- ============ 7 MEASURE ============ -->
+<section class="sec" id="measure" data-title="Measuring success" data-note="Precision means: of the accounts we flagged, how many were really suspicious. Recall means: of all suspicious accounts, how many we caught. F1 balances both.">
+<div class="wrap">
+  <div class="kicker"><b>07</b> Performance measures · §2.6</div>
+  <h2>How do we measure “good”?</h2>
+  <p class="lede">Three questions: <b>Of the accounts I flagged, how many were really guilty?</b> (precision) · <b>Of all the guilty accounts, how many did I catch?</b> (recall) · <b>Can I have both?</b> (F1). Throw the net yourself.</p>
+  <div id="sim-net"></div>
+  <div class="grid2" style="margin-top:16px">
+    <div class="card techonly"><div class="eq"><span>P = TP / (TP + FP)</span><span class="n">(6)</span></div><div class="eq"><span>R = TP / (TP + FN)</span><span class="n">(7)</span></div><div class="eq"><span>F1 = 2PR / (P + R)</span><span class="n">(8)</span></div></div>
+    <div class="card"><h4>Two more yardsticks</h4><p class="small"><b>AUROC</b> — how well a score <i>ranks</i> guilty above innocent accounts, independent of any cut-off (reported for D1–D3, which give scores).</p><p class="small" style="margin:0"><b>Random baseline</b> — a detector flagging accounts at random gets precision equal to the fraud share: <b class="num">0.05</b>. Every rule must beat that.</p></div>
+  </div>
+</div></section>
+
+<!-- ============ 8 EXP 0 ============ -->
+<section class="sec" id="bench" data-title="Who wins?" data-note="Precision means: of the accounts we flagged, how many were really suspicious. Recall means: of all suspicious accounts, how many we caught. Short cycles is the best single detector. The Union of all five catches almost everything but half its flags are false alarms. Requiring two votes flips this. The degree z-score ranks well (AUROC 0.887) but its fixed 3-sigma threshold is poor. Left: the darker the square, the more of that anomaly type the detector found. No single row is dark across the whole width.">
+<div class="wrap">
+  <div class="kicker"><b>08</b> Experiment 0 · §3.1 · Slides 6–7</div>
+  <h2>Which detector wins?</h2>
+  <p class="lede">Switch detectors on and off on a live network. Colours show what each one finds — and what it wrongly accuses. Hover any account to see <b>why</b> it was flagged.</p>
+  <div id="sim-bench"></div>
+  <h3 style="margin-top:40px">What the paper measured <span class="pill paper">▣ paper · Table 4 · 30 instances</span></h3>
+  <div class="split">
+    <div class="card"><div class="seg" id="t4tabs" style="margin-bottom:10px"></div><div id="ch-table4"></div></div>
+    <div class="card"><h4>The full table</h4><div class="tablewrap"><table class="t" id="tbl4"></table></div><p class="small" style="margin-top:8px">mean ± sd over 30 random instances · N = 1,000 · f = 5%. Best value in each column in green.</p></div>
+  </div>
+  <div id="sim-repro" style="margin-top:20px"></div>
+  <h3 style="margin-top:34px">Every detector is a specialist <span class="pill paper">▣ paper · Fig. 4</span></h3>
+  <div class="split"><div class="card"><div id="ch-heat"></div><p class="small" style="margin-top:8px">Recall of each rule on each anomaly type. Values are those stated in the paper's text; “~0” = “almost none”, not given numerically. No single row is strong across the whole width.</p></div>
+    <figure class="fig card"><img src="img/102d42db5733c7cbacfcb0010158022528c1893a.png" alt="Paper Fig. 4" loading="lazy"><figcaption><span class="pill paper">▣ paper</span> Fig. 4 — recall of each rule on each anomaly type (original figure).</figcaption></figure></div>
+  <h3 style="margin-top:34px">Four findings</h3>
+  <div class="grid2">
+    <div class="card"><h4>(i) Detectors are specialised</h4><p class="small">Degree imbalance recovers <b>89%</b> of both hub types but no rings or clusters. Short-cycle search recovers <b>98%</b> of rings and <b>100%</b> of clusters but no hubs. Clustering and small-components find clusters (0.97 / 1.00) but almost no rings, since rings hang off the network and have sparse neighbourhoods.</p></div>
+    <div class="card"><h4>(ii) Short cycles is the best single detector</h4><p class="small">F1 = <b>0.619</b>, highest precision (<b>0.915</b>), recall 0.470 — close to the ≈ 0.52 maximum for a detector that only sees rings and clusters (26 of 50 anomalous accounts in the example graph).</p><div id="pairs" class="techonly"></div></div>
+    <div class="card"><h4>(iii) Combining trades precision for recall</h4><p class="small"><b>Union</b> finds 93.8% of anomalies (≈ 47 of 50), best F1 = <b>0.655</b>, but half its flags (≈ 47) are honest accounts — mostly from clustering (~20), small components (~13) and imbalance (~10). <b>Vote ≥ 2</b> reverses it: precision 0.867, recall 0.391. Both are far above the 0.05 random baseline.</p></div>
+    <div class="card"><h4>(iv) A high AUROC ≠ a good threshold</h4><p class="small">Degree z-score has the best AUROC (<b>0.887</b>) — it <i>ranks</i> fraud well — yet at τ = 3 its recall is only <b>0.187</b> and F1 <b>0.285</b>. Benign hubs inflate σ so much that most planted hubs (degree 25–70) fall below μ + 3σ ≈ 60.</p></div>
+  </div>
+  <h3 style="margin-top:40px">Your turn: can you beat the algorithm? <span class="pill live">● live</span></h3>
+  <p class="lede">The same small instance as the paper's Fig. 3. You see only the shape — exactly the information the detectors get. Flag the 33 accounts you think are fraudulent, then compare yourself with the Union rule.</p>
+  <div class="sim"><div id="sim-game"></div></div>
+  <figure class="fig card" style="max-width:820px"><img src="img/9656fcbb7f4f52a273e34ca526dbbe07cd16923f.png" alt="Paper Fig. 3" loading="lazy"><figcaption><span class="pill paper">▣ paper</span> Fig. 3 — small instance (N = 220, 15% anomalous). (a) planted anomaly types; (b) Union outcome: all 33 anomalies found, 20 honest accounts also flagged.</figcaption></figure>
+</div></section>
+
+<!-- ============ 9 EXP 1 ============ -->
+<section class="sec" id="tuning" data-title="Tuning" data-note="Each small chart changes one setting of one detector. Degree z-score is very sensitive: lowering the threshold helps a lot. For short cycles, removing the highest-degree accounts first is essential, otherwise cycles route through big hubs and precision collapses. Small components only work because honest components are small, a size gap assumption. Our defaults were chosen in advance and are close to best.">
+<div class="wrap">
+  <div class="kicker"><b>09</b> Experiment 1 · §3.2 · Slide 8</div>
+  <h2>Tuning the thresholds</h2>
+  <p class="lede">Every detector has knobs. Turn one at a time and watch precision, recall and F1 respond on real generated graphs. Your live run is drawn as lines; the values the paper actually states are marked with squares (▣).</p>
+  <div id="sim-tuning"></div>
+  <div class="grid3" style="margin-top:6px">
+    <div class="card"><h4>Fixed 3σ is fragile</h4><p class="small">D1 falls from F1 <b>0.586</b> at τ = 1 to <b>0.303</b> at τ = 3 and <b>0</b> at τ = 5.</p></div>
+    <div class="card"><h4>Hub exclusion matters</h4><p class="small">Short-cycle precision drops from <b>0.900</b> to <b>0.285</b> without it (q = 100); too aggressive (q = 80) and recall falls to 0.153.</p></div>
+    <div class="card"><h4>Defaults were sound</h4><p class="small">Apart from D1, defaults are within <b>0.02 F1</b> of the best setting found.</p></div>
+  </div>
+  <div class="grid2" style="margin-top:18px"><div class="card"><h4>Default vs best setting <span class="pill paper">▣ Table 5</span></h4><div class="tablewrap"><table class="t" id="tbl5"></table></div><p class="small" style="margin-top:8px">20 instances. “Best” is chosen on the same instances, so it is optimistic.</p></div>
+  <figure class="fig card"><img src="img/bd095de764e4a4dde1719bb6c195607be0a7f8c3.png" alt="Paper Fig. 5" loading="lazy"><figcaption><span class="pill paper">▣ paper</span> Fig. 5 — precision, recall and F1 as one parameter is varied (mean over 20 instances); dotted line = default.</figcaption></figure></div>
+  <div class="grid2" style="margin-top:18px">
+    <div class="card"><h4>D2: a plateau and a cliff</h4><p class="small">For β* ≤ 0.8 recall is flat at 0.52 (all hubs found); beyond 0.9 it collapses. A hub with two reverse edges has β = (d−2)/(d+2) — it reaches 0.9 only when d ≥ 38. At β* = 1 only perfect sources/sinks qualify: about one third of the hubs.</p></div>
+    <div class="card"><h4>D5 relies on a size gap</h4><p class="small">At s<sub>min</sub> = 6 precision is 1.000 but recall drops to 0.143: honest components in the generator have ≤ 5 accounts while planted clusters have 5–8. The detector is only as reliable as that assumption. D3 never gets above F1 0.26: only clusters have dense neighbourhoods, and low-degree honest accounts reach C ≥ 0.5 easily.</p></div>
+  </div>
+</div></section>
+
+<!-- ============ 10 EXP 2 ============ -->
+<section class="sec" id="scale" data-title="Bigger graphs" data-note="Left: as the graph grows, the fixed 3-sigma rule collapses to zero because big honest hubs push the cut-off above every planted hub. Short cycles stay steady. Right: run time grows roughly linearly with the number of edges; clustering is the slowest. The whole pipeline takes about 0.3 seconds at 4,000 accounts.">
+<div class="wrap">
+  <div class="kicker"><b>10</b> Experiment 2 · §3.3 · Slide 9</div>
+  <h2>Bigger graphs</h2>
+  <p class="lede">What happens when the network grows from 300 to 4,000 accounts? Hub degrees in a scale-free graph grow with size, so a fixed “3σ” rule drifts out of reach of the fraud hubs. Run the paper's size experiment in your browser.</p>
+  <div id="sim-scale"></div>
+  <h3 style="margin-top:34px">The paper's results <span class="pill paper">▣ Tables 6 &amp; 7</span></h3>
+  <div class="grid2"><div class="card"><h4>Mean F1 vs number of accounts</h4><div id="ch-t6"></div></div><div class="card"><h4>Run time vs number of accounts (ms)</h4><div id="ch-t7"></div><p class="small">Roughly linear in |E| except clustering (D3), whose cost grows with squared degrees: 18.5× slower vs 9.3× for D4 over an 11.7× increase in edges. Whole pipeline ≈ 0.32 s at N = 4,000. <i>Timings: one cloud CPU core, indicative only.</i></p></div></div>
+  <div class="grid3" style="margin-top:6px">
+    <div class="card"><h4>Cycles are the steadiest</h4><p class="small">D4 holds F1 between 0.611 and 0.625 for every N ≥ 600. Its 0.370 at N = 300 reflects instances with ≤ 1 ring and no cluster — too few positives.</p></div>
+    <div class="card"><h4>D1 degrades to zero</h4><p class="small">Largest honest degree ≈ 126, 365, 1,236 at N = 300, 1000, 4000. The cut-off passes 70 (largest planted hub) at N = 4000, so F1 = 0.</p></div>
+    <div class="card"><h4>D2 slowly loses precision</h4><p class="small">F1 falls from 0.755 (N = 300) to ≈ 0.54 for N ≥ 2000: bigger graphs hold more honest hubs resembling fan-in anomalies.</p></div>
+  </div>
+  <div class="grid2" style="margin-top:16px"><div class="card"><div class="tablewrap"><table class="t" id="tbl6"></table></div><p class="small" style="margin-top:6px">Table 6 — mean F1 vs N (15 instances each). D3/D5 have nothing to find at N = 300: a 15-account budget is too small to plant a cluster.</p></div><div class="card"><div class="tablewrap"><table class="t" id="tbl7"></table></div><p class="small" style="margin-top:6px">Table 7 — mean run time (ms) vs N.</p></div></div>
+  <figure class="fig card" style="margin-top:16px"><img src="img/c4129856d35ab02e089e7977fe482e1c394f3c5b.png" alt="Paper Fig. 6" loading="lazy"><figcaption><span class="pill paper">▣ paper</span> Fig. 6 — (a) F1 vs N at 5% anomalies; (b) F1 vs anomaly share at N = 1,000; (c) run time vs N (log–log).</figcaption></figure>
+</div></section>
+
+<!-- ============ 11 EXP 3 ============ -->
+<section class="sec" id="rare" data-title="Rarer fraud" data-note="Middle: F1 depends on how common fraud is. The Union rule keeps recall near 0.94, but when fraud is only 1 percent its precision is just 0.12, so detectors must be compared at the same prevalence.">
+<div class="wrap">
+  <div class="kicker"><b>11</b> Experiment 3 · §3.4 · Slide 9</div>
+  <h2>Rarer fraud, more false alarms</h2>
+  <p class="lede">The Union rule always catches about 94% of the fraud. But when fraud is rare, even a small error rate on the huge honest crowd produces <b>more false alarms than real catches</b>. Slide the fraud share and watch the crowd.</p>
+  <div id="sim-crowd"></div>
+  <h3 style="margin-top:34px">The paper's results <span class="pill paper">▣ Table 8</span></h3>
+  <div class="grid2"><div class="card"><h4>Mean F1 vs share of anomalous accounts</h4><div id="ch-t8"></div></div>
+  <div class="card"><div class="tablewrap"><table class="t" id="tbl8"></table></div>
+    <p class="small" style="margin-top:10px"><b>Union at 1%:</b> precision 0.123, ≈ 9.5 true hits vs ≈ 70 false alarms per instance → F1 0.217.<br><b>Union at 15%:</b> precision 0.812, ≈ 143 hits vs ≈ 34 false alarms → F1 0.875. Recall barely moves (0.94–0.95); the whole change is precision.</p></div></div>
+  <div class="grid2" style="margin-top:16px"><div class="card"><h4>D1 moves the opposite way</h4><p class="small">F1 falls from 0.298 to 0.131: with more planted hubs, the hubs inflate σ themselves and mask each other.</p></div><div class="card"><h4>Practical consequence</h4><p class="small">F1 values are only comparable at the same prevalence. A detector deployed on a network where fraud is rare will raise many more false alarms than true detections unless it is made more selective.</p></div></div>
+</div></section>
+
+<!-- ============ 12 LIMITS ============ -->
+<section class="sec" id="limits" data-title="Honest limits" data-note="Summary: graph properties give simple, explainable detectors. The main limit is that all data is synthetic, so the next step is testing on real labelled blockchain graphs and adding amounts and timestamps.">
+<div class="wrap">
+  <div class="kicker"><b>12</b> Discussion &amp; threats to validity · §3.5</div>
+  <h2>What this does <i>not</i> prove</h2>
+  <p class="lede">A good result is one you can interrogate. The paper is candid about its limits; so is this site.</p>
+  <div class="grid2">
+    <div class="card"><h4>1 · All data is synthetic</h4><p class="small">The anomalies were planted with the detectors' properties in mind, so D4's high recall on rings and D5's on clusters is partly <b>by construction</b>. The results show behaviour under controlled conditions — <b>not</b> accuracy on live Bitcoin or Ethereum.</p></div>
+    <div class="card"><h4>2 · The honest graph is almost acyclic</h4><p class="small">Its largest strongly connected component has 44 of 1,000 vertices, so short cycles are an unusually clean signal. Real ledgers have legitimate loops (exchange deposit/withdrawal flows, change addresses), so D4 would likely lose precision. <button class="btn" data-goto="#limitsim">See it happen ↓</button></p></div>
+    <div class="card"><h4>3 · Only topology</h4><p class="small">Amounts, timestamps and address metadata are ignored; repeated transfers collapse into one edge; no entity resolution.</p></div>
+    <div class="card"><h4>4 · Fixed global parameters</h4><p class="small">No adaptive or robust statistics. The generator itself has many design choices (Table 1) and results may shift if they are changed.</p></div>
+  </div>
+  <h3 style="margin-top:30px" id="limitsim">What-if: add legitimate loops <span class="pill live">● beyond the paper</span></h3>
+  <div id="sim-whatif"></div>
+  <h3 style="margin-top:34px">What a sceptic would ask</h3>
+  <div id="skeptics"></div>
+  <h3 style="margin-top:34px">Footnotes on the numbers †</h3>
+  <div class="card"><p class="small">The same setting (N = 1,000, f = 5%) appears in several tables from <i>different random instance sets</i>, so values differ slightly. Table 4 (30 instances) is used as the headline everywhere on this site.</p><div class="tablewrap"><table class="t" id="tblIncons"></table></div>
+  <ul class="small" style="margin:12px 0 0;padding-left:18px"><li>Abstract “recall 0.89 / 0.98–1.00” are <b>per-type</b> recalls (on hubs / on rings and clusters); Table 4's 0.466 and 0.470 are <b>overall</b> recalls.</li><li>Slide 6's “0.619 / 0.938 / 0.285” are D4 <b>F1</b>, Union <b>recall</b> and D1 <b>F1</b> — three different metrics.</li><li>Run-times differ between Tables 4 and 7 (e.g. D3 42.1 vs 48.0 ms) — different runs on a shared cloud core; indicative only.</li><li>The “≈ 0.52 ceiling” for D4 comes from the seed-0 instance (26 of 50); the 30-instance average ceiling is closer to 0.48, which matches D4's saturation at 0.476 for L ≥ 6.</li><li>“3σ ≈ 60” is the seed-0 example (5.5 + 3 × 18.26); “≈ 56” in §6 is the mean over instances.</li></ul></div>
+</div></section>
+
+<!-- ============ 13 CONCLUSION ============ -->
+<section class="sec" id="conclusion" data-title="Takeaways" data-note="Summary: graph properties give simple, explainable detectors, and each one has a clear mathematical definition and a reason for every alert. Short cycles are best alone, the Union is best overall, and a fixed 3-sigma rule should not be used on heavy-tailed data. The main limit is that all data is synthetic, so the next step is testing on real labelled blockchain graphs and adding amounts and timestamps.">
+<div class="wrap">
+  <div class="kicker"><b>13</b> Conclusion · §4 · Slide 10</div>
+  <h2>Key takeaways</h2>
+  <div class="grid4">
+    <div class="card"><div class="big" style="font-size:2rem">1</div><h4>Different shapes, different tools</h4><p class="small">Degree imbalance finds hubs; short cycles find rings and clusters.</p></div>
+    <div class="card"><div class="big" style="font-size:2rem">2</div><h4>Best single detector: short cycles</h4><p class="small">F1 0.619 with precision 0.915.</p></div>
+    <div class="card"><div class="big" style="font-size:2rem">3</div><h4>Best overall: Union of all five</h4><p class="small">Finds 94% of fraud (F1 0.655), but half its flags are false alarms.</p></div>
+    <div class="card"><div class="big" style="font-size:2rem">4</div><h4>Don't trust a fixed 3σ rule</h4><p class="small">On heavy-tailed data it misses hubs and reaches F1 = 0 at 4,000 accounts.</p></div>
+  </div>
+  <p class="lede" style="margin-top:20px">Also: <b>F1 depends strongly on how common fraud is</b>, so detectors must be compared at equal prevalence. The contribution of the DMGT approach: each detector has a <b>precise mathematical definition, a known complexity, and an interpretable explanation for every alert</b>.</p>
+  <div class="grid2">
+    <div class="card"><h4>Limits and next steps</h4><ul class="small" style="margin:0;padding-left:18px"><li>Repeat on <b>real labelled data</b>: Elliptic Bitcoin graph [7], SNAP Bitcoin trust networks [20][21], Ethereum phishing datasets</li><li>Add <b>amounts and timestamps</b> with weighted and temporal graph measures</li><li>Replace 3σ by <b>robust or rank-based thresholds</b></li><li>Use strongly connected component structure and k-core decomposition</li><li>Learn a weighted combination of detector scores instead of fixed votes</li><li>Whitelist known exchanges to cut false alarms</li></ul></div>
+    <div class="card"><h4>Reflection and learning outcomes</h4><p class="small">Moving from a theoretical definition (degree, cycle, component) to a working detector exposes issues the definition hides: heavy-tailed data break textbook thresholds, a detector can rank well and still classify badly, and results depend on the base rate of anomalies. Working through formulation, algorithm, implementation, experiments and statistics showed how DMGT concepts — the handshaking lemma, paths and cycles, induced subgraphs, connected components — become algorithms with measurable behaviour.</p><p class="small" style="margin:0"><i>[Team: add one or two sentences of your own reflection here.]</i></p></div>
+  </div>
+  <h3 style="margin-top:30px">Reproducibility</h3>
+  <p class="small">Paper: Python 3.12.3, NetworkX 3.6.1, NumPy 2.4.4, pandas 3.0.2, scikit-learn 1.8.0, SciPy 1.17.1, Matplotlib 3.10.8; every instance is generated from an integer seed. This website re-implements the generator and all detectors in plain JavaScript (<code>js/engine.js</code>) so you can re-run the experiments in your browser — the numbers are close to the paper's, not identical (different random generator).</p>
+  <h3 style="margin-top:26px">Individual contributions <span class="small">(Table 9 — to be completed by the team)</span></h3>
+  <div class="tablewrap"><table class="t"><tr><th>#</th><th>Member (USN)</th><th>Contribution</th></tr>
+    <tr><td>1</td><td>[Name – USN]</td><td>Literature review and reference management</td></tr><tr><td>2</td><td>[Name – USN]</td><td>Data generation and dataset documentation</td></tr><tr><td>3</td><td>[Name – USN]</td><td>Graph construction and mathematical formulation</td></tr><tr><td>4</td><td>[Name – USN]</td><td>Degree-based detectors (D1, D2)</td></tr><tr><td>5</td><td>[Name – USN]</td><td>Subgraph, cycle and connectivity detectors (D3–D5)</td></tr><tr><td>6</td><td>[Name – USN]</td><td>Experiments, metrics and visualisations</td></tr><tr><td>7</td><td>[Name – USN]</td><td>Report writing and presentation</td></tr></table></div>
+  <details class="d" style="margin-top:24px"><summary>References [1]–[21]</summary><div><ol class="refs" id="refs" style="list-style:none;padding:0"></ol></div></details>
+</div></section>
+
+</main>
+<footer><div class="wrap"><div class="grid2"><div><b>Legend</b><div class="legend"><span><i style="background:var(--honest)"></i>Honest account</span><span><i style="background:var(--fanout)"></i>Fan-out hub</span><span><i style="background:var(--fanin)"></i>Fan-in hub</span><span><i style="background:var(--ring)"></i>Cyclic ring</span><span><i style="background:var(--cluster)"></i>Isolated cluster</span></div><div class="legend"><span class="pill live">● live</span> computed in your browser by a JavaScript re-implementation <span class="pill paper">▣ paper</span> numbers copied from the report</div></div>
+<div class="small"><b>Honesty note.</b> Live simulations use this site's own random generator and a port of NetworkX's scale-free generator, so their numbers differ from the study's. Only the rankings and trends are expected to match. Paper numbers are always labelled and never mixed with live numbers in the same column.</div></div></div></footer>
+
+<script src="js/engine.js"></script>
+<script src="js/data.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/graphview.js"></script>
+<script src="js/sims1.js"></script>
+<script src="js/sims2.js"></script>
+<script src="js/sims3.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
