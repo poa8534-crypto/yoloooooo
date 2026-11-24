@@ -16,14 +16,16 @@
   /* ---------- nav ---------- */
   const secs = $$('section[data-title]'); const nav = $('#nav');
   secs.forEach((s) => { const a = document.createElement('a'); a.href = '#' + s.id; a.textContent = s.dataset.title; a.dataset.id = s.id; nav.appendChild(a); });
-  const io = new IntersectionObserver((es) => { es.forEach((e) => { if (e.isIntersecting) { $$('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.id === e.target.id)); const on = $('#nav a.on'); if (on) on.scrollIntoView({ block: 'nearest', inline: 'center' }); } }); }, { rootMargin: '-45% 0px -50% 0px' });
+  const io = new IntersectionObserver((es) => { es.forEach((e) => { if (e.isIntersecting) { $$('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.id === e.target.id)); const on = $('#nav a.on'); if (on) nav.scrollTo({ left: on.offsetLeft - nav.clientWidth / 2 + on.offsetWidth / 2, behavior: 'auto' }); } }); }, { rootMargin: '-45% 0px -50% 0px' });
   secs.forEach((s) => io.observe(s));
   addEventListener('scroll', () => { const h = document.documentElement; $('#progress').style.width = (100 * h.scrollTop / (h.scrollHeight - h.clientHeight || 1)) + '%'; }, { passive: true });
   $$('[data-goto]').forEach((b) => b.addEventListener('click', () => { const t = $(b.dataset.goto); if (t) t.scrollIntoView({ behavior: 'smooth' }); }));
 
+  let kn = 0; secs.forEach((s) => { if (s.id === 'hero') return; const b = $('.kicker b', s); if (!b) return; if (s.id === 'data') { b.textContent = 'DATA'; return; } kn++; b.textContent = String(kn).padStart(2, '0'); });
+
   /* ---------- reveal on scroll ---------- */
   const rv = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); rv.unobserve(e.target); } }), { threshold: 0.08 });
-  $$('.reveal').forEach((e) => rv.observe(e));
+  $$('.reveal').forEach((e) => rv.observe(e)); setTimeout(() => $$('.reveal').forEach((e) => e.classList.add('in')), 2500);
 
   /* ---------- toggles ---------- */
   function setTheme(t) { document.documentElement.dataset.theme = t; $('#btnTheme').textContent = t === 'light' ? 'Dark' : 'Light'; store.set('theme', t); window.dispatchEvent(new Event('themechange')); }
@@ -35,7 +37,7 @@
 
   /* ---------- present mode ---------- */
   let present = false, notesOn = false;
-  function setPresent(on) { present = on; document.body.classList.toggle('present', on); document.documentElement.style.fontSize = on ? '120%' : ''; $('#btnPresent').setAttribute('aria-pressed', on); $('#btnPresent').textContent = on ? 'Exit' : 'Present'; $('header.top').style.display = on ? 'none' : ''; if (!on) { notesOn = false; $('#notes').style.display = 'none'; if (document.fullscreenElement) document.exitFullscreen(); } showNotes(); }
+  function setPresent(on) { present = on; document.body.classList.toggle('present', on); document.documentElement.classList.toggle('present', on); document.documentElement.style.fontSize = on ? '120%' : ''; $('#btnPresent').setAttribute('aria-pressed', on); $('#btnPresent').textContent = on ? 'Exit' : 'Present'; $('header.top').style.display = on ? 'none' : ''; if (!on) { notesOn = false; $('#notes').style.display = 'none'; if (document.fullscreenElement) document.exitFullscreen(); } showNotes(); }
   $('#btnPresent').addEventListener('click', () => setPresent(!present));
   function curSec() { let best = 0, bd = 1e9; secs.forEach((s, i) => { const d = Math.abs(s.getBoundingClientRect().top); if (d < bd) { bd = d; best = i; } }); return best; }
   function showNotes() { const n = $('#notes'); if (!notesOn) { n.style.display = 'none'; return; } n.style.display = 'block'; n.innerHTML = '<b>Speaker notes · ' + secs[curSec()].dataset.title + '</b><br>' + (secs[curSec()].dataset.note || '—'); }
@@ -52,6 +54,10 @@
   table('tbl1', ['Component', 'Specification'], P.table1.map((r) => ({ cells: [`<b>${r[0]}</b>`, r[1]] })), ['', 'w']);
   table('tbl2', ['Property', 'Value'], P.table2.map((r) => ({ cells: r })), ['', 'n']);
   table('tbl3', ['ID', 'Detector', 'DMGT concept', 'Flag rule (default)', 'Time'], P.table3.map((r) => ({ cells: [`<b>${r.id}</b>`, r.name, r.concept, r.rule, r.time] })));
+
+  table('tblFiles', ['Folder', 'What it is', 'Paper'], [['representative_N1000_f5_seed0/', 'N = 1,000 · 5% suspicious · seed 0', 'Table 2'], ['illustration_N220_f15_seed4/', 'N = 220 · 15% suspicious (the “you vs the algorithm” game)', 'Fig. 3'], ['exp0_baseline_30_instances/', 'N = 1,000 · 5% · seeds 0–29 (one combined nodes/edges file + instances.csv)', 'Experiment 0 · Table 4'], ['exp2_sizes/', 'N ∈ {300, 600, 1000, 2000, 4000} · 5% (1 each, 15 with --full)', 'Experiment 2 · Tables 6–7'], ['exp3_shares/', 'N = 1,000 · f ∈ {1, 2.5, 5, 10, 15}% (1 each, 15 with --full)', 'Experiment 3 · Table 8']].map((r) => ({ cells: ['<code>' + r[0] + '</code>', r[1], r[2]] })), ['', 'w', '']);
+  table('tblCardN', ['Column', 'Meaning'], [['instance', 'instance id (combined files hold many)'], ['account_id', 'integer vertex id'], ['type', 'truth: benign · fan_out_hub · fan_in_hub · cyclic_ring · isolated_cluster'], ['is_suspicious', '1 for the four fraud types'], ['group_id', 'H# hub · R# ring · C# cluster (blank if benign)'], ['out_degree · in_degree · degree', 'after collapsing parallel edges'], ['weak_component_size', 'size of its weakly connected component']].map((r) => ({ cells: ['<code>' + r[0] + '</code>', r[1]] })), ['', 'w']);
+  table('tblCardE', ['Column', 'Meaning'], [['instance', 'instance id'], ['source', 'account that sends'], ['target', 'account that receives']].map((r) => ({ cells: ['<code>' + r[0] + '</code>', r[1]] })), ['', 'w']);
   (function t4() {
     const best = (k, hi) => Math.max(...P.table4.map((r) => r[k])); const pm = (m, s) => `${m.toFixed(3)} <span class="small">± ${s.toFixed(3)}</span>`;
     table('tbl4', ['Detector', 'Precision', 'Recall', 'F1', 'AUROC', 'Flagged', 'ms'], P.table4.map((r) => ({ hl: r.id === 'D4' || r.id === 'U', cells: [r.name, pm(r.P, r.Psd), pm(r.R, r.Rsd), pm(r.F1, r.F1sd), r.AUROC == null ? '–' : r.AUROC.toFixed(3), r.flagged.toFixed(1), r.ms.toFixed(1)], best: [0, r.P === best('P'), r.R === best('R'), r.F1 === best('F1'), r.AUROC === 0.887, 0, 0] })), ['', 'n', 'n', 'n', 'n', 'n', 'n']);
@@ -135,7 +141,7 @@
   (function hero() {
     const cv = $('#heroCanvas'); const w = UI.getWorld({ N: 260, f: 0.12, seed: 3 }, true); window.__views = window.__views || [];
     let parts = [], rng = GE.makeRng(9); const edges = w.g.edges(); for (let i = 0; i < 90; i++) parts.push({ e: edges[Math.floor(rng() * edges.length)], t: rng(), v: 0.004 + rng() * 0.008 });
-    const view = new GV.GraphView(cv, { onDraw: (ctx, vw) => { parts.forEach((p) => { const a = vw.toScreen(vw.pos[p.e[0]]), b = vw.toScreen(vw.pos[p.e[1]]); p.t += p.v; if (p.t > 1) { p.t = 0; p.e = edges[Math.floor(rng() * edges.length)]; } ctx.beginPath(); ctx.arc(a[0] + (b[0] - a[0]) * p.t, a[1] + (b[1] - a[1]) * p.t, 2.2, 0, 6.3); ctx.fillStyle = css('--accent'); ctx.fill(); }); } });
+    const view = new GV.GraphView(cv, { static: true, onDraw: (ctx, vw) => { parts.forEach((p) => { const a = vw.toScreen(vw.pos[p.e[0]]), b = vw.toScreen(vw.pos[p.e[1]]); p.t += p.v; if (p.t > 1) { p.t = 0; p.e = edges[Math.floor(rng() * edges.length)]; } ctx.beginPath(); ctx.arc(a[0] + (b[0] - a[0]) * p.t, a[1] + (b[1] - a[1]) * p.t, 2.2, 0, 6.3); ctx.fillStyle = css('--accent'); ctx.fill(); }); } });
     view.setGraph(w.g, w.pos); view.mode = 'truth'; window.__views.push(view); let last = 0, visible = true;
     new IntersectionObserver((es) => (visible = es[0].isIntersecting)).observe(cv);
     const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -145,8 +151,11 @@
 
   /* ---------- lazily mount the simulations ---------- */
   const S1 = window.SIMS1, S2 = window.SIMS2, S3 = window.SIMS3;
-  const MOUNTS = { 'sim-toolkit': [S1.toolkit], 'sim-world': [S1.world, 'world'], 'sim-heavy': [S1.heavy], 'sim-cycles': [S2.cycles], 'sim-net': [S2.net], 'sim-bench': [S2.bench], 'sim-game': [S3.game], 'sim-repro': [S3.repro], 'sim-tuning': [S3.tuning, 'tuning'], 'sim-scale': [S3.scale], 'sim-crowd': [S3.crowd], 'sim-whatif': [S3.whatif, 'whatif'] };
-  const mio = new IntersectionObserver((es) => es.forEach((e) => { if (!e.isIntersecting) return; const id = e.target.id; mio.unobserve(e.target); const [fn, lazy] = MOUNTS[id]; try { fn(e.target); if (lazy && window.__lazy && window.__lazy[lazy]) window.__lazy[lazy](); } catch (err) { console.error('sim ' + id, err); e.target.innerHTML = '<div class="note warn">This simulation failed to start: ' + err.message + '</div>'; } }), { rootMargin: '500px 0px' });
-  Object.keys(MOUNTS).forEach((id) => { const el = document.getElementById(id); if (el) { el.style.minHeight = '120px'; mio.observe(el); } });
+  const MOUNTS = { 'sim-toolkit': [S1.toolkit], 'sim-world': [S1.world, 'world'], 'sim-heavy': [S1.heavy], 'sim-cycles': [S2.cycles], 'sim-net': [S2.net], 'sim-bench': [S2.bench], 'sim-game': [S3.game], 'sim-data': [window.SIMDATA], 'sim-repro': [S3.repro], 'sim-tuning': [S3.tuning, 'tuning'], 'sim-scale': [S3.scale], 'sim-crowd': [S3.crowd], 'sim-whatif': [S3.whatif, 'whatif'] };
+  const queue = []; let mounting = false;
+  function pump() { if (mounting || !queue.length) return; mounting = true; const el = queue.shift(), id = el.id, [fn, lazy] = MOUNTS[id];
+    setTimeout(() => { try { fn(el); if (lazy && window.__lazy && window.__lazy[lazy]) window.__lazy[lazy](); el.style.minHeight = ''; } catch (err) { console.error('sim ' + id, err); el.innerHTML = '<div class="note warn">This simulation failed to start: ' + err.message + '</div>'; } mounting = false; setTimeout(pump, 60); }, 0); }
+  const mio = new IntersectionObserver((es) => es.forEach((e) => { if (!e.isIntersecting) return; mio.unobserve(e.target); queue.push(e.target); pump(); }), { rootMargin: '300px 0px' });
+  Object.keys(MOUNTS).forEach((id) => { const el = document.getElementById(id); if (el) { el.style.minHeight = '420px'; mio.observe(el); } });
   window.addEventListener('themechange', () => setTimeout(() => window.dispatchEvent(new Event('resize')), 20));
 })();

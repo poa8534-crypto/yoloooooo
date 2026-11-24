@@ -1,0 +1,29 @@
+{
+  "instance": "representative_N1000_f5_seed0",
+  "note": "Counterpart of the paper's representative instance (Table 2). Same recipe, different random numbers, so statistics are close to but not identical with Table 2.",
+  "generator": "js/engine.js (port of paper Table 1)",
+  "parameters": {
+    "N": 1000,
+    "anomaly_share": 0.05,
+    "seed": 0
+  },
+  "statistics": {
+    "accounts": 1000,
+    "transactions": 2765,
+    "suspicious": 50,
+    "fan_out_hub": 13,
+    "fan_in_hub": 12,
+    "cyclic_ring": 14,
+    "isolated_cluster": 11,
+    "mean_degree": 5.53,
+    "median_degree": 3,
+    "max_degree": 306,
+    "degree_sd": 15.843,
+    "density": 0.002768,
+    "reciprocity": 0.0159,
+    "weak_components": 21,
+    "largest_weak_component": 931,
+    "strong_components": 901,
+    "largest_strong_component": 60
+  }
+}

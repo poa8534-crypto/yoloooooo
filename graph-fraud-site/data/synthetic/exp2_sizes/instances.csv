@@ -1,0 +1,6 @@
+instance,N,anomaly_share,seed,accounts,transactions,suspicious,fan_out_hub,fan_in_hub,cyclic_ring,isolated_cluster,mean_degree,median_degree,max_degree,degree_sd,density,reciprocity,weak_components,largest_weak_component,strong_components,largest_strong_component
+N300_seed00,300,0.05,0,300,1032,15,8,4,3,0,6.88,4,105,12.559,0.011505,0.0291,7,281,134,163
+N600_seed00,600,0.05,0,600,1687,30,8,8,9,5,5.623,3,324,15.82,0.004694,0.0154,13,560,343,240
+N1000_seed00,1000,0.05,0,1000,2765,50,13,12,14,11,5.53,3,306,15.843,0.002768,0.0159,21,931,901,60
+N2000_seed00,2000,0.05,0,2000,5942,100,29,25,30,16,5.942,3,627,19.944,0.001486,0.0168,38,1869,1607,355
+N4000_seed00,4000,0.05,0,4000,12148,200,53,50,58,39,6.074,3,933,24.243,0.000759,0.0191,79,3733,3160,770

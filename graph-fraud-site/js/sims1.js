@@ -126,7 +126,7 @@
      ====================================================================== */
   function simWorld(mount) {
     mount.innerHTML = `<div class="sim"><header><h3>World builder: plant fraud in a honest network</h3><span class="tag">Sim 2 · generator (Table 1)</span></header>
-      <div class="split"><div><div class="canvaswrap"><canvas id="wCanvas" style="height:520px"></canvas><div id="wBusy" class="small" style="position:absolute;left:12px;top:10px;display:none">laying out graph…</div></div>${legendHTML()}<p class="small">Scroll to zoom, drag to pan, double-click to reset. Node size grows with degree. The cut-off clusters on the right are isolated components.</p></div>
+      <div class="split"><div><div class="canvaswrap"><canvas id="wCanvas" style="height:520px"></canvas><div id="wBusy" class="small" style="position:absolute;left:12px;top:10px;display:none">laying out graph…</div></div>${legendHTML()}<p class="small">Ctrl/⌘ + scroll (or pinch) to zoom, drag to pan, double-click to reset. Node size grows with degree. The cut-off clusters on the right are isolated components.</p></div>
       <div class="controls">${liveBadge('JS port of the paper’s generator')}
         ${slider('wN', 'Accounts N', 300, 2000, 100, 1000, (v) => (+v).toLocaleString())}${slider('wF', 'Fraud share f', 0.01, 0.15, 0.005, 0.05, (v) => (v * 100).toFixed(1) + '%')}${slider('wSeed', 'Random seed', 0, 99, 1, 0)}
         <div class="btns"><button class="btn primary" id="wGen">Generate</button><button class="btn" id="wRnd">🎲 New seed</button><button class="btn" id="wP0">Paper setup (N=1000, 5%, seed 0)</button></div>

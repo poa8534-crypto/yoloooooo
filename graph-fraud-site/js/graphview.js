@@ -144,7 +144,7 @@
     return best;
   };
   GraphView.prototype._bind = function () {
-    const c = this.c; let drag = null, moved = false;
+    const c = this.c; if (this.opts.static) { c.style.pointerEvents = 'none'; return; } let drag = null, moved = false;
     const rel = (e) => { const r = c.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
     c.addEventListener('pointerdown', (e) => { drag = { p: rel(e), ox: this.view.ox, oy: this.view.oy }; moved = false; c.setPointerCapture(e.pointerId); });
     c.addEventListener('pointermove', (e) => { const p = rel(e);
@@ -152,8 +152,13 @@
       else { const h = this.pick(p[0], p[1]); if (h !== this.hover) { this.hover = h; this.draw(); if (this.opts.onHover) this.opts.onHover(h, e, p); } } });
     c.addEventListener('pointerup', (e) => { if (drag && !moved) { const p = rel(e); const h = this.pick(p[0], p[1]); this.sel = h; this.draw(); if (this.opts.onSelect) this.opts.onSelect(h); } drag = null; });
     c.addEventListener('pointerleave', () => { if (this.hover >= 0) { this.hover = -1; this.draw(); if (this.opts.onHover) this.opts.onHover(-1); } });
-    c.addEventListener('wheel', (e) => { e.preventDefault(); const p = rel(e); const f = Math.exp(-e.deltaY * 0.0015); const V = this.view; const ns = Math.max(0.2, Math.min(40, V.s * f)); const k = ns / V.s; V.ox = p[0] - (p[0] - V.ox) * k; V.oy = p[1] - (p[1] - V.oy) * k; V.s = ns; this.draw(); }, { passive: false });
+    c.addEventListener('wheel', (e) => { if (!(e.ctrlKey || e.metaKey)) { this._hint(); return; } /* plain scrolling must always reach the page */ e.preventDefault(); const p = rel(e); const f = Math.exp(-e.deltaY * 0.0015); const V = this.view; const ns = Math.max(0.2, Math.min(40, V.s * f)); const k = ns / V.s; V.ox = p[0] - (p[0] - V.ox) * k; V.oy = p[1] - (p[1] - V.oy) * k; V.s = ns; this.draw(); }, { passive: false });
     c.addEventListener('dblclick', () => { this.fit(); this.draw(); });
+    c.addEventListener('pointercancel', () => { drag = null; });
+  };
+  GraphView.prototype._hint = function () {
+    const host = this.c.parentElement; if (!host) return; if (!this._hintEl) { const h = document.createElement('div'); h.className = 'zoomhint'; h.textContent = 'Ctrl/⌘ + scroll to zoom · double-click to reset'; host.appendChild(h); this._hintEl = h; }
+    this._hintEl.classList.add('show'); clearTimeout(this._ht); this._ht = setTimeout(() => this._hintEl && this._hintEl.classList.toggle('show', false), 1300);
   };
   GraphView.prototype.zoomTo = function (nodes, pad) {
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9; for (const v of nodes) { const p = this.pos[v]; if (!p) continue; x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); }

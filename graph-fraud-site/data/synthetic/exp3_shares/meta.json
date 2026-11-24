@@ -1,0 +1,5 @@
+{
+  "note": "Experiment 3: f in {1,2.5,5,10,15}%, N = 1,000, 1 instance(s) per share (run with --full for 15).",
+  "generator": "js/engine.js (port of paper Table 1)",
+  "instances": 5
+}
