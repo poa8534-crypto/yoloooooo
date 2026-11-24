@@ -4,6 +4,9 @@
    ===================================================================== */
 (function () {
   'use strict';
+  // defaults for hosts that don't let the page set <html>/<body> attributes (e.g. when published as an artifact)
+  if (!document.documentElement.dataset.theme) document.documentElement.dataset.theme = 'light';
+  document.body.classList.add('plain');
   const GE = window.GE, GV = window.GV, CH = window.CH, UI = window.UI, P = window.PAPER;
   const $ = (s, r) => (r || document).querySelector(s), $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const f3 = (x) => (x == null ? '–' : x.toFixed(3));
